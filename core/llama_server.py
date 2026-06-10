@@ -1,15 +1,23 @@
 import os
 import subprocess
+import tempfile
 import time
 import requests
 import streamlit as st
 from config.defaults import LLAMA_SERVER_BIN, LLAMA_CPP_DEFAULT_URL
 
 
+def _ensure_scheme(url: str) -> str:
+    url = (url or "").strip()
+    if url and not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return url
+
+
 def is_running(url: str = LLAMA_CPP_DEFAULT_URL, timeout: float = 2.0) -> bool:
     """Return True if llama-server is responding at url/health."""
     try:
-        r = requests.get(url.rstrip("/") + "/health", timeout=timeout)
+        r = requests.get(_ensure_scheme(url).rstrip("/") + "/health", timeout=timeout)
         return r.ok
     except Exception:
         return False
@@ -21,7 +29,7 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL) -> dict | None:
     Reads /props endpoint: default_generation_settings.n_ctx + model_path.
     """
     try:
-        r = requests.get(url.rstrip("/") + "/props", timeout=3)
+        r = requests.get(_ensure_scheme(url).rstrip("/") + "/props", timeout=3)
         if not r.ok:
             return None
         d = r.json()
@@ -88,7 +96,7 @@ def start(
         else:
             action = (
                 f"Restarting: n_ctx={current_ctx} < requested {context_size}"
-                if current_ctx else "Restarting (could not read n_ctx)"
+                if current_ctx is not None else "Restarting: could not read server state (n_ctx/model)"
             )
         proc = st.session_state.get("llama_server_process")
         if proc:
@@ -102,6 +110,12 @@ def start(
         action = "Starting"
 
     try:
+        # Write stdout+stderr to a temp file so we can tail it non-blocking
+        log_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", prefix="llama_server_", delete=False
+        )
+        log_path = log_file.name
+
         proc = subprocess.Popen(
             [
                 bin_path,
@@ -112,12 +126,16 @@ def start(
                 "--jinja",
                 "--parallel", "1",
             ],
-            stdout=subprocess.PIPE,
+            stdout=log_file,
             stderr=subprocess.STDOUT,
         )
-        st.session_state["llama_server_process"] = proc
-        st.session_state["llama_server_running"] = False
-        st.session_state["llama_server_url"]     = url
+        log_file.close()  # our handle — process keeps its own fd open
+
+        st.session_state["llama_server_process"]  = proc
+        st.session_state["llama_server_running"]  = False
+        st.session_state["llama_server_crashed"]  = False
+        st.session_state["llama_server_log_path"] = log_path
+        st.session_state["llama_server_url"]      = url
         return True, f"{action} (pid {proc.pid}) — loading model…"
     except FileNotFoundError:
         return False, f"llama-server not found: {bin_path}"
@@ -142,12 +160,38 @@ def stop(host: str = "127.0.0.1", port: int = 8080) -> tuple[bool, str]:
     return True, "Server stopped"
 
 
+def get_server_log(tail: int = 30) -> str:
+    """Return the last `tail` lines from the server's log file, or '' if unavailable."""
+    path = st.session_state.get("llama_server_log_path", "")
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", errors="replace") as f:
+            lines = f.readlines()
+        return "".join(lines[-tail:]).strip()
+    except Exception:
+        return ""
+
+
 def poll_ready(url: str = LLAMA_CPP_DEFAULT_URL) -> bool:
     """
     Non-blocking readiness check.
     Updates llama_server_running in session_state and returns True when healthy.
-    Always polls regardless of whether we have a tracked process (fix #12).
+    Also detects whether the tracked subprocess has crashed.
     """
+    proc = st.session_state.get("llama_server_process")
+
+    # If the process we launched has exited, mark it as crashed
+    if proc is not None and proc.poll() is not None:
+        exit_code = proc.poll()
+        st.session_state["llama_server_running"] = False
+        st.session_state["llama_server_crashed"]    = True
+        st.session_state["llama_server_exit_code"]  = exit_code
+        return False
+
     ready = is_running(url)
     st.session_state["llama_server_running"] = ready
+    if ready:
+        st.session_state["llama_server_crashed"] = False
+        st.session_state.pop("llama_server_exit_code", None)
     return ready

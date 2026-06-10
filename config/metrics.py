@@ -21,7 +21,11 @@ METRIC_TYPES: dict[str, dict] = {
     "task_completion": {
         "label": "Task Completion",
         "category": "Validation",
-        "description": "Validation command exits 0 and no fail patterns match",
+        "description": (
+            "Runs the configured validation command after the evaluation. "
+            "PASS if exit code = 0 and no fail patterns appear in the output. "
+            "This is the primary end-to-end success indicator."
+        ),
         "params": [],
     },
 
@@ -29,7 +33,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tool_called": {
         "label": "Tool Was Called",
         "category": "Tool",
-        "description": "A specific tool was invoked at least once",
+        "description": (
+            "Confirms the AI knew to use the specified tool — "
+            "demonstrates tool awareness and correct selection for the task. "
+            "A model that describes what it would do without actually calling the tool will FAIL."
+        ),
         "params": [
             {"name": "tool_name", "type": "str", "label": "Tool Name", "default": ""},
         ],
@@ -37,7 +45,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tool_not_called": {
         "label": "Tool Not Called",
         "category": "Tool",
-        "description": "A specific tool was never invoked",
+        "description": (
+            "Verifies a specific tool was never invoked during the evaluation. "
+            "Useful for guardrails — e.g. confirming the agent didn't run nmap "
+            "when it should only be creating files."
+        ),
         "params": [
             {"name": "tool_name", "type": "str", "label": "Tool Name", "default": ""},
         ],
@@ -45,7 +57,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tool_sequence": {
         "label": "Tool Call Sequence",
         "category": "Tool",
-        "description": "Tools were invoked in the specified order (as a subsequence)",
+        "description": (
+            "Checks that the agent called tools in the specified order "
+            "(expected tools must appear as an ordered subsequence). "
+            "Validates the agent's planning and reasoning flow."
+        ),
         "params": [
             {"name": "sequence", "type": "list[str]",
              "label": "Expected sequence (comma-separated)", "default": ""},
@@ -54,7 +70,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tool_call_count": {
         "label": "Tool Call Count",
         "category": "Tool",
-        "description": "Total tool calls ≤ N",
+        "description": (
+            "Ensures the total number of tool calls stays within a budget. "
+            "An agent that calls tools repeatedly without making progress "
+            "indicates poor reasoning or a stuck loop."
+        ),
         "params": [
             {"name": "max_calls", "type": "int", "label": "Max calls", "default": 5},
         ],
@@ -62,7 +82,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tool_success_rate": {
         "label": "Tool Success Rate",
         "category": "Tool",
-        "description": "Fraction of tool calls that succeeded ≥ threshold",
+        "description": (
+            "Fraction of tool calls that returned a successful result (exit code 0). "
+            "A low rate suggests the agent is providing bad arguments or "
+            "calling tools in invalid contexts."
+        ),
         "params": [
             {"name": "min_rate", "type": "float", "label": "Min rate (0 – 1)", "default": 0.9},
         ],
@@ -70,13 +94,21 @@ METRIC_TYPES: dict[str, dict] = {
     "no_repeated_calls": {
         "label": "No Repeated Tool Calls",
         "category": "Tool",
-        "description": "No tool was called twice with identical arguments",
+        "description": (
+            "Detects when the agent calls the same tool with identical arguments more than once. "
+            "Repeated calls signal the agent is stuck in a loop or failed to process "
+            "the previous result correctly."
+        ),
         "params": [],
     },
     "tool_output_contains": {
         "label": "Tool Output Contains",
         "category": "Tool",
-        "description": "The result from a specific tool contains a required string",
+        "description": (
+            "Checks that the output returned by a specific tool contains a required string. "
+            "For example, verifying the file_creator response contains 'success', "
+            "confirming the tool operation completed without error."
+        ),
         "params": [
             {"name": "tool_name", "type": "str", "label": "Tool name", "default": ""},
             {"name": "text",      "type": "str", "label": "Required text", "default": ""},
@@ -87,7 +119,11 @@ METRIC_TYPES: dict[str, dict] = {
     "content_contains": {
         "label": "Response Contains",
         "category": "Content",
-        "description": "Final LLM response contains a specific string",
+        "description": (
+            "Checks that the AI's final text response includes a specific string. "
+            "For network scans, verifying the word 'port' appears confirms "
+            "the agent actually reported the scan results."
+        ),
         "params": [
             {"name": "text", "type": "str", "label": "Required text", "default": ""},
         ],
@@ -95,7 +131,11 @@ METRIC_TYPES: dict[str, dict] = {
     "content_not_contains": {
         "label": "Response Does Not Contain",
         "category": "Content",
-        "description": "Final LLM response does NOT contain a specific string",
+        "description": (
+            "Checks that the AI's final response does NOT contain a specific string. "
+            "Useful for verifying the agent stayed in scope — e.g. confirming "
+            "a file-creation agent didn't mention network ports."
+        ),
         "params": [
             {"name": "text", "type": "str", "label": "Forbidden text", "default": ""},
         ],
@@ -103,7 +143,11 @@ METRIC_TYPES: dict[str, dict] = {
     "content_regex": {
         "label": "Response Matches Regex",
         "category": "Content",
-        "description": "Final LLM response matches a regular-expression pattern",
+        "description": (
+            "Checks the AI's final response against a regular expression. "
+            "More flexible than plain text matching — can verify port numbers, "
+            "IP addresses, file paths, or any structured pattern."
+        ),
         "params": [
             {"name": "pattern", "type": "str", "label": "Regex pattern", "default": ""},
         ],
@@ -113,7 +157,11 @@ METRIC_TYPES: dict[str, dict] = {
     "latency": {
         "label": "Latency",
         "category": "Performance",
-        "description": "Total wall-clock time < N seconds",
+        "description": (
+            "Total wall-clock time from evaluation start to completion must be "
+            "under N seconds. Measures overall system responsiveness including "
+            "LLM inference time, tool execution, and validation."
+        ),
         "params": [
             {"name": "max_seconds", "type": "float", "label": "Max seconds", "default": 30.0},
         ],
@@ -121,7 +169,11 @@ METRIC_TYPES: dict[str, dict] = {
     "token_limit": {
         "label": "Token Limit",
         "category": "Performance",
-        "description": "Total tokens (prompt + completion) < N",
+        "description": (
+            "Total tokens used (prompt + completion combined) must stay under N. "
+            "High token counts indicate verbose responses or inefficient "
+            "context management. Calculated as prompt_tokens + completion_tokens."
+        ),
         "params": [
             {"name": "max_tokens", "type": "int", "label": "Max tokens", "default": 2000},
         ],
@@ -129,7 +181,12 @@ METRIC_TYPES: dict[str, dict] = {
     "max_iterations": {
         "label": "Max LLM Iterations",
         "category": "Performance",
-        "description": "Number of LLM round-trips ≤ N  (mcp-eval: Expect.performance.max_iterations)",
+        "description": (
+            "Number of LLM API round-trips must be ≤ N. Each round-trip is one "
+            "call to the model. A simple task should complete in 1–2 iterations: "
+            "first to choose a tool, second to summarize the result. "
+            "More iterations suggest the agent is struggling or overthinking."
+        ),
         "params": [
             {"name": "max_iter", "type": "int", "label": "Max iterations", "default": 3},
         ],
@@ -137,7 +194,11 @@ METRIC_TYPES: dict[str, dict] = {
     "tokens_per_second": {
         "label": "Tokens / Second",
         "category": "Performance",
-        "description": "Generation throughput ≥ N tok/s",
+        "description": (
+            "Model generation throughput (completion tokens ÷ total latency) "
+            "must be ≥ N tok/s. Low throughput may indicate hardware bottlenecks, "
+            "an oversized model, or server resource contention."
+        ),
         "params": [
             {"name": "min_tps", "type": "float", "label": "Min tok/s", "default": 5.0},
         ],
@@ -148,8 +209,11 @@ METRIC_TYPES: dict[str, dict] = {
         "label": "Path Efficiency",
         "category": "Path",
         "description": (
-            "Actual tool sequence matches the expected golden path "
-            "(mcp-eval: Expect.path.efficiency)"
+            "Verifies the agent took the optimal tool-call path to complete the task. "
+            "Compares the actual sequence of tools called against the expected 'golden path'. "
+            "Extra steps beyond the budget or calling the same tool twice (backtracking) "
+            "both count as failures. Think of it as route efficiency — did the agent "
+            "take the direct route or wander?"
         ),
         "params": [
             {"name": "expected_sequence", "type": "list[str]",
@@ -166,8 +230,11 @@ METRIC_TYPES: dict[str, dict] = {
         "label": "Goal Achievement",
         "category": "Judge",
         "description": (
-            "MCPEval dimension: did the agent fully achieve the stated goal? "
-            "Evaluated from validation result + tool success."
+            "Composite check: did the agent fully achieve the stated goal? "
+            "PASS requires ALL of: (1) validation command passed, "
+            "(2) no repeated/inefficient tool calls, "
+            "(3) every tool call returned exit code 0. "
+            "A partial success — e.g. task done but with wasted calls — still fails."
         ),
         "params": [],
     },
@@ -175,8 +242,10 @@ METRIC_TYPES: dict[str, dict] = {
         "label": "Tool Usage Efficiency",
         "category": "Judge",
         "description": (
-            "MCPEval dimension: did the agent use tools efficiently "
-            "(minimal calls, no redundancy)?"
+            "Evaluates whether the agent used tools efficiently: "
+            "total calls ≤ max and zero redundant calls (same tool + same args). "
+            "An efficient agent gets the job done without trial-and-error or "
+            "repetition. Calculated as: calls ≤ max AND no duplicates."
         ),
         "params": [
             {"name": "max_calls", "type": "int", "label": "Max tool calls", "default": 5},
@@ -186,8 +255,10 @@ METRIC_TYPES: dict[str, dict] = {
         "label": "No Error in Output",
         "category": "Judge",
         "description": (
-            "AI inefficiency check: exit code = 0 but output does not contain "
-            "error-indicating strings (false completion guard)."
+            "Guards against silent failures: even when a tool returns exit code 0, "
+            "its output may contain error messages like 'not found' or 'permission denied'. "
+            "This metric catches cases where the exit code looks fine but "
+            "something actually went wrong."
         ),
         "params": [],
     },

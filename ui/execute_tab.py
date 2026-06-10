@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from config.scenarios import SCENARIOS
@@ -23,6 +24,8 @@ _LOG_TAG_MAP = {
     "[CANCEL]":       "cancel",
     "[TOKENS]":       "tokens",
     "[CLEANUP]":      "init",
+    "[SYS]":          "sys",
+    "[USR]":          "usr",
 }
 
 
@@ -42,10 +45,19 @@ def _render_terminal(placeholder, logs: list[dict]) -> None:
         return
     lines_html = []
     for entry in logs:
-        tag  = entry.get("tag", "")
-        css  = f' class="log-{tag}"' if tag else ""
+        tag = entry.get("tag", "")
+        css = f' class="log-{tag}"' if tag else ""
+        raw = entry["text"]
+
+        # Convert Python repr-escaped newlines (backslash-n) to actual newlines
+        # so white-space:pre-wrap renders them correctly.
+        raw = raw.replace('\\n', '\n')
+
+        # Collapse 3+ consecutive newlines to 2 (avoids huge blank gaps in RESPONSE)
+        raw = re.sub(r'\n{3,}', '\n\n', raw)
+
         text = (
-            entry["text"]
+            raw
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
@@ -82,9 +94,14 @@ def render() -> None:
     tools_loaded = bool(st.session_state.get("mcp_tools"))
 
     llm_state  = "up"   if llm_running  else ("wait" if backend == "ollama" else "down")
-    mcp_state  = "up"   if mcp_running  else "down"
-    tool_state = "up"   if tools_loaded else "down"
-    mod_state  = "up"   if model_sel    else "down"
+    # "wait" = not started yet (amber); "down" = started but broken (red)
+    mcp_state  = "up"   if mcp_running  else "wait"
+    tool_state = (
+        "up"   if tools_loaded else
+        "down" if mcp_running  else  # MCP running but empty = genuine problem
+        "wait"                        # MCP not started = expected state
+    )
+    mod_state  = "up"   if model_sel    else "wait"
 
     pills = _status_pill(f"Model: {model_sel or 'not chosen'}", mod_state)
     
@@ -124,12 +141,15 @@ def render() -> None:
                     f"Go to **Configuration → llama-server → Restart** to load the correct model."
                 )
 
-    # ── Scenario selector ─────────────────────────────────────────────────────
-    scenario_names = list(SCENARIOS.keys())
-    cur = st.session_state.get("active_scenario", scenario_names[0])
-    idx = scenario_names.index(cur) if cur in scenario_names else 0
-    sel = st.selectbox("Scenario", options=scenario_names, index=idx, key="active_scenario")
-    # State sync (sys_prompt, validation, metrics) handled in app.py
+    # ── Active scenario / tool info ────────────────────────────────────────────
+    _active_sc  = st.session_state.get("active_scenario", "")
+    _tool_f     = st.session_state.get("tool_focus", "")
+    _sc_caption = (
+        f"**Active:** {_active_sc}" + (f"  |  **Tool:** `{_tool_f}`" if _tool_f else "")
+        if _active_sc else
+        "⚠️ No scenario selected — configure in **Configuration → Metrics Setup**."
+    )
+    st.caption(_sc_caption)
     # Track when user edits the prompt fields (fix #10)
 
     # ── Prompt editors ────────────────────────────────────────────────────────
@@ -213,11 +233,14 @@ def render() -> None:
             "sys_prompt":          st.session_state.get("sys_prompt", ""),
             "user_prompt":         st.session_state.get("user_prompt", ""),
             "mcp_url":             st.session_state.get("mcp_url", ""),
+            "mcp_server_url":      st.session_state.get("mcp_server_url", ""),
             "mcp_tools":           st.session_state.get("mcp_tools", {}),
             "mcp_running":         st.session_state.get("mcp_running", False),
             "validation_command":  st.session_state.get("validation_command", ""),
             "fail_patterns":       st.session_state.get("fail_patterns", []),
             "active_scenario":     _active_scenario,
+            "tool_focus":          st.session_state.get("tool_focus", ""),
+            "metrics_matrix":      st.session_state.get("metrics_matrix", []),
             "expected_stdout":     _scenario_data.get("expected_stdout", ""),
             "pre_run_cleanup":     _scenario_data.get("pre_run_cleanup", []),
             "cancel_requested_ref": cancel_ref,
@@ -225,7 +248,30 @@ def render() -> None:
 
         # Spinner shows during the run (fix #15)
         with st.spinner("Evaluation running…"):
-            telemetry = run_evaluation(config, on_log)
+            from core.environment import LocalEnvironment
+            # ── SSH execution target — FUTURE RELEASE ─────────────────────────
+            # Remote SSH execution is planned for a future release.
+            # from core.environment import LocalEnvironment, SSHEnvironment
+            # if env_type == "ssh":
+            #     env = SSHEnvironment(
+            #         host=st.session_state.get("target_ssh_host"),
+            #         port=st.session_state.get("target_ssh_port", 22),
+            #         username=st.session_state.get("target_ssh_user"),
+            #         password=st.session_state.get("target_ssh_password"),
+            #         key_path=st.session_state.get("target_ssh_key_path"),
+            #     )
+            #     on_log(f"[INIT] Target: SSH ({st.session_state.get('target_ssh_user')}@{st.session_state.get('target_ssh_host')})")
+            # ──────────────────────────────────────────────────────────────────
+            env_type = st.session_state.get("target_env_type", "local")
+            env = None
+            try:
+                env = LocalEnvironment()
+                on_log("[INIT] Target: Local")
+
+                telemetry = run_evaluation(env, config, on_log)
+            finally:
+                if env and hasattr(env, "close"):
+                    env.close()
 
         st.session_state["telemetry"]        = telemetry
         st.session_state["run_completed"]    = True

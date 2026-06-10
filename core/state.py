@@ -2,7 +2,7 @@ import streamlit as st
 from config.defaults import (
     LLAMA_CPP_DEFAULT_URL, GGUF_MODELS_DIR,
     MCP_SCRIPT_PATH, DEFAULT_CONTEXT_SIZE,
-    LLAMA_SERVER_BIN,
+    LLAMA_SERVER_BIN, MCP_SERVER_BASE_URL,
 )
 from config.scenarios import SCENARIOS, DEFAULT_SCENARIO
 
@@ -19,17 +19,39 @@ _DEFAULTS: dict = {
     "selected_model_path":   None,
     "context_size":          DEFAULT_CONTEXT_SIZE,
 
+    # Target Environment
+    "target_env_type":       "local",  # local only (ssh is a future release)
+    # ── SSH target settings — FUTURE RELEASE ─────────────────────────────────
+    # Remote SSH execution is planned for a future release.
+    # "target_ssh_host":       "127.0.0.1",
+    # "target_ssh_port":       22,
+    # "target_ssh_user":       "root",
+    # "target_ssh_password":   "",
+    # "target_ssh_key_path":   "",
+    # ─────────────────────────────────────────────────────────────────────────
+
     # llama-server management
     "llama_server_bin":      LLAMA_SERVER_BIN,  # editable from UI (fix #29)
     "llama_server_running":  False,
 
-    # MCP
+    # MCP (local)
     "mcp_url":       MCP_SCRIPT_PATH,
+    "mcp_server_url": MCP_SERVER_BASE_URL,
     "mcp_tools":     {},
     "mcp_running":   False,
+    # ── MCP SSH tunnel settings — FUTURE RELEASE ─────────────────────────────
+    # MCP SSH tunneling is planned for a future release.
+    # "mcp_use_ssh":        False,
+    # "mcp_ssh_host":       "",
+    # "mcp_ssh_port":       22,
+    # "mcp_ssh_user":       "",
+    # "mcp_ssh_password":   "",
+    # "mcp_ssh_key_path":   "",
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Metrics setup
     "active_scenario":    DEFAULT_SCENARIO,
+    "tool_focus":         _SCENARIO.get("related_tool", "file_creator"),
     "validation_command": _SCENARIO["validation_command"],
     "fail_patterns":      list(_SCENARIO["fail_patterns"]),
     "metrics_matrix":     list(_SCENARIO["default_metrics"]),

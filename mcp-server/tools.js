@@ -44,20 +44,6 @@ export const toolsList = [
       required: ["path", "content"]
     }
   },
-  {
-    name: "file_deleter",
-    description: "Deletes a file at the specified path. Returns an error if the file does not exist.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Path of the file to delete (absolute or relative)."
-        }
-      },
-      required: ["path"]
-    }
-  }
 ];
 
 /**
@@ -175,59 +161,4 @@ export const toolHandlers = {
     }
   },
 
-  /**
-   * Handle file deleter tool calls
-   */
-  file_deleter: async (request) => {
-    const fs   = await import("fs");
-    const path = await import("path");
-
-    const filePath = request.params.arguments?.path;
-    if (!filePath) {
-      return {
-        content: [{ type: "text", text: "Error: File path is required." }],
-        isError: true
-      };
-    }
-
-    try {
-      const resolvedPath = path.resolve(filePath);
-      if (!fs.existsSync(resolvedPath)) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "not_found",
-              message: `File not found: ${resolvedPath}`,
-              path: resolvedPath
-            }, null, 2)
-          }],
-          isError: true
-        };
-      }
-      fs.unlinkSync(resolvedPath);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            status: "success",
-            message: `File deleted: ${resolvedPath}`,
-            path: resolvedPath
-          }, null, 2)
-        }]
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            status: "error",
-            message: `Failed to delete file: ${error.message}`,
-            path: filePath
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
 };

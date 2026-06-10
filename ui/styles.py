@@ -2,389 +2,683 @@ import streamlit as st
 
 _CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
-/* ── Base ─────────────────────────────────────────────────────────────────── */
-html, body, [class*="css"] {
-    font-family: 'Space Grotesk', 'Outfit', sans-serif;
-    background-color: #05070f;
+/* ══════════════════════════════════════════════════════════════════
+   ModelScope  ·  Brutalist Minimalist
+   High-contrast light + dark  ·  No gradients / blur / glassmorphism
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ─ CSS Tokens ── dark-first (warm amber / copper) ──────────────── */
+:root {
+    --bg:        #0a0805;
+    --surface:   #13100a;
+    --surface2:  #1e1a10;
+    --border:    #2e2818;
+    --text:      #f0e8d4;
+    --muted:     #9e8a62;
+    --accent:    #d97706;
+    --accent-hi: #f59e0b;
+    --success:   #22c55e;
+    --warn:      #fb923c;
+    --error:     #ef4444;
 }
 
-/* ── Aurora background on main content ──────────────────────────────────── */
+/* ─ Light-mode token overrides (warm cream / copper) ───────────── */
+/* NOTE: @media (prefers-color-scheme: light) never fires in Streamlit
+   because Streamlit forces dark at the document level. We use Streamlit's
+   runtime data-theme attribute instead, set via .streamlit/config.toml. */
+[data-testid="stApp"][data-theme="light"],
+[data-testid="stAppViewContainer"][data-theme="light"],
+.stApp[data-theme="light"] {
+    --bg:        #faf6ef;
+    --surface:   #ffffff;
+    --surface2:  #f0e9d8;
+    --border:    #d4c49a;
+    --text:      #150f06;
+    --muted:     #6b5830;
+    --accent:    #b45309;
+    --accent-hi: #d97706;
+}
+
+/* ─ App shell ────────────────────────────────────────────────────── */
+html, body, [class*="css"] {
+    font-family: 'Space Grotesk', system-ui, sans-serif !important;
+}
+.stApp,
+[data-testid="stApp"] {
+    background-color: var(--bg) !important;
+}
 .main .block-container {
-    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99,102,241,0.12) 0%, transparent 60%),
-                radial-gradient(ellipse 50% 40% at 90% 80%, rgba(56,189,248,0.07) 0%, transparent 50%),
-                radial-gradient(ellipse 40% 30% at 10% 90%, rgba(167,139,250,0.08) 0%, transparent 50%),
-                #05070f;
+    background-color: var(--bg) !important;
     padding-top: 1.5rem;
 }
 
-/* ── Brand title ─────────────────────────────────────────────────────────── */
+/* ─ Text — force contrast in both themes ─────────────────────────── */
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] a,
+[data-testid="stText"] p {
+    color: var(--text) !important;
+}
+
+/* Caption — was #475569 (fails contrast in both modes) */
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+    color: var(--muted) !important;
+    opacity: 1 !important;
+    font-size: 0.8rem !important;
+}
+
+/* Widget labels */
+[data-testid="stWidgetLabel"] p {
+    color: var(--text) !important;
+    font-weight: 600 !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+}
+
+/* ─ Brand header ─────────────────────────────────────────────────── */
+.brand-block {
+    border-top: 3px solid var(--accent);
+    padding-top: 1.4rem;
+    margin: 0 0 2rem;
+}
+
 .spark-title {
-    background: linear-gradient(135deg, #c4b5fd 0%, #818cf8 35%, #38bdf8 70%, #67e8f9 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    font-weight: 900;
-    font-size: 2.8rem;
-    letter-spacing: -1px;
-    line-height: 1;
-    margin-bottom: 0;
-    font-family: 'Outfit', sans-serif;
-    text-shadow: none;
-    filter: drop-shadow(0 0 32px rgba(129,140,248,0.4));
-}
-
-/* ── Tabs — pill style ───────────────────────────────────────────────────── */
-[data-testid="stTabs"] [role="tablist"] {
-    gap: 6px;
-    border-bottom: 1px solid rgba(99,102,241,0.25);
-    padding-bottom: 4px;
-}
-[data-testid="stTabs"] button[role="tab"] {
-    background: rgba(30,27,75,0.4) !important;
-    border: 1px solid rgba(99,102,241,0.2) !important;
-    border-radius: 8px !important;
-    color: #94a3b8 !important;
     font-family: 'Space Grotesk', sans-serif !important;
-    font-size: 0.82rem !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.3px;
-    padding: 6px 18px !important;
-    transition: all 0.2s ease;
-}
-[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-    background: linear-gradient(135deg, rgba(99,102,241,0.3), rgba(56,189,248,0.15)) !important;
-    border-color: rgba(129,140,248,0.6) !important;
-    color: #e2e8f0 !important;
-    box-shadow: 0 0 16px rgba(99,102,241,0.25), inset 0 1px 0 rgba(255,255,255,0.08);
-}
-[data-testid="stTabs"] button[role="tab"]:hover:not([aria-selected="true"]) {
-    background: rgba(99,102,241,0.12) !important;
-    border-color: rgba(99,102,241,0.35) !important;
-    color: #c4b5fd !important;
+    font-weight: 900 !important;
+    font-size: 2.4rem !important;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    color: var(--text) !important;
+    -webkit-text-fill-color: var(--text) !important;
+    background: none !important;
+    background-clip: unset !important;
+    filter: none !important;
+    padding: 0 !important;
+    margin: 0 0 0.45rem !important;
+    border: none !important;
 }
 
-/* ── Section headers ────────────────────────────────────────────────────── */
-h1, h2, h3 {
-    font-family: 'Outfit', sans-serif !important;
-    letter-spacing: -0.3px;
+.app-subtitle {
+    color: var(--muted) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.72rem !important;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    margin: 0 !important;
+    display: block;
+    opacity: 1 !important;
+}
+
+/* ─ Section headers ─────────────────────────────────────────────── */
+h1, h2, h3, h4 {
+    font-family: 'Space Grotesk', sans-serif !important;
 }
 h2 {
-    font-size: 1.35rem !important;
-    color: #e2e8f0 !important;
+    color: var(--text) !important;
+    font-size: 1rem !important;
     font-weight: 700 !important;
-    border-left: 3px solid #6366f1;
-    padding-left: 18px !important;
-    margin-top: 0.9rem !important;
-    margin-bottom: 1.5rem !important;
+    border-left: 3px solid var(--accent) !important;
+    padding-left: 12px !important;
+    margin-top: 1.1rem !important;
+    margin-bottom: 0.6rem !important;
+    letter-spacing: 0.1px;
 }
 h3 {
-    font-size: 1.05rem !important;
-    color: #a5b4fc !important;
-    font-weight: 600 !important;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-size: 0.78rem !important;
+    color: var(--muted) !important;
+    font-size: 0.69rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1.2px !important;
 }
 
-/* ── Bento card — wraps expanders, metrics, sections ────────────────────── */
+/* ─ Tabs — underline style ──────────────────────────────────────── */
+[data-testid="stTabs"] [role="tablist"] {
+    border-bottom: 2px solid var(--border) !important;
+    padding-bottom: 0;
+    gap: 0;
+    background: transparent;
+}
+[data-testid="stTabs"] button[role="tab"] {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -2px;
+    color: var(--muted) !important;
+    font-family: 'Space Grotesk', sans-serif !important;
+    font-size: 0.76rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.5px;
+    padding: 8px 20px !important;
+    text-transform: uppercase;
+    transition: color 0.15s, border-color 0.15s;
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    background: transparent !important;
+    border-bottom-color: var(--accent) !important;
+    color: var(--text) !important;
+}
+[data-testid="stTabs"] button[role="tab"]:hover:not([aria-selected="true"]) {
+    color: var(--text) !important;
+    background: var(--surface) !important;
+}
+
+/* ─ Expanders ────────────────────────────────────────────────────── */
 [data-testid="stExpander"] {
-    background: rgba(15,17,35,0.7) !important;
-    border: 1px solid rgba(99,102,241,0.2) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
-    backdrop-filter: blur(8px);
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
     overflow: hidden;
 }
 [data-testid="stExpander"] summary {
-    color: #a5b4fc !important;
+    background: var(--surface2) !important;
+    color: var(--text) !important;
     font-weight: 600 !important;
-    font-size: 0.88rem !important;
+    font-size: 0.82rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+[data-testid="stExpander"] details[open] summary {
+    background: var(--surface) !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+[data-testid="stExpander"] summary:hover {
+    color: var(--accent) !important;
 }
 
-/* ── Metrics row (dashboard) ────────────────────────────────────────────── */
+/* ─ Metrics ──────────────────────────────────────────────────────── */
 [data-testid="stMetric"] {
-    background: rgba(15,17,35,0.8) !important;
-    border: 1px solid rgba(99,102,241,0.18) !important;
-    border-radius: 10px !important;
-    padding: 14px 16px !important;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
-    transition: border-color 0.2s;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    padding: 12px 16px !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s;
 }
 [data-testid="stMetric"]:hover {
-    border-color: rgba(129,140,248,0.4) !important;
-    box-shadow: 0 2px 20px rgba(99,102,241,0.15);
+    border-color: var(--accent) !important;
 }
 [data-testid="stMetricLabel"] {
-    color: #64748b !important;
-    font-size: 0.7rem !important;
+    color: var(--muted) !important;
+    font-size: 0.67rem !important;
     text-transform: uppercase !important;
     letter-spacing: 0.8px !important;
-    font-weight: 600 !important;
+    font-weight: 700 !important;
 }
 [data-testid="stMetricValue"] {
-    color: #e2e8f0 !important;
-    font-size: 1.5rem !important;
+    color: var(--text) !important;
+    font-size: 1.35rem !important;
     font-weight: 700 !important;
-    font-family: 'Outfit', sans-serif !important;
+    font-family: 'JetBrains Mono', monospace !important;
 }
 
-/* ── Brutalist terminal log ──────────────────────────────────────────────── */
+/* ─ Terminal log ─────────────────────────────────────────────────── */
+/* Terminal is intentionally always-dark — do not theme to light mode */
 .terminal-window {
-    background: #000;
-    color: #c8c8c8;
+    background: #000000;
+    color: #cccccc;
     padding: 16px 20px;
-    border-radius: 4px;
-    min-height: 300px;
-    max-height: 560px;
+    border-radius: 0;
+    min-height: 280px;
+    max-height: 520px;
     overflow-y: auto;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.79rem;
     line-height: 1.7;
-    border: 2px solid #1a1a2e;
-    border-left: 4px solid #6366f1;
+    border: 1px solid #1e1e1e;
+    border-left: 3px solid var(--accent);
     white-space: pre-wrap;
     word-break: break-word;
-    box-shadow: 0 0 40px rgba(99,102,241,0.12), inset 0 0 60px rgba(0,0,0,0.5);
     letter-spacing: 0.02em;
 }
-.terminal-window::-webkit-scrollbar { width: 6px; }
-.terminal-window::-webkit-scrollbar-track { background: #0a0a0a; }
-.terminal-window::-webkit-scrollbar-thumb { background: #2d2d4a; border-radius: 3px; }
+.terminal-window::-webkit-scrollbar { width: 4px; }
+.terminal-window::-webkit-scrollbar-track { background: #000; }
+.terminal-window::-webkit-scrollbar-thumb { background: #333; border-radius: 0; }
 
 /* Log-line colour coding */
-.log-init     { color: #475569; }
-.log-tools    { color: #818cf8; font-weight: 500; }
-.log-llm      { color: #f1f5f9; }
-.log-thinking { color: #64748b; font-style: italic; }
-.log-tool     { color: #fbbf24; font-weight: 600; }
-.log-result   { color: #34d399; }
+.log-init     { color: #4a4030; }
+.log-tools    { color: #d97706; font-weight: 500; }
+.log-llm      { color: #e8dfc4; }
+.log-thinking { color: #c4a060; font-style: italic; }
+.log-tool     { color: #f59e0b; font-weight: 600; }
+.log-result   { color: #22c55e; }
 .log-warn     { color: #f87171; }
-.log-done     { color: #a5b4fc; font-weight: 600; }
-.log-val      { color: #38bdf8; }
-.log-cancel   { color: #f43f5e; font-weight: bold; text-transform: uppercase; }
-.log-tokens   { color: #7c3aed; font-size: 0.72rem; opacity: 0.9; }
+.log-done     { color: #d97706; font-weight: 600; }
+.log-val      { color: #60a5fa; }
+.log-cancel   { color: #ef4444; font-weight: bold; text-transform: uppercase; }
+.log-tokens   { color: #9e8a62; font-size: 0.72rem; }
+.log-sys      { color: #818cf8; font-size: 0.77rem; font-style: italic; }
+.log-usr      { color: #86efac; font-size: 0.77rem; font-style: italic; }
 
-/* ── Inputs & text areas ─────────────────────────────────────────────────── */
+/* ─ Inputs ───────────────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea {
-    background: rgba(10,10,20,0.8) !important;
-    border: 1px solid rgba(99,102,241,0.25) !important;
-    border-radius: 8px !important;
-    color: #e2e8f0 !important;
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    color: var(--text) !important;
     font-family: 'JetBrains Mono', monospace !important;
     font-size: 0.82rem !important;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: border-color 0.15s;
 }
 [data-testid="stTextInput"] input:focus,
-[data-testid="stTextArea"] textarea:focus {
-    border-color: rgba(129,140,248,0.6) !important;
-    box-shadow: 0 0 0 2px rgba(99,102,241,0.15) !important;
+[data-testid="stTextArea"] textarea:focus,
+[data-testid="stNumberInput"] input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: none !important;
     outline: none !important;
 }
 
-/* ── Selectbox ──────────────────────────────────────────────────────────── */
+/* ─ Select ───────────────────────────────────────────────────────── */
 [data-testid="stSelectbox"] > div > div {
-    background: rgba(10,10,20,0.8) !important;
-    border: 1px solid rgba(99,102,241,0.25) !important;
-    border-radius: 8px !important;
-    color: #e2e8f0 !important;
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    color: var(--text) !important;
 }
 
-/* ── Buttons ─────────────────────────────────────────────────────────────── */
+/* ─ Buttons ──────────────────────────────────────────────────────── */
 div.stButton > button {
-    background: rgba(20,20,40,0.9) !important;
-    border: 1px solid rgba(99,102,241,0.3) !important;
-    border-radius: 8px !important;
-    color: #a5b4fc !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    color: var(--text) !important;
     font-family: 'Space Grotesk', sans-serif !important;
     font-weight: 600 !important;
-    font-size: 0.82rem !important;
-    letter-spacing: 0.3px;
-    transition: all 0.18s ease;
+    font-size: 0.76rem !important;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    transition: background 0.12s, border-color 0.12s;
+    padding: 6px 14px !important;
 }
 div.stButton > button:hover {
-    background: rgba(99,102,241,0.18) !important;
-    border-color: rgba(129,140,248,0.55) !important;
-    color: #c4b5fd !important;
-    box-shadow: 0 0 14px rgba(99,102,241,0.2);
+    background: var(--surface2) !important;
+    border-color: var(--accent) !important;
+    color: var(--text) !important;
+}
+div.stButton > button:disabled {
+    opacity: 0.35 !important;
 }
 
-/* Primary (Run Evaluation) */
+/* Primary */
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
-    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #38bdf8 100%) !important;
-    border: none !important;
-    color: #fff !important;
-    font-weight: 700 !important;
-    box-shadow: 0 4px 20px rgba(99,102,241,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: #ffffff !important;
 }
 div.stButton > button[kind="primary"]:hover,
 div.stButton > button[data-testid="baseButton-primary"]:hover {
-    background: linear-gradient(135deg, #6366f1 0%, #818cf8 50%, #67e8f9 100%) !important;
-    box-shadow: 0 6px 28px rgba(99,102,241,0.55);
-    transform: translateY(-1px);
+    background: var(--accent-hi) !important;
+    border-color: var(--accent-hi) !important;
+    color: #ffffff !important;
 }
 
-/* Cancel button */
-.cancel-btn > div.stButton > button {
-    background: rgba(127,29,29,0.6) !important;
-    border-color: rgba(239,68,68,0.4) !important;
-    color: #fca5a5 !important;
+/* Secondary — give visible border so buttons aren't invisible on dark bg */
+div.stButton > button[kind="secondary"] {
+    border-color: var(--muted) !important;
+}
+div.stButton > button[kind="secondary"]:hover {
+    border-color: var(--accent) !important;
 }
 
-/* ── Pass / fail badges ──────────────────────────────────────────────────── */
+/* Cancel — red-bordered destructive action */
+.cancel-btn > div.stButton > button,
+.cancel-btn div.stButton > button[kind="secondary"] {
+    background: transparent !important;
+    border-color: var(--error) !important;
+    color: var(--error) !important;
+}
+
+/* ─ Badges ───────────────────────────────────────────────────────── */
 .badge-pass {
-    background: linear-gradient(135deg, #052e16, #064e2b);
-    color: #4ade80;
-    padding: 3px 12px; border-radius: 6px;
-    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.8px;
-    border: 1px solid rgba(74,222,128,0.25);
+    background: rgba(34,197,94,0.12);
+    color: var(--success);
+    padding: 2px 10px;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    border: 1px solid rgba(34,197,94,0.35);
 }
 .badge-fail {
-    background: linear-gradient(135deg, #450a0a, #7f1d1d);
-    color: #f87171;
-    padding: 3px 12px; border-radius: 6px;
-    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.8px;
-    border: 1px solid rgba(248,113,113,0.25);
+    background: rgba(239,68,68,0.12);
+    color: var(--error);
+    padding: 2px 10px;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    border: 1px solid rgba(239,68,68,0.35);
 }
 .badge-na {
-    background: rgba(30,41,59,0.8);
-    color: #64748b;
-    padding: 3px 12px; border-radius: 6px;
-    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.8px;
-    border: 1px solid rgba(100,116,139,0.2);
+    background: var(--surface2);
+    color: var(--muted);
+    padding: 2px 10px;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    border: 1px solid var(--border);
 }
 
-/* ── Status pills ────────────────────────────────────────────────────────── */
+/* ─ Status pills ─────────────────────────────────────────────────── */
 .status-pill {
     display: inline-block;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 0.76rem;
-    font-weight: 600;
-    margin-right: 8px;
-    letter-spacing: 0.2px;
-    font-family: 'Space Grotesk', sans-serif;
+    padding: 3px 9px;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin-right: 5px;
+    letter-spacing: 0.3px;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    border: 1px solid;
 }
 .status-pill-up {
-    background: rgba(5,46,22,0.8);
-    color: #4ade80;
-    border: 1px solid rgba(74,222,128,0.3);
-    box-shadow: 0 0 10px rgba(74,222,128,0.1);
+    background: rgba(34,197,94,0.12);
+    color: var(--success);
+    border-color: rgba(34,197,94,0.4);
+    animation: pulse-up 2.5s ease-in-out infinite;
+}
+@keyframes pulse-up {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.7; }
 }
 .status-pill-down {
-    background: rgba(69,10,10,0.8);
-    color: #f87171;
-    border: 1px solid rgba(248,113,113,0.3);
+    background: rgba(239,68,68,0.12);
+    color: var(--error);
+    border-color: rgba(239,68,68,0.4);
 }
 .status-pill-wait {
-    background: rgba(28,25,23,0.8);
-    color: #fbbf24;
-    border: 1px solid rgba(251,191,36,0.3);
+    background: rgba(251,146,60,0.12);
+    color: var(--warn);
+    border-color: rgba(251,146,60,0.4);
 }
 
-/* ── Model-mismatch warning pulse ────────────────────────────────────────── */
-.model-mismatch {
-    animation: pulse-warn 2s ease-in-out infinite;
-}
-@keyframes pulse-warn {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.75; }
-}
-
-/* ── Dashboard category headers ──────────────────────────────────────────── */
+/* ─ Category chips ───────────────────────────────────────────────── */
 .cat-header {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
     font-weight: 700;
     letter-spacing: 1.5px;
     text-transform: uppercase;
-    padding: 4px 10px;
-    border-radius: 4px;
-    margin: 14px 0 6px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    margin: 12px 0 4px;
     display: inline-block;
 }
 
-/* ── Dividers ────────────────────────────────────────────────────────────── */
+/* ─ Criterion text ───────────────────────────────────────────────── */
+.criterion {
+    color: var(--text) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.79rem !important;
+    line-height: 1.5 !important;
+    word-break: break-word;
+}
+
+/* ─ Dividers ─────────────────────────────────────────────────────── */
 hr {
     border: none !important;
-    border-top: 1px solid rgba(99,102,241,0.15) !important;
-    margin: 1.2rem 0 !important;
+    border-top: 1px solid var(--border) !important;
+    margin: 1rem 0 !important;
 }
 
-/* ── Code blocks ─────────────────────────────────────────────────────────── */
+/* ─ Code ─────────────────────────────────────────────────────────── */
 code {
-    background: rgba(99,102,241,0.12) !important;
-    color: #a5b4fc !important;
-    border-radius: 4px !important;
+    background: var(--surface2) !important;
+    color: var(--accent-hi) !important;
+    border-radius: 2px !important;
     font-size: 0.82em !important;
-    padding: 1px 6px !important;
+    padding: 2px 6px !important;
     font-family: 'JetBrains Mono', monospace !important;
+    border: 1px solid var(--border) !important;
+}
+/* st.code() renders pre > code — needs its own overrides */
+[data-testid="stCode"] pre {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 2px !important;
+    font-size: 0.79rem !important;
+}
+[data-testid="stCode"] pre code {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text) !important;
 }
 
-/* ── Captions ────────────────────────────────────────────────────────────── */
-[data-testid="stCaptionContainer"] {
-    color: #475569 !important;
-    font-size: 0.76rem !important;
-}
-
-/* ── Info/warning/error boxes ────────────────────────────────────────────── */
+/* ─ Alerts ───────────────────────────────────────────────────────── */
 [data-testid="stAlert"] {
-    border-radius: 10px !important;
+    border-radius: 2px !important;
     border-left-width: 3px !important;
+    background: var(--surface2) !important;
+}
+/* Force text inside alerts to use themed color, not Streamlit's defaults */
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] span,
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
+    color: var(--text) !important;
+}
+/* Warning alerts → amber border */
+[data-testid="stAlert"][data-baseweb="notification"] {
+    border-color: var(--warn) !important;
+}
+/* Info alerts → accent border */
+[data-testid="stAlert"]:has([data-testid="stNotificationContentInfo"]) {
+    border-color: var(--accent) !important;
+}
+/* Error alerts → error border */
+[data-testid="stAlert"]:has([data-testid="stNotificationContentError"]) {
+    border-color: var(--error) !important;
+}
+/* Success alerts → success border */
+[data-testid="stAlert"]:has([data-testid="stNotificationContentSuccess"]) {
+    border-color: var(--success) !important;
 }
 
-/* ── Download button ─────────────────────────────────────────────────────── */
-[data-testid="stDownloadButton"] button {
-    background: rgba(15,17,35,0.8) !important;
-    border: 1px solid rgba(56,189,248,0.3) !important;
-    color: #38bdf8 !important;
-    border-radius: 8px !important;
-}
-[data-testid="stDownloadButton"] button:hover {
-    background: rgba(56,189,248,0.12) !important;
-    border-color: rgba(56,189,248,0.5) !important;
-    box-shadow: 0 0 14px rgba(56,189,248,0.15);
-}
-
-/* ── Checkbox ────────────────────────────────────────────────────────────── */
+/* ─ Checkbox ─────────────────────────────────────────────────────── */
 [data-testid="stCheckbox"] label {
-    color: #94a3b8 !important;
+    color: var(--text) !important;
     font-size: 0.84rem !important;
 }
 
-/* ── Slider ──────────────────────────────────────────────────────────────── */
+/* ─ Slider ───────────────────────────────────────────────────────── */
 [data-testid="stSlider"] [data-testid="stThumbValue"] {
-    color: #a5b4fc !important;
-}
-
-/* ── Number input ────────────────────────────────────────────────────────── */
-[data-testid="stNumberInput"] input {
-    background: rgba(10,10,20,0.8) !important;
-    border: 1px solid rgba(99,102,241,0.25) !important;
-    border-radius: 8px !important;
-    color: #e2e8f0 !important;
+    color: var(--text) !important;
     font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.82rem !important;
+    font-size: 0.76rem !important;
+}
+[data-testid="stSlider"] input[type="range"]::-webkit-slider-thumb {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+[data-testid="stSlider"] input[type="range"]::-webkit-slider-runnable-track {
+    background: var(--border) !important;
+}
+[data-testid="stSlider"] [data-testid="stSliderTrack"] > div:first-child {
+    background: var(--accent) !important;
 }
 
-/* ── Hide deploy button ──────────────────────────────────────────────────── */
+/* ─ Download button ──────────────────────────────────────────────── */
+[data-testid="stDownloadButton"] button {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    border-radius: 2px !important;
+    font-size: 0.76rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+}
+[data-testid="stDownloadButton"] button:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+    background: var(--surface2) !important;
+}
+
+/* ─ Spinner ──────────────────────────────────────────────────────── */
+[data-testid="stSpinner"] {
+    color: var(--accent) !important;
+}
+
+/* ─ Model status bar ─────────────────────────────────────────────── */
+.model-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.model-status-bar .status-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.67rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-right: 2px;
+}
+
+/* ─ Hide deploy button and main menu ────────────────────────────── */
 [data-testid="stDeployButton"],
 [data-testid="stAppDeployButton"],
 .stAppDeployButton,
 button[aria-label="Deploy this app"],
-button[kind="header"] { display: none !important; }
+button[kind="header"],
+[data-testid="stMainMenu"],
+button[data-testid="baseButton-header"] { display: none !important; }
 
-/* ── Detect button alignment ─────────────────────────────────────────────── */
-div[data-testid="column"] > div > div.stButton > button {
-    margin-top: 0;
+/* ══════════════════════════════════════════════════════════════════
+   Test Suite Visualization
+   Inspired by Cypress Cloud, mabl, FitNesse, GitHub CI
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ─ Progress bar ─────────────────────────────────────────────────── */
+.ts-progress-wrap {
+    background: var(--border);
+    border-radius: 2px;
+    height: 7px;
+    overflow: hidden;
+}
+.ts-progress-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
 }
 
-/* ── Spinner ─────────────────────────────────────────────────────────────── */
-[data-testid="stSpinner"] {
-    color: #818cf8 !important;
+/* ─ Count pills ──────────────────────────────────────────────────── */
+.ts-count-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 0.69rem;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid;
+}
+.ts-count-pass {
+    background: rgba(34,197,94,0.12);
+    color: var(--success);
+    border-color: rgba(34,197,94,0.3);
+}
+.ts-count-fail {
+    background: rgba(239,68,68,0.12);
+    color: var(--error);
+    border-color: rgba(239,68,68,0.3);
+}
+.ts-count-skip {
+    background: var(--surface2);
+    color: var(--muted);
+    border-color: var(--border);
+}
+
+/* ─ Test rows ────────────────────────────────────────────────────── */
+.ts-test-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 3px 6px 3px 8px;
+    border-left: 3px solid transparent;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    border-radius: 0 2px 2px 0;
+    transition: background 0.1s;
+}
+.ts-test-row:hover {
+    background: var(--surface);
+}
+.ts-test-row-pass  { border-left-color: rgba(34,197,94,0.5); }
+.ts-test-row-fail  { border-left-color: var(--error); background: rgba(239,68,68,0.04); }
+.ts-test-row-skip  { border-left-color: var(--border); opacity: 0.65; }
+
+.ts-dot {
+    flex-shrink: 0;
+    font-weight: 700;
+    width: 14px;
+    text-align: center;
+    padding-top: 1px;
+}
+.ts-dot-pass { color: var(--success); }
+.ts-dot-fail { color: var(--error);   }
+.ts-dot-skip { color: var(--muted);   }
+
+.ts-test-name { color: var(--text); word-break: break-all; }
+.ts-test-err  {
+    color: var(--error);
+    font-size: 0.72rem;
+    opacity: 0.9;
+    margin-top: 1px;
+    word-break: break-word;
+}
+.ts-test-dur {
+    color: var(--muted);
+    font-size: 0.69rem;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+/* ─ File header ──────────────────────────────────────────────────── */
+.ts-file-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.2px;
+    padding: 8px 0 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+}
+
+/* ─ Coverage map ─────────────────────────────────────────────────── */
+.ts-cov-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 3px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.76rem;
+    border-left: 2px solid var(--border);
+    padding-left: 8px;
+}
+.ts-cov-feature { color: var(--text); font-weight: 600; font-size: 0.79rem; }
+.ts-cov-count   { color: var(--muted); font-size: 0.7rem; }
+
+/* ─ Run stamp ────────────────────────────────────────────────────── */
+.ts-run-stamp {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.71rem;
+    color: var(--muted);
 }
 </style>
 """

@@ -1,7 +1,6 @@
 import json
 import os
-import pathlib
-import subprocess
+import re
 import time
 from datetime import datetime
 from typing import Callable
@@ -10,6 +9,7 @@ import requests
 
 from config.defaults import MCP_SERVER_BASE_URL
 from core.mcp_manager import call_mcp_tool
+from core.environment import BaseEnvironment
 
 
 # ── Tool schema loading ────────────────────────────────────────────────────────
@@ -81,71 +81,73 @@ def _load_all_tool_schemas(mcp_script_path: str) -> list[dict]:
         return []
 
 
-# ── Local tool fallback ────────────────────────────────────────────────────────
+# ── Tool execution in environment ─────────────────────────────────────────────
 
-def _execute_tool_locally(tool_name: str, tool_args: dict) -> dict:
+def _execute_tool_in_env(env: BaseEnvironment, tool_name: str, tool_args: dict) -> dict:
     if tool_name == "file_creator":
         path    = tool_args.get("path", "")
         content = tool_args.get("content", "")
-        try:
-            p = pathlib.Path(path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return {"status": "success", "bytes_written": len(content.encode())}
-        except Exception as e:
-            return {"error": str(e)}
+        return env.write_file(path, content)
 
     if tool_name == "run_nmap_scan":
         target    = tool_args.get("target", "127.0.0.1")
         arguments = tool_args.get("arguments", "-F")
         if any(c in target + arguments for c in (";", "&", "|", "`", "$", ">")):
             return {"error": "Disallowed characters in arguments"}
-        try:
-            res = subprocess.run(
-                ["nmap"] + arguments.split() + [target],
-                capture_output=True, text=True, timeout=30,
-            )
-            return {"stdout": res.stdout, "stderr": res.stderr, "exit_code": res.returncode}
-        except FileNotFoundError:
-            return {"error": "nmap not installed"}
-        except subprocess.TimeoutExpired:
-            return {"error": "nmap scan timed out"}
-        except Exception as e:
-            return {"error": str(e)}
-
-    if tool_name == "file_deleter":
-        path_str = tool_args.get("path", "")
-        if not path_str:
-            return {"error": "path is required"}
-        try:
-            p = pathlib.Path(path_str)
-            if not p.exists():
-                return {"status": "not_found", "message": f"File not found: {path_str}"}
-            p.unlink()
-            return {"status": "success", "message": f"File deleted: {path_str}"}
-        except Exception as e:
-            return {"error": str(e)}
+        
+        return env.execute(f"nmap {arguments} {target}", timeout=30)
 
     return {"error": f"Unknown tool: {tool_name}"}
 
 
-def _execute_tool(tool_name: str, tool_args: dict, mcp_running: bool) -> dict:
+def _execute_tool(
+    env: BaseEnvironment,
+    tool_name: str,
+    tool_args: dict,
+    mcp_running: bool,
+    mcp_server_url: str = MCP_SERVER_BASE_URL,
+) -> dict:
     if mcp_running:
-        result = call_mcp_tool(tool_name, tool_args)
+        result = call_mcp_tool(tool_name, tool_args, base_url=mcp_server_url)
         if "error" not in result:
             return result
-    return _execute_tool_locally(tool_name, tool_args)
+    return _execute_tool_in_env(env, tool_name, tool_args)
 
 
 # ── LLM API calls — with streaming support ────────────────────────────────────
+
+def _flush_buf(buf: str, in_think: bool, on_log: Callable) -> str:
+    """Flush a token buffer with the correct [THINKING] / [LLM] prefix."""
+    if buf.strip():
+        on_log(f"{'[THINKING]' if in_think else '[LLM]'} {buf.rstrip()}")
+    return ""
+
+
+def _process_think_tags(token: str, buf: str, in_think: bool, on_log: Callable) -> tuple[str, bool]:
+    """
+    Process `token` against the running `buf`, emitting log lines on
+    <think> / </think> boundaries. Returns (new_buf, new_in_think).
+    """
+    buf += token
+    while True:
+        tag = "<think>" if not in_think else "</think>"
+        idx = buf.find(tag)
+        if idx < 0:
+            break
+        before = buf[:idx]
+        _flush_buf(before, in_think, on_log)
+        buf      = buf[idx + len(tag):]
+        in_think = not in_think
+    return buf, in_think
+
 
 def _stream_ollama(
     base_url: str, model: str, messages: list,
     tools: list, context_size: int, on_log: Callable,
 ) -> dict:
     """
-    Streaming call to Ollama /api/chat. Emits [THINKING] log lines as tokens
-    arrive, then returns the assembled response dict. (fix #30)
+    Streaming call to Ollama /api/chat.
+    Emits [THINKING] for <think>...</think> content, [LLM] for response tokens.
     """
     payload: dict = {
         "model": model,
@@ -165,7 +167,8 @@ def _stream_ollama(
     accumulated = ""
     usage: dict = {}
     msg: dict = {}
-    token_buf = ""
+    buf      = ""
+    in_think = False
 
     for raw_line in resp.iter_lines():
         if not raw_line:
@@ -175,19 +178,16 @@ def _stream_ollama(
         except json.JSONDecodeError:
             continue
 
-        delta_content = chunk.get("message", {}).get("content", "")
-        accumulated += delta_content
-        token_buf   += delta_content
+        token = chunk.get("message", {}).get("content", "")
+        accumulated += token
+        buf, in_think = _process_think_tags(token, buf, in_think, on_log)
 
-        # Emit buffered tokens every ~40 chars or on newline
-        if len(token_buf) >= 40 or "\n" in token_buf:
-            on_log(f"[THINKING] {token_buf.rstrip()}")
-            token_buf = ""
+        # Periodic flush: every 80 chars or on newline
+        if len(buf) >= 80 or "\n" in buf:
+            buf = _flush_buf(buf, in_think, on_log)
 
         if chunk.get("done"):
-            if token_buf.strip():
-                on_log(f"[THINKING] {token_buf.rstrip()}")
-            # Log tool selections visible in Ollama's final message
+            buf = _flush_buf(buf, in_think, on_log)
             for tc in chunk.get("message", {}).get("tool_calls") or []:
                 fn_name = tc.get("function", {}).get("name", "")
                 if fn_name:
@@ -196,7 +196,6 @@ def _stream_ollama(
                 "prompt_tokens":     chunk.get("prompt_eval_count", 0),
                 "completion_tokens": chunk.get("eval_count", 0),
             }
-            # Ollama puts tool_calls on the final done message
             msg = chunk.get("message", {})
             msg["content"] = accumulated
             break
@@ -216,7 +215,7 @@ def _stream_llama_cpp(
 ) -> dict:
     """
     Streaming call to llama.cpp /v1/chat/completions (OpenAI SSE format).
-    Emits [THINKING] log lines as tokens arrive. (fix #30)
+    Emits [THINKING] for <think>...</think> content, [LLM] for response tokens.
     """
     payload: dict = {
         "messages":       messages,
@@ -235,10 +234,11 @@ def _stream_llama_cpp(
     )
     resp.raise_for_status()
 
-    accumulated  = ""
+    accumulated    = ""
     tool_calls_raw: list = []
-    usage: dict  = {}
-    token_buf    = ""
+    usage: dict    = {}
+    buf            = ""
+    in_think       = False
 
     for raw_line in resp.iter_lines():
         if not raw_line:
@@ -257,13 +257,13 @@ def _stream_llama_cpp(
         choice = (chunk.get("choices") or [{}])[0]
         delta  = choice.get("delta", {})
 
-        # Accumulate content tokens — flush on newline or every 40 chars
         token = delta.get("content") or ""
         accumulated += token
-        token_buf   += token
-        if len(token_buf) >= 40 or "\n" in token_buf:
-            on_log(f"[THINKING] {token_buf.rstrip()}")
-            token_buf = ""
+        buf, in_think = _process_think_tags(token, buf, in_think, on_log)
+
+        # Periodic flush: every 80 chars or on newline
+        if len(buf) >= 80 or "\n" in buf:
+            buf = _flush_buf(buf, in_think, on_log)
 
         # Accumulate tool calls (may arrive as incremental deltas)
         for tc_delta in delta.get("tool_calls") or []:
@@ -276,13 +276,13 @@ def _stream_llama_cpp(
             tc["function"]["name"]         += fn_name
             tc["function"]["arguments"]    += tc_delta.get("function", {}).get("arguments", "")
             if fn_name:
-                on_log(f"[THINKING] → selecting tool: {tc['function']['name']}")
+                on_log(f"[THINKING] → tool: {tc['function']['name']}")
 
         if chunk.get("usage"):
             usage = chunk["usage"]
 
-    if token_buf.strip():
-        on_log(f"[THINKING] {token_buf.rstrip()}")
+    # Flush remaining buffer
+    _flush_buf(buf, in_think, on_log)
 
     msg: dict = {"role": "assistant", "content": accumulated}
     if tool_calls_raw:
@@ -300,32 +300,59 @@ def _stream_llama_cpp(
 # ── Validation ─────────────────────────────────────────────────────────────────
 
 def _run_validation(
+    env: BaseEnvironment,
     command: str,
     fail_patterns: list[str],
     expected_stdout: str = "",
 ) -> dict:
     if not command.strip():
         return {"stdout": "", "stderr": "", "exit_code": None, "passed": None}
-    try:
-        res = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=15
-        )
-        combined    = (res.stdout + res.stderr).lower()
-        pattern_hit = any(p.lower() in combined for p in fail_patterns if p)
-        passed      = res.returncode == 0 and not pattern_hit
-        # If an expected stdout is defined, the actual output must match it exactly
-        if passed and expected_stdout.strip():
-            passed = res.stdout.strip() == expected_stdout.strip()
-        return {
-            "stdout":    res.stdout,
-            "stderr":    res.stderr,
-            "exit_code": res.returncode,
-            "passed":    passed,
-        }
-    except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": "Timed out", "exit_code": -1, "passed": False}
-    except Exception as e:
-        return {"stdout": "", "stderr": str(e), "exit_code": -1, "passed": False}
+    
+    res = env.execute(command, timeout=15)
+    combined    = (res["stdout"] + res["stderr"]).lower()
+    pattern_hit = any(p.lower() in combined for p in fail_patterns if p)
+    passed      = res["exit_code"] == 0 and not pattern_hit
+    # If an expected stdout is defined, the actual output must match it exactly
+    if passed and expected_stdout.strip():
+        passed = res["stdout"].strip() == expected_stdout.strip()
+    return {
+        "stdout":    res["stdout"],
+        "stderr":    res["stderr"],
+        "exit_code": res["exit_code"],
+        "passed":    passed,
+    }
+
+
+def _parse_inline_tool_calls(content: str) -> list[dict]:
+    """
+    Fallback parser for models (e.g. SmolLM2) that output tool calls as text
+    inside <tool_call>...</tool_call> tags instead of using the OpenAI function-
+    calling format.  Handles both array  [{"name":…}]  and single-object formats.
+    """
+    matches = re.findall(r'<tool_call>(.*?)</tool_call>', content, re.DOTALL)
+    result: list[dict] = []
+    for raw in matches:
+        raw = raw.strip()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        calls = data if isinstance(data, list) else [data]
+        for call in calls:
+            if not isinstance(call, dict) or "name" not in call:
+                continue
+            args = call.get("arguments", call.get("parameters", {}))
+            if isinstance(args, dict):
+                args = json.dumps(args)
+            result.append({
+                "id":   f"call_{len(result)}",
+                "type": "function",
+                "function": {
+                    "name":      call["name"],
+                    "arguments": str(args) if args else "{}",
+                },
+            })
+    return result
 
 
 def _check_inefficiencies(tool_calls: list[dict]) -> list[str]:
@@ -341,7 +368,7 @@ def _check_inefficiencies(tool_calls: list[dict]) -> list[str]:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
+def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
     """
     Execute the full LLM + tool-use evaluation loop.
 
@@ -357,6 +384,7 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
         "run_scenario":  config.get("active_scenario", ""),
         "run_model":     config.get("selected_model") or "(server default)",
         "run_backend":   config.get("backend_type", "llama.cpp"),
+        "run_tool_focus": config.get("tool_focus", ""),
         # Performance
         "total_latency":      0.0,
         "prompt_tokens":      0,
@@ -376,6 +404,8 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
         "llm_response":    "",
         # Abort flag (fix #2)
         "run_aborted":     False,
+        # Metrics used for this run (stored so dashboard shows correct metrics)
+        "metrics_matrix":  config.get("metrics_matrix", []),
     }
 
     start_t      = time.time()
@@ -386,10 +416,16 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
     enabled_tools= config.get("mcp_tools", {})
     fail_patterns= config.get("fail_patterns", [])
     mcp_running  = config.get("mcp_running", False)
+    mcp_server_url = config.get("mcp_server_url", MCP_SERVER_BASE_URL)
     cancel_ref   = config.get("cancel_requested_ref", [False])
 
     on_log(f"[INIT] Backend: {backend}  |  Model: {model or '(server default)'}")
     on_log(f"[INIT] URL: {base_url}  |  Context: {config.get('context_size', 4096)} tokens")
+    # Log prompts so user can see them in the live terminal
+    _sys = config.get("sys_prompt", "")
+    _usr = config.get("user_prompt", "")
+    on_log(f"[SYS] {_sys[:200]}{'…' if len(_sys) > 200 else ''}")
+    on_log(f"[USR] {_usr[:200]}{'…' if len(_usr) > 200 else ''}")
 
     # ── Tool schema loading with fallback (fix #1) ─────────────────────────────
     tool_schemas = _load_tool_schemas(mcp_url, enabled_tools, on_log)
@@ -410,8 +446,8 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
     # Pre-run file cleanup (allows re-testing file creation scenarios)
     for cleanup_path in config.get("pre_run_cleanup", []):
         try:
-            pathlib.Path(cleanup_path).unlink(missing_ok=True)
-            on_log(f"[CLEANUP] Removed: {cleanup_path}")
+            if env.delete_file(cleanup_path):
+                on_log(f"[CLEANUP] Removed: {cleanup_path}")
         except Exception as e:
             on_log(f"[WARN] Cleanup failed for {cleanup_path}: {e}")
 
@@ -428,7 +464,7 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
             telemetry["run_aborted"] = True
             break
 
-        on_log(f"[LLM] Round {round_num + 1}/{max_rounds} — sending to {backend}…")
+        on_log(f"[LLM] Agent turn {round_num + 1} — sending to {backend}…")
         try:
             if backend == "ollama":
                 resp = _stream_ollama(
@@ -470,10 +506,23 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
         content: str   = msg.get("content") or ""
         tool_calls_raw = msg.get("tool_calls") or []
 
+        # ── Fallback: parse inline <tool_call> tags (SmolLM2, Qwen, etc.) ───────
+        if not tool_calls_raw and content and "<tool_call>" in content:
+            tool_calls_raw = _parse_inline_tool_calls(content)
+            if tool_calls_raw:
+                names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
+                on_log(f"[TOOLS] Parsed {len(tool_calls_raw)} inline tool call(s): {names}")
+
+        # Display: strip <think> and <tool_call> tags, leaving only prose
         if content:
-            snippet = content[:500] + ("…" if len(content) > 500 else "")
+            clean = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+            clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL).strip()
+            display = clean if clean else content
+            # Collapse excessive blank lines for cleaner terminal display
+            display_compact = re.sub(r'\n{3,}', '\n\n', display)
+            snippet = display_compact[:500] + ("…" if len(display_compact) > 500 else "")
             on_log(f"[RESPONSE] {snippet}")
-            telemetry["llm_response"] = content
+            telemetry["llm_response"] = display
 
         if not tool_calls_raw:
             on_log("[DONE] LLM gave final answer — no further tool calls")
@@ -496,7 +545,9 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
 
             on_log(f"[TOOL CALL] {tool_name}({json.dumps(tool_args)})")
             t0      = time.time()
-            result  = _execute_tool(tool_name, tool_args, mcp_running)
+            result  = _execute_tool(
+                env, tool_name, tool_args, mcp_running, mcp_server_url
+            )
             elapsed = round(time.time() - t0, 3)
 
             on_log(f"[TOOL RESULT] {tool_name} → {str(result)[:300]}  ({elapsed}s)")
@@ -535,7 +586,7 @@ def run_evaluation(config: dict, on_log: Callable[[str], None]) -> dict:
 
     if val_cmd and (not run_aborted or had_activity):
         on_log(f"[VALIDATE] Running: {val_cmd}")
-        val = _run_validation(val_cmd, fail_patterns, config.get("expected_stdout", ""))
+        val = _run_validation(env, val_cmd, fail_patterns, config.get("expected_stdout", ""))
         telemetry.update({
             "validation_stdout":    val["stdout"],
             "validation_stderr":    val["stderr"],

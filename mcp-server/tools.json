@@ -15,7 +15,9 @@
           "default": "-F"
         }
       },
-      "required": ["target"]
+      "required": [
+        "target"
+      ]
     }
   },
   {
@@ -33,21 +35,10 @@
           "description": "Content to write to the file."
         }
       },
-      "required": ["path", "content"]
-    }
-  },
-  {
-    "name": "file_deleter",
-    "description": "Deletes a file at the specified path. Returns an error if the file does not exist.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "Path of the file to delete (absolute or relative)."
-        }
-      },
-      "required": ["path"]
+      "required": [
+        "path",
+        "content"
+      ]
     }
   }
 ]

@@ -4,12 +4,12 @@ from config.metrics import METRIC_TYPES, CATEGORIES, evaluate_metric, format_cri
 
 
 _CAT_COLOUR = {
-    "Validation":  "#6366f1",
-    "Tool":        "#f59e0b",
-    "Content":     "#06b6d4",
-    "Performance": "#10b981",
-    "Path":        "#8b5cf6",
-    "Judge":       "#f43f5e",
+    "Validation":  "#b45309",
+    "Tool":        "#c2410c",
+    "Content":     "#0e7490",
+    "Performance": "#166534",
+    "Path":        "#6d28d9",
+    "Judge":       "#be123c",
 }
 
 
@@ -20,6 +20,105 @@ def _badge(text: str, colour: str) -> str:
         f'font-size:0.72rem;font-weight:700;letter-spacing:0.5px">'
         f'{text}</span>'
     )
+
+
+def _type_badge_dash(type_key: str) -> str:
+    """Badge with type label + tooltip showing description."""
+    info   = METRIC_TYPES.get(type_key, {})
+    cat    = info.get("category", "—")
+    label  = info.get("label", type_key)
+    desc   = info.get("description", "")
+    colour = _CAT_COLOUR.get(cat, "#64748b")
+    safe   = desc.replace('"', '&quot;')
+    return (
+        f'<span title="{safe}" style="background:{colour};color:#fff;'
+        f'padding:2px 8px;border-radius:4px;font-size:0.68rem;font-weight:700;'
+        f'letter-spacing:0.4px;cursor:help">{label}</span>'
+    )
+
+
+def _render_response_comparison(response: str, validation_out: str, tool_focus: str) -> None:
+    """Compare LLM response to validation stdout using simple regex extraction."""
+    import re
+
+    col_v, col_r = st.columns(2)
+
+    if tool_focus == "run_nmap_scan" or "nmap" in validation_out.lower():
+        # Extract port specs like "8080/tcp open"
+        port_pattern = r'(\d{1,5}/(?:tcp|udp))\s+(\w+)'
+        val_ports  = re.findall(port_pattern, validation_out.lower())
+        resp_lower = response.lower()
+
+        rows = []
+        for port_spec, state in val_ports:
+            port_num = port_spec.split("/")[0]
+            found = port_num in resp_lower or port_spec in resp_lower
+            rows.append((port_spec, state, found))
+
+        with col_v:
+            st.markdown("**Validation found**")
+            for port_spec, state, _ in rows:
+                st.markdown(f"`{port_spec}` — {state}")
+
+        with col_r:
+            st.markdown("**LLM response mentioned**")
+            if rows:
+                all_ok = all(f for _, _, f in rows)
+                for port_spec, _, found in rows:
+                    icon = "✓" if found else "✗"
+                    colour = "#16a34a" if found else "#dc2626"
+                    st.markdown(
+                        f'<span style="color:{colour};font-weight:700">{icon}</span> `{port_spec}`',
+                        unsafe_allow_html=True,
+                    )
+                if all_ok:
+                    st.success("All ports accounted for in response")
+                else:
+                    missing = [p for p, _, f in rows if not f]
+                    st.warning(f"Missing from response: {', '.join(missing)}")
+            else:
+                st.info("No port/state pairs found in validation output.")
+
+    elif tool_focus == "file_creator" or "/tmp" in validation_out:
+        # For file creation: compare line count and content
+        val_lines  = [l for l in validation_out.strip().split('\n') if l.strip()]
+        resp_nums  = set(re.findall(r'\b\d+\b', response))
+        val_nums   = set(re.findall(r'\b\d+\b', validation_out))
+        common     = resp_nums & val_nums
+
+        with col_v:
+            st.markdown("**Validation output**")
+            st.code(validation_out.strip()[:300], language=None)
+
+        with col_r:
+            st.markdown("**Numbers in response vs file**")
+            if val_nums:
+                matched_pct = int(len(common) / len(val_nums) * 100)
+                missing = sorted(val_nums - resp_nums, key=lambda x: int(x) if x.isdigit() else 0)
+                if missing:
+                    st.warning(f"{matched_pct}% matched — missing: {', '.join(missing)}")
+                else:
+                    st.success(f"All {len(val_nums)} expected values present in response")
+            else:
+                st.info("No numeric values to compare.")
+
+    else:
+        # Generic: word overlap
+        val_words  = set(re.findall(r'\b[a-z]{4,}\b', validation_out.lower()))
+        resp_words = set(re.findall(r'\b[a-z]{4,}\b', response.lower()))
+        common     = val_words & resp_words
+
+        with col_v:
+            st.markdown("**Key terms in validation**")
+            st.caption(", ".join(sorted(val_words)[:20]) or "—")
+
+        with col_r:
+            st.markdown("**Overlap with response**")
+            if val_words:
+                pct = int(len(common) / len(val_words) * 100)
+                st.metric("Term overlap", f"{pct}%", help="Shared words ≥4 chars between validation output and LLM response")
+            else:
+                st.info("No key terms to compare.")
 
 
 def render() -> None:
@@ -89,7 +188,16 @@ def render() -> None:
 
     # ── Metrics evaluation ─────────────────────────────────────────────────────
     st.subheader("Metrics Evaluation")
-    matrix: list = [m for m in st.session_state.get("metrics_matrix", []) if m.get("enabled")]
+
+    # Use the metrics stored in the telemetry for this specific run (so
+    # historical runs show the correct metrics, not the current session config).
+    _run_matrix = tel.get("metrics_matrix", [])
+    matrix: list = [m for m in (_run_matrix or st.session_state.get("metrics_matrix", []))
+                    if m.get("enabled")]
+
+    _tool_focus = tel.get("run_tool_focus", "")
+    if _tool_focus:
+        st.caption(f"Metrics configured for tool: `{_tool_focus}`")
 
     if not matrix:
         st.info("No metrics enabled — configure them in **Configuration → Metrics Setup**.")
@@ -121,24 +229,25 @@ def render() -> None:
                 f'{cat.upper()}</div>',
                 unsafe_allow_html=True,
             )
-            hcols = st.columns([2, 4, 5, 2])
-            for lbl, col in zip(["ID", "Name", "Criterion", "Result"], hcols):
+            hcols = st.columns([2, 3, 3, 4, 2])
+            for lbl, col in zip(["ID", "Name", "Type", "Criterion", "Result"], hcols):
                 col.markdown(f"*{lbl}*")
 
             for m, result in items:
-                rc = st.columns([2, 4, 5, 2])
+                rc = st.columns([2, 3, 3, 4, 2])
                 rc[0].code(m["id"])
                 rc[1].write(m["name"])
-                rc[2].markdown(
-                    f'<div style="color:#e2e8f0; font-size:0.95rem; line-height:1.4;">{format_criterion(m)}</div>',
+                rc[2].markdown(_type_badge_dash(m.get("type", "")), unsafe_allow_html=True)
+                rc[3].markdown(
+                    f'<span class="criterion">{format_criterion(m)}</span>',
                     unsafe_allow_html=True,
                 )
                 if result is True:
-                    rc[3].markdown(_badge("PASS ✓", "#16a34a"), unsafe_allow_html=True)
+                    rc[4].markdown(_badge("PASS ✓", "#16a34a"), unsafe_allow_html=True)
                 elif result is False:
-                    rc[3].markdown(_badge("FAIL ✗", "#dc2626"), unsafe_allow_html=True)
+                    rc[4].markdown(_badge("FAIL ✗", "#dc2626"), unsafe_allow_html=True)
                 else:
-                    rc[3].markdown(_badge("N/A",   "#475569"), unsafe_allow_html=True)
+                    rc[4].markdown(_badge("N/A",   "#475569"), unsafe_allow_html=True)
 
     st.divider()
 
@@ -184,6 +293,18 @@ def render() -> None:
             st.text_area("Stdout", value=tel["validation_stdout"], height=160)
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100)
+
+    # ── Response vs Validation comparison ─────────────────────────────────────
+    _resp = tel.get("llm_response", "")
+    _vout = tel.get("validation_stdout", "")
+    if _resp and _vout:
+        st.divider()
+        st.subheader("Response ↔ Validation Comparison")
+        st.caption(
+            "Regex-based check: key values extracted from the validation output "
+            "are matched against the LLM's final response."
+        )
+        _render_response_comparison(_resp, _vout, tel.get("run_tool_focus", ""))
 
     # ── Final LLM response ─────────────────────────────────────────────────────
     if tel.get("llm_response"):

@@ -6,6 +6,14 @@ import requests
 _VOCAB_PREFIXES = ("ggml-vocab-",)
 
 
+def _ensure_scheme(url: str) -> str:
+    """Prepend http:// if the URL has no scheme."""
+    url = (url or "").strip()
+    if url and not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return url
+
+
 def _is_inference_model(filename: str) -> bool:
     name = os.path.basename(filename).lower()
     return not any(name.startswith(p) for p in _VOCAB_PREFIXES)
@@ -37,22 +45,35 @@ def scan_gguf_models(root_path: str) -> list[dict]:
     return results
 
 
-def fetch_ollama_models(base_url: str) -> list[dict]:
-    """Return [{name, size_gb}] from Ollama /api/tags. Returns [] on failure."""
+def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
+    """
+    Return (models, error) where models is [{name, size_gb}] from Ollama /api/tags.
+    error is '' on success, otherwise a human-readable message.
+    """
+    url = _ensure_scheme(base_url)
+    if not url:
+        return [], "Server URL is empty."
     try:
-        resp = requests.get(base_url.rstrip("/") + "/api/tags", timeout=5)
+        resp = requests.get(url.rstrip("/") + "/api/tags", timeout=8)
         resp.raise_for_status()
-        return [
+        models = [
             {"name": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)}
             for m in resp.json().get("models", [])
         ]
-    except Exception:
-        return []
+        return models, ""
+    except requests.exceptions.MissingSchema:
+        return [], f"Invalid URL (missing scheme): {url}"
+    except requests.exceptions.ConnectionError:
+        return [], f"Cannot connect to {url} — is Ollama running?"
+    except requests.exceptions.Timeout:
+        return [], f"Timed out connecting to {url}"
+    except Exception as e:
+        return [], str(e)
 
 
 def detect_backend(url: str) -> str | None:
     """Probe url and return 'ollama', 'llama.cpp', or None."""
-    base = url.rstrip("/")
+    base = _ensure_scheme(url).rstrip("/")
     try:
         r = requests.get(base + "/api/tags", timeout=3)
         if r.ok and "models" in r.json():
