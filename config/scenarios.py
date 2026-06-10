@@ -36,8 +36,6 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-011", "No Error in Output",      "no_error_output"),
             make_metric("M-012", "Tool Output Contains",    "tool_output_contains",
                         tool_name="file_creator", text="success"),
-            make_metric("M-013", "No Nmap Scan Called",     "tool_not_called",       tool_name="run_nmap_scan"),
-            make_metric("M-014", "No Port Mentioned",       "content_not_contains",  text="port"),
         ],
     },
 

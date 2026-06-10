@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from config.scenarios import SCENARIOS
@@ -209,6 +210,7 @@ def render() -> None:
 
         logs: list[dict]       = []
         cancel_ref: list[bool] = [False]
+        _last_render: list[float] = [0.0]
 
         def on_log(msg: str) -> None:
             # Propagate cancel flag into the evaluator via the shared reference
@@ -217,7 +219,14 @@ def render() -> None:
             entry = {"text": msg, "tag": _tag(msg)}
             logs.append(entry)
             st.session_state["run_logs"] = list(logs)
-            _render_terminal(log_placeholder, logs)
+            # Throttle terminal redraws to ~2/sec for streaming tokens.
+            # Always render immediately for non-streaming events so tool calls,
+            # errors, and validation results appear without delay.
+            now = time.monotonic()
+            is_stream_token = entry["tag"] in ("llm", "thinking")
+            if not is_stream_token or (now - _last_render[0]) >= 0.5:
+                _render_terminal(log_placeholder, logs)
+                _last_render[0] = now
 
         _backend   = st.session_state.get("backend_type", "llama.cpp")
         _def_url   = LLAMA_CPP_DEFAULT_URL if _backend == "llama.cpp" else OLLAMA_DEFAULT_URL

@@ -160,7 +160,7 @@ def _stream_ollama(
 
     resp = requests.post(
         base_url.rstrip("/") + "/api/chat", json=payload,
-        stream=True, timeout=300,
+        stream=True, timeout=(10, None),
     )
     resp.raise_for_status()
 
@@ -230,7 +230,7 @@ def _stream_llama_cpp(
 
     resp = requests.post(
         base_url.rstrip("/") + "/v1/chat/completions", json=payload,
-        stream=True, timeout=300,
+        stream=True, timeout=(10, None),
     )
     resp.raise_for_status()
 

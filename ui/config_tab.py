@@ -157,16 +157,6 @@ def _model_setup() -> None:
         else:
             _ollama_model_selector()
 
-        if backend == "llama.cpp":
-            st.subheader("llama-server")
-            _llama_server_controls()
-        else:
-            st.subheader("Ollama")
-            st.info(
-                "Ollama manages model loading automatically. "
-                "Ensure the Ollama service is running at the configured URL."
-            )
-
         st.subheader("Context Window")
         ctx = st.slider(
             "Tokens",
@@ -184,6 +174,16 @@ def _model_setup() -> None:
                     f"Running server n_ctx = **{info['n_ctx']}** — "
                     f"slider is **{ctx}**. Restart server to apply."
                 )
+
+        if backend == "llama.cpp":
+            st.subheader("llama-server")
+            _llama_server_controls()
+        else:
+            st.subheader("Ollama")
+            st.info(
+                "Ollama manages model loading automatically. "
+                "Ensure the Ollama service is running at the configured URL."
+            )
 
     # ── MCP Server ─────────────────────────────────────────────────────────────
     with st.expander("SecOps MCP Server", expanded=True):
@@ -252,6 +252,12 @@ def _llama_server_controls() -> None:
     else:
         st.warning("Not running — press Start to load the model.")
 
+    st.text_input(
+        "Binary path",
+        key="llama_server_bin",
+        help="Path to the llama-server executable.",
+    )
+
     col_start, col_stop, col_restart = st.columns(3)
     with col_start:
         if st.button("Start", use_container_width=True, key="btn_ls_start",
@@ -280,12 +286,6 @@ def _llama_server_controls() -> None:
             )
             st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
             st.rerun()
-
-    st.text_input(
-        "Binary path",
-        key="llama_server_bin",
-        help="Path to the llama-server executable.",
-    )
 
 
 def _mcp_server_section() -> None:
