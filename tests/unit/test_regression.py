@@ -12,7 +12,7 @@ import streamlit as st
 #      silently and returned None (or crashed). Fixed by _ensure_scheme().
 
 def test_ensure_scheme_prepends_http():
-    from core.models import _ensure_scheme
+    from core.utils import ensure_http_scheme as _ensure_scheme
     assert _ensure_scheme("grain.utep.edu:11434") == "http://grain.utep.edu:11434"
     assert _ensure_scheme("localhost:11434")       == "http://localhost:11434"
 
@@ -126,14 +126,14 @@ def test_stream_llama_cpp_tool_call_has_type_field():
         if mod not in sys.modules:
             sys.modules[mod] = types.ModuleType(mod)
 
-    from core.evaluator import _stream_llama_cpp
+    from core.streaming import stream_llama_cpp as _stream_llama_cpp
 
     sse_line = json.dumps({"choices": [{"delta": {"tool_calls": [
         {"index": 0, "id": "abc",
          "function": {"name": "file_creator", "arguments": '{"path":"/tmp/x","content":"y"}'}}
     ]}}]})
 
-    with patch("core.evaluator.requests") as mock_req:
+    with patch("core.streaming.requests") as mock_req:
         mock_resp = MagicMock()
         mock_resp.iter_lines.return_value = iter([
             f"data: {sse_line}".encode(),

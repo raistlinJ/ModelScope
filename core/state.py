@@ -20,34 +20,25 @@ _DEFAULTS: dict = {
     "context_size":          DEFAULT_CONTEXT_SIZE,
 
     # Target Environment
-    "target_env_type":       "local",  # local only (ssh is a future release)
-    # ── SSH target settings — FUTURE RELEASE ─────────────────────────────────
-    # Remote SSH execution is planned for a future release.
-    # "target_ssh_host":       "127.0.0.1",
-    # "target_ssh_port":       22,
-    # "target_ssh_user":       "root",
-    # "target_ssh_password":   "",
-    # "target_ssh_key_path":   "",
-    # ─────────────────────────────────────────────────────────────────────────
+    "target_env_type":       "local",
+
+    # SSH target credentials
+    "target_ssh_host":     "",
+    "target_ssh_port":     22,
+    "target_ssh_user":     "root",
+    "target_ssh_password": "",
+    "target_ssh_key_path": "",
+    "target_ssh_caf_dir":  "~/cyber-agent-flow",
 
     # llama-server management
-    "llama_server_bin":      LLAMA_SERVER_BIN,  # editable from UI (fix #29)
+    "llama_server_bin":      LLAMA_SERVER_BIN,
     "llama_server_running":  False,
 
     # MCP (local)
-    "mcp_url":       MCP_SCRIPT_PATH,
-    "mcp_server_url": MCP_SERVER_BASE_URL,
-    "mcp_tools":     {},
-    "mcp_running":   False,
-    # ── MCP SSH tunnel settings — FUTURE RELEASE ─────────────────────────────
-    # MCP SSH tunneling is planned for a future release.
-    # "mcp_use_ssh":        False,
-    # "mcp_ssh_host":       "",
-    # "mcp_ssh_port":       22,
-    # "mcp_ssh_user":       "",
-    # "mcp_ssh_password":   "",
-    # "mcp_ssh_key_path":   "",
-    # ─────────────────────────────────────────────────────────────────────────
+    "mcp_url":               MCP_SCRIPT_PATH,
+    "mcp_server_url":        MCP_SERVER_BASE_URL,
+    "mcp_tools":             {},
+    "mcp_running":           False,
 
     # Metrics setup
     "active_scenario":    DEFAULT_SCENARIO,
@@ -61,22 +52,81 @@ _DEFAULTS: dict = {
     "user_prompt":       _SCENARIO["user_prompt"],
     "run_logs":          [],
     "run_completed":     False,
-    "cancel_requested":  False,   # set True by Cancel button (fix #16)
+    "cancel_requested":  False,
 
     # Telemetry (current run)
     "telemetry": {},
 
-    # Run history — list of past telemetry dicts (fix #26)
+    # Run history
     "run_history": [],
 
     # Internal trackers
-    "_last_backend":       "llama.cpp",
-    "_last_exec_scenario": DEFAULT_SCENARIO,
-    # Prompt edit tracking for scenario-change warning (fix #10)
+    "_last_backend":        "llama.cpp",
+    "_last_exec_scenario":  DEFAULT_SCENARIO,
     "_prompts_user_edited": False,
+
+    # CAF 4-Pillar configuration
+    "caf_scope":              "Narrow",
+    "caf_urgency":            "Speed",
+    "caf_allowed_subnets":    [],
+    "caf_target_credentials": [],
+
+    # AI Judge configuration
+    "judge_enabled":     False,
+    "judge_provider":    "anthropic",
+    "judge_model":       "claude-sonnet-4-6",
+    "judge_api_key":     "",
+    "judge_temperature": 0.0,
+    "judge_mode":        "Score all responses",
+
+    # Batch evaluation
+    "batch_queue":   [],
+    "batch_report":  None,
+
+    # Model comparison
+    "comparison_models": [],
+    "comparison_result": None,
+
+    # RAG configuration
+    "rag_corpus_path":          "",
+    "rag_retrieval_k":          5,
+    "rag_query":                "",
+    "rag_ground_truth_answer":  "",
+    "rag_ground_truth_doc_ids": "",
+
+    # Workflow-specific
+    "workflow_test_cases":               [],
+    "workflow_variants":                 [],
+    "classification_labels":             "",
+    "summarization_reference":           "",
+    "summarization_source":              "",
+    "structured_output_schema":          "{}",
+    "structured_output_required_fields": "",
+    "multiagent_num_agents":             2,
 }
 
 
 def init_state() -> None:
     for key, default in _DEFAULTS.items():
         st.session_state.setdefault(key, default)
+
+
+def sync_scenario(scenario_key: str) -> None:
+    """
+    Sync all scenario-derived session state when the active scenario changes.
+    Preserves user-edited prompts; always updates validation, metrics, and CAF config.
+    """
+    _s = SCENARIOS.get(scenario_key, SCENARIOS[DEFAULT_SCENARIO])
+    if not st.session_state.get("_prompts_user_edited"):
+        st.session_state["sys_prompt"]  = _s["system_prompt"]
+        st.session_state["user_prompt"] = _s["user_prompt"]
+    st.session_state["validation_command"]  = _s["validation_command"]
+    st.session_state["fail_patterns"]       = list(_s["fail_patterns"])
+    st.session_state["metrics_matrix"]      = list(_s["default_metrics"])
+    st.session_state["_last_exec_scenario"] = scenario_key
+    st.session_state["_prompts_user_edited"] = False
+    if "caf_scope" in _s:
+        st.session_state["caf_scope"]              = _s["caf_scope"]
+        st.session_state["caf_urgency"]            = _s["caf_urgency"]
+        st.session_state["caf_allowed_subnets"]    = list(_s.get("caf_allowed_subnets", []))
+        st.session_state["caf_target_credentials"] = list(_s.get("caf_target_credentials", []))

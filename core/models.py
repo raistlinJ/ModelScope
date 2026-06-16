@@ -1,17 +1,11 @@
 import os
 import requests
 
+from core.utils import ensure_http_scheme
+
 
 # Vocab-only GGUF files shipped with llama.cpp — not inference models
 _VOCAB_PREFIXES = ("ggml-vocab-",)
-
-
-def _ensure_scheme(url: str) -> str:
-    """Prepend http:// if the URL has no scheme."""
-    url = (url or "").strip()
-    if url and not url.startswith(("http://", "https://")):
-        url = "http://" + url
-    return url
 
 
 def _is_inference_model(filename: str) -> bool:
@@ -50,7 +44,7 @@ def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
     Return (models, error) where models is [{name, size_gb}] from Ollama /api/tags.
     error is '' on success, otherwise a human-readable message.
     """
-    url = _ensure_scheme(base_url)
+    url = ensure_http_scheme(base_url)
     if not url:
         return [], "Server URL is empty."
     try:
@@ -73,7 +67,7 @@ def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
 
 def detect_backend(url: str) -> str | None:
     """Probe url and return 'ollama', 'llama.cpp', or None."""
-    base = _ensure_scheme(url).rstrip("/")
+    base = ensure_http_scheme(url).rstrip("/")
     try:
         r = requests.get(base + "/api/tags", timeout=3)
         if r.ok and "models" in r.json():

@@ -11,27 +11,39 @@ from config.scenarios import SCENARIOS
 from core.models import scan_gguf_models, fetch_ollama_models
 from core.mcp_manager import start_mcp, stop_mcp, discover_tools
 from core import llama_server
+from core.state import sync_scenario
+from ui.components import badge, type_badge, CAT_COLOUR
+from ui.workflow_config import render_workflow_config
 
 # Tool focus → scenario mapping
 _TOOL_SCENARIOS = {
-    "file_creator":  "Scenario 1 – File Creation",
-    "run_nmap_scan": "Scenario 2 – Network Scan",
+    "file_creator":          "Scenario 1 – File Creation",
+    "run_nmap_scan":         "Scenario 2 – Network Scan",
+    "mcp_kali_run_command":  "CAF – Reconnaissance",
+    "msf_run":               "CAF – Exploitation",
+    "caf_guardrail_test":    "CAF – Guardrail Test",
 }
 _TOOL_LABELS = {
-    "file_creator":  "file_creator — File Creation",
-    "run_nmap_scan": "run_nmap_scan — Network Scanner",
+    "file_creator":         "file_creator — File Creation",
+    "run_nmap_scan":        "run_nmap_scan — Network Scanner",
+    "mcp_kali_run_command": "mcp_kali_run_command — CAF Reconnaissance",
+    "msf_run":              "msf_run — CAF Exploitation",
+    "caf_guardrail_test":   "caf_guardrail_test — CAF Guardrail Test",
 }
 
 
 def render() -> None:
     st.header("Configuration")
-    sub_model, sub_metrics, sub_verify = st.tabs(
-        ["⚙  Model Setup", "📐  Metrics Setup", "🔬  Platform Verification"]
+    sub_model, sub_metrics, sub_judge, sub_verify = st.tabs(
+        ["⚙  Model Setup", "📐  Metrics Setup", "🤖  AI Judge", "🔬  Platform Verification"]
     )
     with sub_model:
         _model_setup()
     with sub_metrics:
         _metrics_setup()
+    with sub_judge:
+        from ui.judge_config import render as _render_judge
+        _render_judge()
     with sub_verify:
         _platform_verification()
 
@@ -53,45 +65,6 @@ def _platform_verification() -> None:
 
 # ── Model Setup ────────────────────────────────────────────────────────────────
 
-# ── SSH connection test — FUTURE RELEASE ─────────────────────────────────────
-# SSH connections to remote execution targets are planned for a future release.
-# The function below is disabled until that support is fully implemented.
-#
-# def _test_ssh_connection() -> None:
-#     """Attempt a quick SSH connection and run a probe command, showing the result inline."""
-#     from core.environment import SSHEnvironment
-#     host     = st.session_state.get("target_ssh_host", "").strip()
-#     port     = st.session_state.get("target_ssh_port", 22)
-#     user     = st.session_state.get("target_ssh_user", "").strip()
-#     password = st.session_state.get("target_ssh_password", "") or None
-#     key_path = st.session_state.get("target_ssh_key_path", "").strip() or None
-#
-#     if not host:
-#         st.error("Host is required.")
-#         return
-#     if not user:
-#         st.error("User is required.")
-#         return
-#
-#     env = None
-#     try:
-#         with st.spinner(f"Connecting to {user}@{host}:{port}…"):
-#             env = SSHEnvironment(host=host, port=port, username=user,
-#                                  password=password, key_path=key_path)
-#             result = env.execute("hostname && whoami && uname -sr", timeout=10)
-#
-#         if result["exit_code"] == 0:
-#             st.success(f"Connected — `{result['stdout'].strip()}`")
-#         else:
-#             st.error(f"Command failed (exit {result['exit_code']}): {result['stderr'].strip()}")
-#     except Exception as e:
-#         st.error(f"SSH error: {e}")
-#     finally:
-#         if env:
-#             env.close()
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _model_setup() -> None:
     # Apply any pending backend detection BEFORE the selectbox is created.
     if "_pending_backend" in st.session_state:
@@ -103,28 +76,46 @@ def _model_setup() -> None:
 
     # ── Execution Target ───────────────────────────────────────────────────────
     with st.expander("Execution Target", expanded=False):
-        env_type = st.selectbox(
+        target_env = st.selectbox(
             "Mode",
-            options=["local"],  # "ssh" option is a future release
-            index=0,
+            options=["local", "remote (SSH)"],
+            index=0 if st.session_state.get("target_env_type", "local") == "local" else 1,
             key="target_env_type",
-            help="Where evaluation commands and tools will execute.",
+            help="Where evaluation commands and CAF will execute.",
         )
-        # ── SSH target UI — FUTURE RELEASE ────────────────────────────────────
-        # Remote SSH execution targets are planned for a future release.
-        # if env_type == "ssh":
-        #     c1, c2, c3 = st.columns([4, 1, 4])
-        #     c1.text_input("Host", key="target_ssh_host")
-        #     c2.number_input("Port", value=22, key="target_ssh_port")
-        #     c3.text_input("User", key="target_ssh_user")
-        #     c4, c5 = st.columns(2)
-        #     c4.text_input("Password (optional)", type="password", key="target_ssh_password")
-        #     c5.text_input("SSH Key Path (optional)", key="target_ssh_key_path")
-        #     ct, _ = st.columns([2, 5])
-        #     with ct:
-        #         if st.button("Test Connection", use_container_width=True):
-        #             _test_ssh_connection()
-        # ──────────────────────────────────────────────────────────────────────
+        if target_env == "remote (SSH)":
+            st.caption("SSH credentials for the remote Kali machine running CyberAgentFlow.")
+            c_host, c_port = st.columns([3, 1])
+            with c_host:
+                st.text_input("Host", key="target_ssh_host", placeholder="192.168.1.100")
+            with c_port:
+                st.number_input(
+                    "Port", key="target_ssh_port",
+                    min_value=1, max_value=65535, step=1,
+                )
+            c_user, c_pass = st.columns(2)
+            with c_user:
+                st.text_input("Username", key="target_ssh_user", placeholder="root")
+            with c_pass:
+                st.text_input(
+                    "Password", key="target_ssh_password",
+                    type="password", placeholder="(leave blank if using key)",
+                )
+            st.text_input(
+                "Key Path", key="target_ssh_key_path",
+                placeholder="/home/user/.ssh/id_rsa",
+                help="Path to SSH private key on THIS machine. Leave blank to use password.",
+            )
+            st.text_input(
+                "Remote CAF Directory",
+                key="target_ssh_caf_dir",
+                placeholder="~/cyber-agent-flow",
+                help="Absolute path on the remote machine where CyberAgentFlow is installed.",
+            )
+            col_test, _ = st.columns([2, 5])
+            with col_test:
+                if st.button("Test Connection", key="btn_test_ssh", use_container_width=True):
+                    _test_ssh_connection()
 
     # ── Backend & Model ────────────────────────────────────────────────────────
     with st.expander("Backend & Model", expanded=True):
@@ -188,6 +179,129 @@ def _model_setup() -> None:
     # ── MCP Server ─────────────────────────────────────────────────────────────
     with st.expander("SecOps MCP Server", expanded=True):
         _mcp_server_section()
+
+    # ── CAF Runtime Configuration ──────────────────────────────────────────────
+    with st.expander("CAF Runtime Configuration", expanded=False):
+        _caf_config_section()
+
+
+def _caf_config_section() -> None:
+    """CAF Scope, Urgency, and network boundary controls — mirroring CAF's Prompt Controls UI."""
+    st.caption(
+        "Configure Cyber-Agent-Flow's runtime Scope and Urgency controls. "
+        "These are injected into the evaluation config and drive CAF 4-Pillar metric evaluation."
+    )
+
+    col_scope, col_urgency = st.columns(2)
+
+    with col_scope:
+        st.markdown("**Scope**")
+        st.caption("Broad → wide discovery  |  Narrow → focused exploitation")
+        scope = st.selectbox(
+            "Scope",
+            options=["Narrow", "Broad"],
+            index=0 if st.session_state.get("caf_scope", "Narrow") == "Narrow" else 1,
+            key="caf_scope",
+            label_visibility="collapsed",
+        )
+
+    with col_urgency:
+        st.markdown("**Urgency**")
+        st.caption("Stealthy → slow/quiet  |  Speed → fast/aggressive")
+        urgency = st.selectbox(
+            "Urgency",
+            options=["Speed", "Stealthy"],
+            index=0 if st.session_state.get("caf_urgency", "Speed") == "Speed" else 1,
+            key="caf_urgency",
+            label_visibility="collapsed",
+        )
+
+    st.divider()
+
+    st.markdown("**Allowed Subnets** (Scope = Narrow guardrail)")
+    st.caption("IP ranges the agent is authorized to interact with. Leave empty to skip scope validation.")
+    subnets: list = st.session_state.get("caf_allowed_subnets", [])
+    col_sub_in, col_sub_add = st.columns([5, 1])
+    with col_sub_in:
+        new_sub = st.text_input(
+            "Subnet", placeholder="e.g. 192.168.1.0/24",
+            label_visibility="collapsed", key="_new_caf_subnet",
+        )
+    with col_sub_add:
+        if st.button("Add", key="btn_add_caf_subnet", use_container_width=True):
+            s = new_sub.strip()
+            if s and s not in subnets:
+                st.session_state["caf_allowed_subnets"] = subnets + [s]
+                st.rerun()
+    for i, sub in enumerate(subnets):
+        sc, sd = st.columns([8, 1])
+        sc.code(sub)
+        if sd.button("✕", key=f"del_caf_sub_{i}"):
+            subnets.pop(i)
+            st.session_state["caf_allowed_subnets"] = subnets
+            st.rerun()
+
+    st.divider()
+
+    st.markdown("**Target Credentials** (Memory Recall metric)")
+    st.caption("Known credential strings to track across the trajectory for Memory Recall F1 scoring.")
+    creds: list = st.session_state.get("caf_target_credentials", [])
+    col_cred_in, col_cred_add = st.columns([5, 1])
+    with col_cred_in:
+        new_cred = st.text_input(
+            "Credential", placeholder="e.g. admin:password123",
+            label_visibility="collapsed", key="_new_caf_cred",
+        )
+    with col_cred_add:
+        if st.button("Add", key="btn_add_caf_cred", use_container_width=True):
+            c = new_cred.strip()
+            if c and c not in creds:
+                st.session_state["caf_target_credentials"] = creds + [c]
+                st.rerun()
+    for i, cred in enumerate(creds):
+        cc, cd = st.columns([8, 1])
+        cc.code(cred)
+        if cd.button("✕", key=f"del_caf_cred_{i}"):
+            creds.pop(i)
+            st.session_state["caf_target_credentials"] = creds
+            st.rerun()
+
+    st.divider()
+    st.caption(
+        f"Active config: Scope=**{scope}** | Urgency=**{urgency}** | "
+        f"Subnets: {len(subnets)} | Credentials: {len(creds)}"
+    )
+
+
+def _test_ssh_connection() -> None:
+    """Attempt a probe connection and show success or error inline."""
+    import paramiko
+    host     = (st.session_state.get("target_ssh_host") or "").strip()
+    port     = int(st.session_state.get("target_ssh_port") or 22)
+    user     = (st.session_state.get("target_ssh_user") or "").strip()
+    password = st.session_state.get("target_ssh_password") or ""
+    key_path = (st.session_state.get("target_ssh_key_path") or "").strip()
+    if not host:
+        st.error("Host is required.")
+        return
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
+        if key_path:
+            kwargs["key_filename"] = key_path
+        if password:
+            kwargs["password"] = password
+        client.connect(**kwargs)
+        _, stdout, _ = client.exec_command("echo ok")
+        result = stdout.read().decode().strip()
+        client.close()
+        if result == "ok":
+            st.success(f"Connected to {user}@{host}:{port}")
+        else:
+            st.warning(f"Connected but unexpected echo: {result!r}")
+    except Exception as exc:
+        st.error(f"Connection failed: {exc}")
 
 
 def _llama_server_controls() -> None:
@@ -299,18 +413,13 @@ def _mcp_server_section() -> None:
         else:
             st.error(msg)
 
-    # ── Connection Type ───────────────────────────────────────────────────────
-    # ── SSH Tunnel option — FUTURE RELEASE ───────────────────────────────────
-    # MCP SSH tunneling is planned for a future release.  Only "Local" is
-    # available for now.  The "SSH Tunnel" option is disabled below.
     conn_type = st.selectbox(
         "Connection Type",
-        options=["Local"],  # "SSH Tunnel" option is a future release
+        options=["Local"],
         index=0,
         key="_mcp_conn_type_sel",
         help="Local: start a Node.js MCP server on this machine.",
     )
-    # st.session_state["mcp_use_ssh"] = (conn_type == "SSH Tunnel")
 
     if conn_type == "Local":
         # ── Local MCP ─────────────────────────────────────────────────────────
@@ -341,61 +450,6 @@ def _mcp_server_section() -> None:
             f'</p>',
             unsafe_allow_html=True,
         )
-
-    # ── MCP SSH Tunnel UI — FUTURE RELEASE ───────────────────────────────────
-    # The SSH Tunnel branch below is disabled until SSH support ships.
-    # else:
-    #     # ── SSH Tunnel ────────────────────────────────────────────────────────
-    #     st.caption(
-    #         "Forward a remote MCP server's port to localhost via SSH. "
-    #         "The MCP server must already be running on the remote machine."
-    #     )
-    #     c1, c2, c3 = st.columns([4, 1, 4])
-    #     c1.text_input("SSH Host", key="mcp_ssh_host", placeholder="192.168.1.100")
-    #     c2.number_input("SSH Port", value=22, key="mcp_ssh_port")
-    #     c3.text_input("SSH User", key="mcp_ssh_user", placeholder="root")
-    #     c4, c5 = st.columns(2)
-    #     c4.text_input("Password (optional)", type="password", key="mcp_ssh_password")
-    #     c5.text_input("SSH Key Path (optional)", key="mcp_ssh_key_path")
-    #
-    #     col_url, _ = st.columns([1, 1])
-    #     with col_url:
-    #         st.text_input("MCP Server URL (after tunnel)", key="mcp_server_url")
-    #
-    #     col_ssh_start, col_ssh_stop, _ = st.columns([1, 1, 4])
-    #     with col_ssh_start:
-    #         if st.button("Start SSH Tunnel", use_container_width=True, key="btn_mcp_ssh_start"):
-    #             from core.mcp_manager import start_mcp_ssh_tunnel
-    #             host = st.session_state.get("mcp_ssh_host", "").strip()
-    #             port = st.session_state.get("mcp_ssh_port", 22)
-    #             user = st.session_state.get("mcp_ssh_user", "").strip()
-    #             pwd  = st.session_state.get("mcp_ssh_password", "") or None
-    #             key  = st.session_state.get("mcp_ssh_key_path", "").strip() or None
-    #             if not host or not user:
-    #                 st.session_state["_mcp_msg"] = ("error", "SSH host and user are required.")
-    #             else:
-    #                 ok, msg = start_mcp_ssh_tunnel(host, port, user, pwd, key)
-    #                 st.session_state["_mcp_msg"] = ("success" if ok else "error", msg)
-    #             st.rerun()
-    #     with col_ssh_stop:
-    #         if st.button("Stop SSH Tunnel", use_container_width=True, key="btn_mcp_ssh_stop"):
-    #             from core.mcp_manager import stop_mcp_ssh_tunnel
-    #             ok, msg = stop_mcp_ssh_tunnel()
-    #             st.session_state["_mcp_msg"] = ("success" if ok else "info", msg)
-    #             st.rerun()
-    #
-    #     tunnel_proc = st.session_state.get("mcp_ssh_tunnel_process")
-    #     if tunnel_proc is not None:
-    #         alive = tunnel_proc.poll() is None
-    #         t_state = "up" if alive else "down"
-    #         t_label = "Tunnel Active" if alive else "Tunnel Died"
-    #         st.markdown(
-    #             f'<p style="margin:4px 0 8px">'
-    #             f'<span class="status-pill status-pill-{t_state}">{t_label}</span>'
-    #             f'</p>',
-    #             unsafe_allow_html=True,
-    #         )
-    # ─────────────────────────────────────────────────────────────────────────
 
     st.divider()
 
@@ -523,54 +577,24 @@ def _ollama_model_selector() -> None:
 
 # ── Metrics Setup ──────────────────────────────────────────────────────────────
 
-_CAT_COLOUR = {
-    "Validation":  "#b45309",
-    "Tool":        "#c2410c",
-    "Content":     "#0e7490",
-    "Performance": "#166534",
-    "Path":        "#6d28d9",
-    "Judge":       "#be123c",
-}
-
-
-def _cat_badge(cat: str) -> str:
-    colour = _CAT_COLOUR.get(cat, "#64748b")
-    return (
-        f'<span style="background:{colour};color:#fff;padding:1px 7px;'
-        f'border-radius:2px;font-size:0.68rem;font-weight:700;'
-        f'letter-spacing:0.5px;text-transform:uppercase">{cat}</span>'
-    )
-
-
-def _type_badge(type_key: str) -> str:
-    """Badge showing the metric type label with a hover tooltip showing the description."""
-    info   = METRIC_TYPES.get(type_key, {})
-    cat    = info.get("category", "—")
-    label  = info.get("label", type_key)
-    desc   = info.get("description", "")
-    colour = _CAT_COLOUR.get(cat, "#64748b")
-    safe_desc = desc.replace('"', '&quot;')
-    return (
-        f'<span title="{safe_desc}" style="background:{colour};color:#fff;padding:1px 7px;'
-        f'border-radius:2px;font-size:0.68rem;font-weight:700;'
-        f'letter-spacing:0.5px;cursor:help" data-tooltip="{safe_desc}">'
-        f'{label}</span>'
-    )
-
-
 def _on_tool_focus_change() -> None:
-    """Callback: sync scenario, validation, fail patterns, and metrics when tool changes."""
+    """Callback: sync scenario, prompts, validation, metrics, and CAF config when tool changes."""
     tool     = st.session_state.get("tool_focus", "file_creator")
     scenario = _TOOL_SCENARIOS.get(tool, "Scenario 1 – File Creation")
-    _s       = SCENARIOS.get(scenario, {})
     st.session_state["active_scenario"]      = scenario
-    st.session_state["validation_command"]   = _s.get("validation_command", "")
-    st.session_state["fail_patterns"]        = list(_s.get("fail_patterns", []))
-    st.session_state["metrics_matrix"]       = list(_s.get("default_metrics", []))
     st.session_state["_prompts_user_edited"] = False
+    sync_scenario(scenario)
 
 
 def _metrics_setup() -> None:
+    # ── Workflow-specific configuration ────────────────────────────────────────
+    _active_sc_key = st.session_state.get("active_scenario", "")
+    _active_sc     = SCENARIOS.get(_active_sc_key, {})
+    _stype         = _active_sc.get("scenario_type", "")
+    if _stype and _stype not in ("tool_use", ""):
+        render_workflow_config()
+        st.divider()
+
     # ── Tool Focus Selector ────────────────────────────────────────────────────
     st.subheader("Evaluation Tool")
     st.caption(
@@ -660,7 +684,6 @@ def _metrics_setup() -> None:
         st.warning("Reset metrics to scenario defaults? All custom metrics will be lost.")
         cr1, cr2, _ = st.columns([1, 1, 5])
         if cr1.button("Yes, reset", key="btn_confirm_reset_yes"):
-            from config.scenarios import SCENARIOS
             active   = st.session_state.get("active_scenario", "")
             defaults = SCENARIOS.get(active, {}).get("default_metrics", [])
             st.session_state["metrics_matrix"] = list(defaults)
@@ -780,7 +803,7 @@ def _metrics_setup() -> None:
             matrix[i]["enabled"] = enabled
             rc[1].code(m["id"])
             rc[2].write(m["name"])
-            rc[3].markdown(_type_badge(m.get("type", "")), unsafe_allow_html=True)
+            rc[3].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
             rc[4].markdown(
                 f'<span class="criterion">{format_criterion(m)}</span>',
                 unsafe_allow_html=True,

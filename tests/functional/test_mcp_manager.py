@@ -115,8 +115,8 @@ def test_fetch_tools_from_json_returns_names(tmp_path):
     data = [{"name": "tool_a"}, {"name": "tool_b"}]
     (tmp_path / "tools.json").write_text(json.dumps(data))
 
-    names = mcp_manager.fetch_tools_from_json(str(tmp_path))
-    assert names == ["tool_a", "tool_b"]
+    tools = mcp_manager.load_tools_from_json(str(tmp_path))
+    assert [t["name"] for t in tools] == ["tool_a", "tool_b"]
 
 
 # ── discover_tools ────────────────────────────────────────────────────────────

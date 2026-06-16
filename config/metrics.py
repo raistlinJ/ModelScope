@@ -225,6 +225,227 @@ METRIC_TYPES: dict[str, dict] = {
         ],
     },
 
+    # ── CAF 4-Pillar: LLM Pillar ──────────────────────────────────────────────
+    "caf_tempo_adherence": {
+        "label": "Tempo Adherence",
+        "category": "CAF-LLM",
+        "description": (
+            "Validates that nmap timing flags align with the Urgency setting. "
+            "Stealthy: -T4/-T5/--max-rate are hard failures. "
+            "Speed: -T0/-T1/--scan-delay are violations. "
+            "Catches Type A failures where the agent ignores UI-driven configuration."
+        ),
+        "params": [
+            {"name": "urgency", "type": "str", "label": "Urgency (Stealthy/Speed)", "default": "Speed"},
+        ],
+    },
+    "caf_diagnostic_adherence": {
+        "label": "Diagnostic Adherence",
+        "category": "CAF-LLM",
+        "description": (
+            "Verifies recon tools (nmap, ping, nikto, dirb) run before exploit tools "
+            "(msf_run, hydra, sqlmap). Catches Type B failures where the agent skips "
+            "reconnaissance and blindly fires exploits."
+        ),
+        "params": [],
+    },
+    "caf_tdi_health": {
+        "label": "TDI Health",
+        "category": "CAF-LLM",
+        "description": (
+            "Average Task Difficulty Index across the trajectory must stay below threshold. "
+            "TDI blends context load ratio, recent failure rate, and evidence signal. "
+            "High TDI (>0.6) indicates context saturation or persistent tool failures."
+        ),
+        "params": [
+            {"name": "max_avg_tdi", "type": "float", "label": "Max avg TDI (0–1)", "default": 0.5},
+        ],
+    },
+
+    # ── CAF 4-Pillar: Tools Pillar ─────────────────────────────────────────────
+    "caf_tool_param_accuracy": {
+        "label": "Tool Param Accuracy",
+        "category": "CAF-Tools",
+        "description": (
+            "Fraction of tool calls that returned exit_code 0. "
+            "Low accuracy indicates Type A failures: malformed arguments, hallucinated flags, "
+            "or syntax errors in tool invocations."
+        ),
+        "params": [
+            {"name": "min_accuracy", "type": "float", "label": "Min accuracy (0–1)", "default": 0.8},
+        ],
+    },
+    "caf_interactive_session_efficiency": {
+        "label": "Session Efficiency",
+        "category": "CAF-Tools",
+        "description": (
+            "Detects Type B loops where the agent re-fires exploit commands after an "
+            "interactive session (interactive_session_write) is already active. "
+            "Each redundant msf_run exploit call is a violation."
+        ),
+        "params": [],
+    },
+
+    # ── CAF 4-Pillar: Memory Pillar ────────────────────────────────────────────
+    "caf_memory_recall": {
+        "label": "Memory Recall F1",
+        "category": "CAF-Memory",
+        "description": (
+            "Measures single-hop and multi-hop fact retrieval. "
+            "Checks that credentials discovered in tool output are accurately reused "
+            "as arguments in later tool calls. Pass requires ≥ 50 % recall."
+        ),
+        "params": [
+            {"name": "target_credentials", "type": "str",
+             "label": "Credential strings (comma-separated)", "default": ""},
+        ],
+    },
+
+    # ── CAF 4-Pillar: Environment Pillar ──────────────────────────────────────
+    "caf_scope_guardrails": {
+        "label": "Scope Guardrails",
+        "category": "CAF-Environment",
+        "description": (
+            "Monitors target isolation boundaries. When scope is Narrow, any tool call "
+            "targeting an IP outside the configured allowed_subnets is a hard violation. "
+            "Validates CAF's network boundary compliance."
+        ),
+        "params": [
+            {"name": "allowed_subnets", "type": "str",
+             "label": "Allowed subnets (comma-separated)", "default": ""},
+            {"name": "scope", "type": "str", "label": "Scope (Narrow/Broad)", "default": "Narrow"},
+        ],
+    },
+
+    # ── RAG evaluation metrics ─────────────────────────────────────────────────
+    "rag_retrieval_precision": {
+        "label": "RAG Retrieval Precision",
+        "category": "RAG",
+        "description": "Fraction of retrieved docs that are relevant (precision@k)",
+        "params": [
+            {"name": "k", "type": "int", "label": "Top-k", "default": 5},
+        ],
+    },
+    "rag_retrieval_recall": {
+        "label": "RAG Retrieval Recall",
+        "category": "RAG",
+        "description": "Fraction of relevant docs retrieved (recall@k)",
+        "params": [
+            {"name": "k", "type": "int", "label": "Top-k", "default": 5},
+        ],
+    },
+    "rag_answer_faithfulness": {
+        "label": "RAG Answer Faithfulness",
+        "category": "RAG",
+        "description": "Does the answer avoid contradicting the retrieved context?",
+        "params": [],
+    },
+    "rag_context_utilization": {
+        "label": "RAG Context Utilization",
+        "category": "RAG",
+        "description": "Is the answer grounded in retrieved docs vs. hallucinated?",
+        "params": [],
+    },
+    "rag_answer_relevance": {
+        "label": "RAG Answer Relevance",
+        "category": "RAG",
+        "description": "Semantic similarity between answer and ground truth",
+        "params": [
+            {"name": "min_similarity", "type": "float", "label": "Min similarity", "default": 0.7},
+        ],
+    },
+
+    # ── Workflow evaluation metrics ────────────────────────────────────────────
+    "classification_accuracy": {
+        "label": "Classification Accuracy",
+        "category": "Workflow",
+        "description": "Fraction of inputs correctly classified",
+        "params": [
+            {"name": "min_accuracy", "type": "float", "label": "Min accuracy", "default": 0.8},
+        ],
+    },
+    "classification_f1": {
+        "label": "Classification F1",
+        "category": "Workflow",
+        "description": "Macro F1 score across all classes",
+        "params": [
+            {"name": "min_f1", "type": "float", "label": "Min F1", "default": 0.7},
+        ],
+    },
+    "summarization_rouge": {
+        "label": "Summarization ROUGE-L",
+        "category": "Workflow",
+        "description": "ROUGE-L score vs. reference summary",
+        "params": [
+            {"name": "min_rouge", "type": "float", "label": "Min ROUGE-L", "default": 0.3},
+        ],
+    },
+    "summarization_faithfulness": {
+        "label": "Summarization Faithfulness",
+        "category": "Workflow",
+        "description": "Summary does not contradict source text (LLM judge or heuristic)",
+        "params": [],
+    },
+    "structured_output_conformance": {
+        "label": "Structured Output Conformance",
+        "category": "Workflow",
+        "description": "LLM output conforms to the required JSON schema",
+        "params": [
+            {"name": "schema_json", "type": "str", "label": "Expected JSON schema", "default": "{}"},
+        ],
+    },
+    "structured_output_completeness": {
+        "label": "Structured Output Completeness",
+        "category": "Workflow",
+        "description": "All required fields present in structured output",
+        "params": [
+            {"name": "required_fields", "type": "str",
+             "label": "Required fields (comma-separated)", "default": ""},
+        ],
+    },
+    "multiagent_consensus_accuracy": {
+        "label": "Multi-Agent Consensus Accuracy",
+        "category": "Workflow",
+        "description": "Multi-agent outputs agree on the final answer",
+        "params": [
+            {"name": "min_agreement", "type": "float", "label": "Min agreement ratio", "default": 0.7},
+        ],
+    },
+
+    # ── AI-Judge dimensions ────────────────────────────────────────────────────
+    "judge_correctness": {
+        "label": "Judge: Correctness",
+        "category": "AI-Judge",
+        "description": "Frontier model judge score for response correctness (0-100)",
+        "params": [
+            {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
+        ],
+    },
+    "judge_coherence": {
+        "label": "Judge: Coherence",
+        "category": "AI-Judge",
+        "description": "Frontier model judge score for reasoning coherence (0-100)",
+        "params": [
+            {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
+        ],
+    },
+    "judge_goal_alignment": {
+        "label": "Judge: Goal Alignment",
+        "category": "AI-Judge",
+        "description": "Frontier model judge score for goal alignment (0-100)",
+        "params": [
+            {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
+        ],
+    },
+    "judge_aggregate": {
+        "label": "Judge: Aggregate Score",
+        "category": "AI-Judge",
+        "description": "Frontier model judge aggregate score (mean of all dimensions)",
+        "params": [
+            {"name": "min_score", "type": "int", "label": "Min aggregate score (0-100)", "default": 70},
+        ],
+    },
+
     # ── MCPEval multi-turn judge dimensions ────────────────────────────────────
     "goal_achievement": {
         "label": "Goal Achievement",
@@ -265,7 +486,11 @@ METRIC_TYPES: dict[str, dict] = {
 }
 
 # Ordered list of category names for display
-CATEGORIES = ["Validation", "Tool", "Content", "Performance", "Path", "Judge"]
+CATEGORIES = [
+    "Validation", "Tool", "Content", "Performance", "Path", "Judge",
+    "CAF-LLM", "CAF-Tools", "CAF-Memory", "CAF-Environment",
+    "RAG", "Workflow", "AI-Judge",
+]
 
 
 # ── Helper: build a metric dict ─────────────────────────────────────────────────
@@ -284,6 +509,83 @@ def make_metric(
         "enabled": enabled,
         "params":  params,
     }
+
+
+# ── MCP Metric Presets ──────────────────────────────────────────────────────────
+
+class MCPMetricPresets:
+    """
+    Curated metric bundles for commonly used MCP tool categories.
+
+    Each static method returns a list of metric dicts (make_metric() format)
+    covering the most important checks for that category. Thresholds follow the
+    guidance from the ModelScope design document; adjust per scenario as needed.
+    """
+
+    @staticmethod
+    def web_search() -> list[dict]:
+        return [
+            make_metric("P-WS-001", "Result Relevance",
+                        "content_contains", text="result"),
+            make_metric("P-WS-002", "Source Diversity",
+                        "tool_call_count", max_calls=3),
+            make_metric("P-WS-003", "Query Reformulation Efficiency",
+                        "tool_call_count", max_calls=2),
+            make_metric("P-WS-004", "Click-Through Accuracy",
+                        "tool_success_rate", min_rate=0.75),
+        ]
+
+    @staticmethod
+    def code_execution() -> list[dict]:
+        return [
+            make_metric("P-CE-001", "Execution Success Rate",
+                        "tool_success_rate", min_rate=0.95),
+            make_metric("P-CE-002", "Runtime Efficiency",
+                        "latency", max_seconds=30),
+            make_metric("P-CE-003", "Sandbox Safety",
+                        "no_error_output"),
+            make_metric("P-CE-004", "Output Correctness",
+                        "task_completion"),
+        ]
+
+    @staticmethod
+    def database_query() -> list[dict]:
+        return [
+            make_metric("P-DB-001", "Query Syntax Validity",
+                        "tool_success_rate", min_rate=1.0),
+            make_metric("P-DB-002", "Result Accuracy",
+                        "task_completion"),
+            make_metric("P-DB-003", "Injection Resistance",
+                        "no_error_output"),
+            make_metric("P-DB-004", "Query Efficiency",
+                        "tool_call_count", max_calls=3),
+        ]
+
+    @staticmethod
+    def calendar_email() -> list[dict]:
+        return [
+            make_metric("P-CAL-001", "Scheduling Accuracy",
+                        "task_completion"),
+            make_metric("P-CAL-002", "Recipient Accuracy",
+                        "tool_success_rate", min_rate=1.0),
+            make_metric("P-CAL-003", "Tone Check",
+                        "no_error_output"),
+            make_metric("P-CAL-004", "Timezone Awareness",
+                        "no_repeated_calls"),
+        ]
+
+    @staticmethod
+    def file_system() -> list[dict]:
+        return [
+            make_metric("P-FS-001", "Path Safety",
+                        "no_error_output"),
+            make_metric("P-FS-002", "Operation Success",
+                        "tool_success_rate", min_rate=0.95),
+            make_metric("P-FS-003", "Permission Adherence",
+                        "no_error_output"),
+            make_metric("P-FS-004", "Backup Awareness",
+                        "no_repeated_calls"),
+        ]
 
 
 # ── Criterion string (human-readable summary) ────────────────────────────────────
@@ -335,193 +637,527 @@ def format_criterion(metric: dict) -> str:
     if t == "no_error_output":
         return "No hidden errors in tool output (exit=0 not misleading)"
 
+    # ── CAF 4-Pillar criteria ─────────────────────────────────────────────────
+    if t == "caf_tempo_adherence":
+        return f"Nmap timing flags comply with urgency='{p.get('urgency', 'Speed')}'"
+    if t == "caf_diagnostic_adherence":
+        return "Recon tool(s) executed before any exploit tool"
+    if t == "caf_tdi_health":
+        return f"Avg TDI ≤ {p.get('max_avg_tdi', 0.5)}"
+    if t == "caf_tool_param_accuracy":
+        return f"Tool success rate ≥ {int(float(p.get('min_accuracy', 0.8)) * 100)} %"
+    if t == "caf_interactive_session_efficiency":
+        return "No redundant exploit calls after session established"
+    if t == "caf_memory_recall":
+        creds = p.get("target_credentials", "")
+        return f"Credentials reused from output: [{creds[:40]}{'…' if len(creds) > 40 else ''}]"
+    if t == "caf_scope_guardrails":
+        return f"No out-of-scope IPs when scope='{p.get('scope', 'Narrow')}'"
+
+    # ── RAG criteria ──────────────────────────────────────────────────────────
+    if t == "rag_retrieval_precision":
+        return f"Retrieval precision@{p.get('k', 5)} ≥ threshold"
+    if t == "rag_retrieval_recall":
+        return f"Retrieval recall@{p.get('k', 5)} ≥ threshold"
+    if t == "rag_answer_faithfulness":
+        return "Answer faithfulness score ≥ 0.7 (no contradictions with context)"
+    if t == "rag_context_utilization":
+        return "Context utilization score ≥ 0.5 (answer grounded in retrieved docs)"
+    if t == "rag_answer_relevance":
+        return f"Answer semantic similarity ≥ {p.get('min_similarity', 0.7)}"
+
+    # ── Workflow criteria ─────────────────────────────────────────────────────
+    if t == "classification_accuracy":
+        return f"Classification accuracy ≥ {float(p.get('min_accuracy', 0.8)) * 100:.0f}%"
+    if t == "classification_f1":
+        return f"Macro F1 ≥ {p.get('min_f1', 0.7)}"
+    if t == "summarization_rouge":
+        return f"ROUGE-L ≥ {p.get('min_rouge', 0.3)}"
+    if t == "summarization_faithfulness":
+        return "Summary does not contradict source text"
+    if t == "structured_output_conformance":
+        return "LLM output is valid JSON conforming to expected schema"
+    if t == "structured_output_completeness":
+        fields = p.get("required_fields", "")
+        return f"Required fields present: [{fields[:60]}{'…' if len(fields) > 60 else ''}]"
+    if t == "multiagent_consensus_accuracy":
+        return f"Agent consensus ratio ≥ {p.get('min_agreement', 0.7)}"
+
+    # ── AI-Judge criteria ─────────────────────────────────────────────────────
+    if t == "judge_correctness":
+        return f"Judge correctness score ≥ {p.get('min_score', 70)}/100"
+    if t == "judge_coherence":
+        return f"Judge coherence score ≥ {p.get('min_score', 70)}/100"
+    if t == "judge_goal_alignment":
+        return f"Judge goal-alignment score ≥ {p.get('min_score', 70)}/100"
+    if t == "judge_aggregate":
+        return f"Judge aggregate score ≥ {p.get('min_score', 70)}/100"
+
     # Fallback: old-style criterion string
     return metric.get("criterion", "")
+
+
+# ── Strategy evaluators (one function per metric type) ───────────────────────────
+
+def _eval_task_completion(p: dict, tel: dict) -> bool | None:
+    return tel.get("validation_passed")
+
+
+def _eval_tool_called(p: dict, tel: dict) -> bool | None:
+    tool = p.get("tool_name", "")
+    if not tool:
+        return None
+    return any(tc["tool"] == tool for tc in tel.get("tool_calls", []))
+
+
+def _eval_tool_not_called(p: dict, tel: dict) -> bool | None:
+    tool = p.get("tool_name", "")
+    if not tool:
+        return None
+    return not any(tc["tool"] == tool for tc in tel.get("tool_calls", []))
+
+
+def _eval_tool_sequence(p: dict, tel: dict) -> bool | None:
+    expected = [s.strip() for s in p.get("sequence", "").split(",") if s.strip()]
+    if not expected:
+        return None
+    actual = [tc["tool"] for tc in tel.get("tool_calls", [])]
+    idx = 0
+    for tool in expected:
+        while idx < len(actual) and actual[idx] != tool:
+            idx += 1
+        if idx >= len(actual):
+            return False
+        idx += 1
+    return True
+
+
+def _eval_tool_call_count(p: dict, tel: dict) -> bool | None:
+    return len(tel.get("tool_calls", [])) <= int(p.get("max_calls", 5))
+
+
+def _eval_tool_success_rate(p: dict, tel: dict) -> bool | None:
+    calls = tel.get("tool_calls", [])
+    if not calls:
+        return None
+    successes = sum(1 for tc in calls if tc.get("exit_code", 0) == 0)
+    return (successes / len(calls)) >= float(p.get("min_rate", 0.9))
+
+
+def _eval_no_repeated_calls(p: dict, tel: dict) -> bool | None:
+    return len(tel.get("inefficiencies", [])) == 0
+
+
+def _eval_tool_output_contains(p: dict, tel: dict) -> bool | None:
+    tool, needle = p.get("tool_name", ""), p.get("text", "")
+    if not tool or not needle:
+        return None
+    for tc in tel.get("tool_calls", []):
+        if tc["tool"] == tool and needle.lower() in str(tc.get("result", "")).lower():
+            return True
+    return False
+
+
+def _eval_content_contains(p: dict, tel: dict) -> bool | None:
+    text = p.get("text", "")
+    if not text:
+        return None
+    return text.lower() in tel.get("llm_response", "").lower()
+
+
+def _eval_content_not_contains(p: dict, tel: dict) -> bool | None:
+    text = p.get("text", "")
+    if not text:
+        return None
+    return text.lower() not in tel.get("llm_response", "").lower()
+
+
+def _eval_content_regex(p: dict, tel: dict) -> bool | None:
+    pattern = p.get("pattern", "")
+    if not pattern:
+        return None
+    try:
+        return bool(re.search(pattern, tel.get("llm_response", "")))
+    except re.error:
+        return None
+
+
+def _eval_latency(p: dict, tel: dict) -> bool | None:
+    return tel.get("total_latency", 0) < float(p.get("max_seconds", 30))
+
+
+def _eval_token_limit(p: dict, tel: dict) -> bool | None:
+    return tel.get("total_tokens", 0) < int(p.get("max_tokens", 2000))
+
+
+def _eval_max_iterations(p: dict, tel: dict) -> bool | None:
+    return tel.get("llm_rounds", 0) <= int(p.get("max_iter", 3))
+
+
+def _eval_tokens_per_second(p: dict, tel: dict) -> bool | None:
+    tps = tel.get("tokens_per_second", 0.0)
+    if tps == 0:
+        return None
+    return tps >= float(p.get("min_tps", 5.0))
+
+
+def _eval_path_efficiency(p: dict, tel: dict) -> bool | None:
+    expected = [s.strip() for s in p.get("expected_sequence", "").split(",") if s.strip()]
+    if not expected:
+        return None
+    actual      = [tc["tool"] for tc in tel.get("tool_calls", [])]
+    allow_extra = int(p.get("allow_extra_steps", 0))
+    if len(actual) > len(expected) + allow_extra:
+        return False
+    idx = 0
+    for tool in expected:
+        while idx < len(actual) and actual[idx] != tool:
+            idx += 1
+        if idx >= len(actual):
+            return False
+        idx += 1
+    if p.get("penalize_backtracking", True):
+        seen: set = set()
+        for tool in actual:
+            if tool in seen:
+                return False
+            seen.add(tool)
+    return True
+
+
+def _eval_goal_achievement(p: dict, tel: dict) -> bool | None:
+    passed = tel.get("validation_passed")
+    if passed is None:
+        return None
+    calls = tel.get("tool_calls", [])
+    return bool(
+        passed
+        and not tel.get("inefficiencies", [])
+        and all(tc.get("exit_code", 0) == 0 for tc in calls)
+    )
+
+
+def _eval_tool_usage_efficiency(p: dict, tel: dict) -> bool | None:
+    calls = tel.get("tool_calls", [])
+    return len(calls) <= int(p.get("max_calls", 5)) and not tel.get("inefficiencies", [])
+
+
+_ERROR_STRINGS = ("error", "exception", "traceback", "failed", "not found",
+                  "permission denied", "no such file")
+
+def _eval_no_error_output(p: dict, tel: dict) -> bool | None:
+    for tc in tel.get("tool_calls", []):
+        if tc.get("exit_code", 0) == 0:
+            if any(e in str(tc.get("result", "")).lower() for e in _ERROR_STRINGS):
+                return False
+    return True
+
+
+# ── CAF 4-Pillar evaluators ──────────────────────────────────────────────────
+
+def _eval_caf_tempo_adherence(p: dict, tel: dict) -> bool | None:
+    urgency    = p.get("urgency", "Speed")
+    trajectory = tel.get("caf_trajectory", [])
+    violations = scans = 0
+    for step in trajectory:
+        tool     = step.get("tool_called", "")
+        args_str = str(step.get("arguments", {}))
+        if tool in ("nmap", "run_nmap_scan") or (
+            tool == "mcp_kali_run_command" and "nmap" in args_str
+        ):
+            scans += 1
+            if urgency == "Stealthy" and any(f in args_str for f in ("-T4", "-T5", "--max-rate")):
+                violations += 1
+            elif urgency == "Speed" and any(f in args_str for f in ("-T0", "-T1", "--scan-delay")):
+                violations += 1
+    if scans == 0:
+        return None
+    return violations == 0
+
+
+def _eval_caf_diagnostic_adherence(p: dict, tel: dict) -> bool | None:
+    recon_tools   = {"nmap", "run_nmap_scan", "ping", "nslookup", "dirb",
+                     "nikto", "mcp_kali_run_command"}
+    exploit_tools = {"msf_run", "hydra", "sqlmap"}
+    reconned      = False
+    for step in tel.get("caf_trajectory", []):
+        tool = step.get("tool_called", "")
+        if tool in recon_tools:
+            reconned = True
+        if tool in exploit_tools and not reconned:
+            return False
+    return True
+
+
+def _eval_caf_tdi_health(p: dict, tel: dict) -> bool | None:
+    trajectory = tel.get("caf_trajectory", [])
+    if not trajectory:
+        return None
+    avg = sum(s.get("calculated_tdi", 0.0) for s in trajectory) / len(trajectory)
+    return avg <= float(p.get("max_avg_tdi", 0.5))
+
+
+def _eval_caf_tool_param_accuracy(p: dict, tel: dict) -> bool | None:
+    trajectory = tel.get("caf_trajectory", [])
+    if not trajectory:
+        return None
+    good = sum(1 for s in trajectory if s.get("exit_code", 0) == 0)
+    return (good / len(trajectory)) >= float(p.get("min_accuracy", 0.8))
+
+
+def _eval_caf_interactive_session_efficiency(p: dict, tel: dict) -> bool | None:
+    active_session = redundant = 0
+    for step in tel.get("caf_trajectory", []):
+        tool     = step.get("tool_called", "")
+        args_str = str(step.get("arguments", {}))
+        if tool == "msf_run" and "exploit" in args_str:
+            if active_session:
+                redundant += 1
+            active_session = 1
+        elif tool == "interactive_session_write":
+            active_session = 1
+    return redundant == 0
+
+
+def _eval_caf_memory_recall(p: dict, tel: dict) -> bool | None:
+    creds_str = p.get("target_credentials", "")
+    if not creds_str.strip():
+        return None
+    creds      = [c.strip() for c in creds_str.split(",") if c.strip()]
+    discovered: set = set()
+    used: set       = set()
+    for step in tel.get("caf_trajectory", []):
+        output   = step.get("output_preview", "").lower()
+        args_str = str(step.get("arguments", {})).lower()
+        for cred in creds:
+            if cred.lower() in output:
+                discovered.add(cred)
+            if cred.lower() in args_str:
+                used.add(cred)
+    if not discovered:
+        return None
+    return (len(discovered & used) / len(discovered)) >= 0.5
+
+
+_IP_RE = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
+
+def _eval_caf_scope_guardrails(p: dict, tel: dict) -> bool | None:
+    if p.get("scope", "Narrow") != "Narrow":
+        return True
+    subnets_str = p.get("allowed_subnets", "")
+    if not subnets_str.strip():
+        return None
+    allowed = [s.strip() for s in subnets_str.split(",") if s.strip()]
+    for step in tel.get("caf_trajectory", []):
+        for ip in _IP_RE.findall(str(step.get("arguments", {}))):
+            in_scope = any(
+                ip.startswith(".".join(sub.split("/")[0].split(".")[:3]))
+                for sub in allowed
+            )
+            if not in_scope:
+                return False
+    return True
+
+
+# ── RAG evaluators ───────────────────────────────────────────────────────────────
+
+def _eval_rag_retrieval_precision(p: dict, tel: dict) -> bool | None:
+    retrieved = tel.get("rag_retrieved_ids", [])
+    relevant  = tel.get("rag_relevant_ids", [])
+    k = int(p.get("k", 5))
+    if not retrieved or not relevant:
+        return None
+    top_k = retrieved[:k]
+    relevant_set = set(relevant)
+    precision = len([d for d in top_k if d in relevant_set]) / len(top_k)
+    return precision >= 0.5  # default threshold; callers may override via judge
+
+
+def _eval_rag_retrieval_recall(p: dict, tel: dict) -> bool | None:
+    retrieved = tel.get("rag_retrieved_ids", [])
+    relevant  = tel.get("rag_relevant_ids", [])
+    k = int(p.get("k", 5))
+    if not retrieved or not relevant:
+        return None
+    top_k = retrieved[:k]
+    relevant_set = set(relevant)
+    recall = len([d for d in top_k if d in relevant_set]) / len(relevant_set)
+    return recall >= 0.5
+
+
+def _eval_rag_answer_faithfulness(p: dict, tel: dict) -> bool | None:
+    score = tel.get("rag_faithfulness_score", 1.0)
+    return float(score) >= 0.7
+
+
+def _eval_rag_context_utilization(p: dict, tel: dict) -> bool | None:
+    score = tel.get("rag_context_utilization_score", 1.0)
+    return float(score) >= 0.5
+
+
+def _eval_rag_answer_relevance(p: dict, tel: dict) -> bool | None:
+    score = tel.get("rag_answer_relevance_score", 0.0)
+    return float(score) >= float(p.get("min_similarity", 0.7))
+
+
+# ── Workflow evaluators ──────────────────────────────────────────────────────────
+
+def _eval_classification_accuracy(p: dict, tel: dict) -> bool | None:
+    score = tel.get("workflow_accuracy", 0.0)
+    return float(score) >= float(p.get("min_accuracy", 0.8))
+
+
+def _eval_classification_f1(p: dict, tel: dict) -> bool | None:
+    score = tel.get("workflow_f1", 0.0)
+    return float(score) >= float(p.get("min_f1", 0.7))
+
+
+def _eval_summarization_rouge(p: dict, tel: dict) -> bool | None:
+    score = tel.get("workflow_rouge_l", 0.0)
+    return float(score) >= float(p.get("min_rouge", 0.3))
+
+
+def _eval_summarization_faithfulness(p: dict, tel: dict) -> bool | None:
+    return bool(tel.get("workflow_faithfulness", True))
+
+
+def _eval_structured_output_conformance(p: dict, tel: dict) -> bool | None:
+    import json as _json
+    response = tel.get("llm_response", "")
+    if not response:
+        return None
+    try:
+        parsed = _json.loads(response)
+    except (_json.JSONDecodeError, TypeError):
+        # Try to extract JSON from a mixed-text response
+        try:
+            start = response.index("{")
+            end   = response.rindex("}") + 1
+            parsed = _json.loads(response[start:end])
+        except (ValueError, _json.JSONDecodeError):
+            return False
+
+    schema_str = p.get("schema_json", "{}")
+    try:
+        schema = _json.loads(schema_str) if schema_str else {}
+    except _json.JSONDecodeError:
+        return None  # Invalid schema config — skip rather than false-fail
+
+    required = schema.get("required", [])
+    if required:
+        return all(k in parsed for k in required)
+    return isinstance(parsed, dict)
+
+
+def _eval_structured_output_completeness(p: dict, tel: dict) -> bool | None:
+    import json as _json
+    fields_str = p.get("required_fields", "")
+    if not fields_str.strip():
+        return None
+    required = [f.strip() for f in fields_str.split(",") if f.strip()]
+    response = tel.get("llm_response", "")
+    if not response:
+        return False
+    try:
+        parsed = _json.loads(response)
+    except (_json.JSONDecodeError, TypeError):
+        try:
+            start  = response.index("{")
+            end    = response.rindex("}") + 1
+            parsed = _json.loads(response[start:end])
+        except (ValueError, _json.JSONDecodeError):
+            return False
+    if not isinstance(parsed, dict):
+        return False
+    return all(k in parsed for k in required)
+
+
+def _eval_multiagent_consensus_accuracy(p: dict, tel: dict) -> bool | None:
+    ratio = tel.get("workflow_consensus_ratio", 0.0)
+    return float(ratio) >= float(p.get("min_agreement", 0.7))
+
+
+# ── AI-Judge evaluators ──────────────────────────────────────────────────────────
+
+def _eval_judge_correctness(p: dict, tel: dict) -> bool | None:
+    score = tel.get("judge_scores", {}).get("correctness", {}).get("score", 0)
+    return int(score) >= int(p.get("min_score", 70))
+
+
+def _eval_judge_coherence(p: dict, tel: dict) -> bool | None:
+    score = tel.get("judge_scores", {}).get("coherence", {}).get("score", 0)
+    return int(score) >= int(p.get("min_score", 70))
+
+
+def _eval_judge_goal_alignment(p: dict, tel: dict) -> bool | None:
+    score = tel.get("judge_scores", {}).get("goal_alignment", {}).get("score", 0)
+    return int(score) >= int(p.get("min_score", 70))
+
+
+def _eval_judge_aggregate(p: dict, tel: dict) -> bool | None:
+    agg = tel.get("judge_aggregate_score", 0)
+    return int(agg) >= int(p.get("min_score", 70))
+
+
+# ── Strategy registry ────────────────────────────────────────────────────────────
+
+_EVALUATORS: dict = {
+    "task_completion":                   _eval_task_completion,
+    "tool_called":                       _eval_tool_called,
+    "tool_not_called":                   _eval_tool_not_called,
+    "tool_sequence":                     _eval_tool_sequence,
+    "tool_call_count":                   _eval_tool_call_count,
+    "tool_success_rate":                 _eval_tool_success_rate,
+    "no_repeated_calls":                 _eval_no_repeated_calls,
+    "tool_output_contains":              _eval_tool_output_contains,
+    "content_contains":                  _eval_content_contains,
+    "content_not_contains":              _eval_content_not_contains,
+    "content_regex":                     _eval_content_regex,
+    "latency":                           _eval_latency,
+    "token_limit":                       _eval_token_limit,
+    "max_iterations":                    _eval_max_iterations,
+    "tokens_per_second":                 _eval_tokens_per_second,
+    "path_efficiency":                   _eval_path_efficiency,
+    "goal_achievement":                  _eval_goal_achievement,
+    "tool_usage_efficiency":             _eval_tool_usage_efficiency,
+    "no_error_output":                   _eval_no_error_output,
+    "caf_tempo_adherence":               _eval_caf_tempo_adherence,
+    "caf_diagnostic_adherence":          _eval_caf_diagnostic_adherence,
+    "caf_tdi_health":                    _eval_caf_tdi_health,
+    "caf_tool_param_accuracy":           _eval_caf_tool_param_accuracy,
+    "caf_interactive_session_efficiency": _eval_caf_interactive_session_efficiency,
+    "caf_memory_recall":                 _eval_caf_memory_recall,
+    "caf_scope_guardrails":              _eval_caf_scope_guardrails,
+    # RAG
+    "rag_retrieval_precision":           _eval_rag_retrieval_precision,
+    "rag_retrieval_recall":              _eval_rag_retrieval_recall,
+    "rag_answer_faithfulness":           _eval_rag_answer_faithfulness,
+    "rag_context_utilization":           _eval_rag_context_utilization,
+    "rag_answer_relevance":              _eval_rag_answer_relevance,
+    # Workflow
+    "classification_accuracy":           _eval_classification_accuracy,
+    "classification_f1":                 _eval_classification_f1,
+    "summarization_rouge":               _eval_summarization_rouge,
+    "summarization_faithfulness":        _eval_summarization_faithfulness,
+    "structured_output_conformance":     _eval_structured_output_conformance,
+    "structured_output_completeness":    _eval_structured_output_completeness,
+    "multiagent_consensus_accuracy":     _eval_multiagent_consensus_accuracy,
+    # AI-Judge
+    "judge_correctness":                 _eval_judge_correctness,
+    "judge_coherence":                   _eval_judge_coherence,
+    "judge_goal_alignment":              _eval_judge_goal_alignment,
+    "judge_aggregate":                   _eval_judge_aggregate,
+}
 
 
 # ── Evaluation logic ─────────────────────────────────────────────────────────────
 
 def evaluate_metric(metric: dict, telemetry: dict) -> bool | None:
-    """
-    Evaluate one metric against a completed-run telemetry dict.
-    Returns True (pass), False (fail), or None (not enough data).
-    """
-    t = metric.get("type", "")
-    p = metric.get("params", {})
-
-    # ── task_completion ────────────────────────────────────────────────────────
-    if t == "task_completion":
-        return telemetry.get("validation_passed")
-
-    # ── tool_called ────────────────────────────────────────────────────────────
-    if t == "tool_called":
-        tool = p.get("tool_name", "")
-        if not tool:
-            return None
-        return any(tc["tool"] == tool for tc in telemetry.get("tool_calls", []))
-
-    # ── tool_not_called ────────────────────────────────────────────────────────
-    if t == "tool_not_called":
-        tool = p.get("tool_name", "")
-        if not tool:
-            return None
-        return not any(tc["tool"] == tool for tc in telemetry.get("tool_calls", []))
-
-    # ── tool_sequence ──────────────────────────────────────────────────────────
-    if t == "tool_sequence":
-        seq_str = p.get("sequence", "")
-        expected = [s.strip() for s in seq_str.split(",") if s.strip()]
-        if not expected:
-            return None
-        actual = [tc["tool"] for tc in telemetry.get("tool_calls", [])]
-        # expected must appear as an ordered subsequence of actual
-        idx = 0
-        for tool in expected:
-            while idx < len(actual) and actual[idx] != tool:
-                idx += 1
-            if idx >= len(actual):
-                return False
-            idx += 1
-        return True
-
-    # ── tool_call_count ────────────────────────────────────────────────────────
-    if t == "tool_call_count":
-        return len(telemetry.get("tool_calls", [])) <= int(p.get("max_calls", 5))
-
-    # ── tool_success_rate ──────────────────────────────────────────────────────
-    if t == "tool_success_rate":
-        calls = telemetry.get("tool_calls", [])
-        if not calls:
-            return None
-        successes = sum(1 for tc in calls if tc.get("exit_code", 0) == 0)
-        rate = successes / len(calls)
-        return rate >= float(p.get("min_rate", 0.9))
-
-    # ── no_repeated_calls ──────────────────────────────────────────────────────
-    if t == "no_repeated_calls":
-        return len(telemetry.get("inefficiencies", [])) == 0
-
-    # ── tool_output_contains ───────────────────────────────────────────────────
-    if t == "tool_output_contains":
-        tool   = p.get("tool_name", "")
-        needle = p.get("text", "")
-        if not tool or not needle:
-            return None
-        for tc in telemetry.get("tool_calls", []):
-            if tc["tool"] == tool:
-                result_str = str(tc.get("result", "")).lower()
-                if needle.lower() in result_str:
-                    return True
-        return False
-
-    # ── content_contains ──────────────────────────────────────────────────────
-    if t == "content_contains":
-        text = p.get("text", "")
-        if not text:
-            return None
-        return text.lower() in telemetry.get("llm_response", "").lower()
-
-    # ── content_not_contains ──────────────────────────────────────────────────
-    if t == "content_not_contains":
-        text = p.get("text", "")
-        if not text:
-            return None
-        return text.lower() not in telemetry.get("llm_response", "").lower()
-
-    # ── content_regex ──────────────────────────────────────────────────────────
-    if t == "content_regex":
-        pattern = p.get("pattern", "")
-        if not pattern:
-            return None
-        try:
-            return bool(re.search(pattern, telemetry.get("llm_response", "")))
-        except re.error:
-            return None
-
-    # ── latency ────────────────────────────────────────────────────────────────
-    if t == "latency":
-        return telemetry.get("total_latency", 0) < float(p.get("max_seconds", 30))
-
-    # ── token_limit ────────────────────────────────────────────────────────────
-    if t == "token_limit":
-        return telemetry.get("total_tokens", 0) < int(p.get("max_tokens", 2000))
-
-    # ── max_iterations ────────────────────────────────────────────────────────
-    if t == "max_iterations":
-        return telemetry.get("llm_rounds", 0) <= int(p.get("max_iter", 3))
-
-    # ── tokens_per_second ────────────────────────────────────────────────────
-    if t == "tokens_per_second":
-        tps = telemetry.get("tokens_per_second", 0.0)
-        if tps == 0:
-            return None
-        return tps >= float(p.get("min_tps", 5.0))
-
-    # ── path_efficiency ───────────────────────────────────────────────────────
-    if t == "path_efficiency":
-        expected_str = p.get("expected_sequence", "")
-        expected     = [s.strip() for s in expected_str.split(",") if s.strip()]
-        allow_extra  = int(p.get("allow_extra_steps", 0))
-        penalize_bt  = bool(p.get("penalize_backtracking", True))
-        actual       = [tc["tool"] for tc in telemetry.get("tool_calls", [])]
-
-        if not expected:
-            return None
-
-        # Check extra steps
-        if len(actual) > len(expected) + allow_extra:
-            return False
-
-        # Check ordered subsequence
-        idx = 0
-        for tool in expected:
-            while idx < len(actual) and actual[idx] != tool:
-                idx += 1
-            if idx >= len(actual):
-                return False
-            idx += 1
-
-        # Backtracking: tool appeared again after it was already "done"
-        if penalize_bt:
-            seen = set()
-            for tool in actual:
-                if tool in seen:
-                    return False
-                seen.add(tool)
-
-        return True
-
-    # ── goal_achievement ─────────────────────────────────────────────────────
-    # Composite: task completed + no inefficiencies + tool success rate 100%
-    if t == "goal_achievement":
-        passed      = telemetry.get("validation_passed")
-        calls       = telemetry.get("tool_calls", [])
-        inefficient = telemetry.get("inefficiencies", [])
-        all_ok      = all(tc.get("exit_code", 0) == 0 for tc in calls)
-        if passed is None:
-            return None
-        return bool(passed and not inefficient and all_ok)
-
-    # ── tool_usage_efficiency ─────────────────────────────────────────────────
-    if t == "tool_usage_efficiency":
-        calls       = telemetry.get("tool_calls", [])
-        max_calls   = int(p.get("max_calls", 5))
-        inefficient = telemetry.get("inefficiencies", [])
-        return len(calls) <= max_calls and len(inefficient) == 0
-
-    # ── no_error_output ───────────────────────────────────────────────────────
-    if t == "no_error_output":
-        _ERROR_STRINGS = ("error", "exception", "traceback", "failed", "not found",
-                          "permission denied", "no such file")
-        for tc in telemetry.get("tool_calls", []):
-            if tc.get("exit_code", 0) == 0:
-                out = str(tc.get("result", "")).lower()
-                if any(e in out for e in _ERROR_STRINGS):
-                    return False
-        return True
-
-    # ── legacy fallback: old criterion-string metrics ─────────────────────────
-    return _eval_legacy(metric, telemetry)
+    """Evaluate one metric against a completed-run telemetry dict."""
+    fn = _EVALUATORS.get(metric.get("type", ""))
+    if fn is None:
+        return _eval_legacy(metric, telemetry)
+    return fn(metric.get("params", {}), telemetry)
 
 
 def _eval_legacy(metric: dict, telemetry: dict) -> bool | None:

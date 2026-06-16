@@ -5,19 +5,13 @@ import time
 import requests
 import streamlit as st
 from config.defaults import LLAMA_SERVER_BIN, LLAMA_CPP_DEFAULT_URL
-
-
-def _ensure_scheme(url: str) -> str:
-    url = (url or "").strip()
-    if url and not url.startswith(("http://", "https://")):
-        url = "http://" + url
-    return url
+from core.utils import ensure_http_scheme
 
 
 def is_running(url: str = LLAMA_CPP_DEFAULT_URL, timeout: float = 2.0) -> bool:
     """Return True if llama-server is responding at url/health."""
     try:
-        r = requests.get(_ensure_scheme(url).rstrip("/") + "/health", timeout=timeout)
+        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/health", timeout=timeout)
         return r.ok
     except Exception:
         return False
@@ -29,7 +23,7 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL) -> dict | None:
     Reads /props endpoint: default_generation_settings.n_ctx + model_path.
     """
     try:
-        r = requests.get(_ensure_scheme(url).rstrip("/") + "/props", timeout=3)
+        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3)
         if not r.ok:
             return None
         d = r.json()

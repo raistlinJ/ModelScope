@@ -6,7 +6,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 import requests as req_lib
 
-from core.models import _ensure_scheme, _is_inference_model, scan_gguf_models, fetch_ollama_models
+from core.utils import ensure_http_scheme as _ensure_scheme
+from core.models import _is_inference_model, scan_gguf_models, fetch_ollama_models
 
 
 # ── _ensure_scheme ────────────────────────────────────────────────────────────

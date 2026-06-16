@@ -1,40 +1,8 @@
 import json
 import streamlit as st
 from config.metrics import METRIC_TYPES, CATEGORIES, evaluate_metric, format_criterion
-
-
-_CAT_COLOUR = {
-    "Validation":  "#b45309",
-    "Tool":        "#c2410c",
-    "Content":     "#0e7490",
-    "Performance": "#166534",
-    "Path":        "#6d28d9",
-    "Judge":       "#be123c",
-}
-
-
-def _badge(text: str, colour: str) -> str:
-    return (
-        f'<span style="background:{colour};color:#fff;'
-        f'padding:2px 10px;border-radius:4px;'
-        f'font-size:0.72rem;font-weight:700;letter-spacing:0.5px">'
-        f'{text}</span>'
-    )
-
-
-def _type_badge_dash(type_key: str) -> str:
-    """Badge with type label + tooltip showing description."""
-    info   = METRIC_TYPES.get(type_key, {})
-    cat    = info.get("category", "—")
-    label  = info.get("label", type_key)
-    desc   = info.get("description", "")
-    colour = _CAT_COLOUR.get(cat, "#64748b")
-    safe   = desc.replace('"', '&quot;')
-    return (
-        f'<span title="{safe}" style="background:{colour};color:#fff;'
-        f'padding:2px 8px;border-radius:4px;font-size:0.68rem;font-weight:700;'
-        f'letter-spacing:0.4px;cursor:help">{label}</span>'
-    )
+from ui.caf_dashboard import render_attack_tree, render_judge_panel
+from ui.components import badge, type_badge, CAT_COLOUR
 
 
 def _render_response_comparison(response: str, validation_out: str, tool_focus: str) -> None:
@@ -208,9 +176,9 @@ def render() -> None:
         na      = sum(1 for _, r in results if r is None)
 
         s1, s2, s3, _ = st.columns([1, 1, 1, 4])
-        s1.markdown(_badge(f"PASS {passed}", "#16a34a"), unsafe_allow_html=True)
-        s2.markdown(_badge(f"FAIL {failed}", "#dc2626"), unsafe_allow_html=True)
-        s3.markdown(_badge(f"N/A  {na}",     "#475569"), unsafe_allow_html=True)
+        s1.markdown(badge(f"PASS {passed}", "#16a34a"), unsafe_allow_html=True)
+        s2.markdown(badge(f"FAIL {failed}", "#dc2626"), unsafe_allow_html=True)
+        s3.markdown(badge(f"N/A  {na}",     "#475569"), unsafe_allow_html=True)
         st.write("")
 
         # Group by category
@@ -223,7 +191,7 @@ def render() -> None:
             items = by_cat.get(cat, [])
             if not items:
                 continue
-            colour = _CAT_COLOUR.get(cat, "#64748b")
+            colour = CAT_COLOUR.get(cat, "#64748b")
             st.markdown(
                 f'<div style="margin:12px 0 4px;font-weight:700;color:{colour}">'
                 f'{cat.upper()}</div>',
@@ -237,17 +205,17 @@ def render() -> None:
                 rc = st.columns([2, 3, 3, 4, 2])
                 rc[0].code(m["id"])
                 rc[1].write(m["name"])
-                rc[2].markdown(_type_badge_dash(m.get("type", "")), unsafe_allow_html=True)
+                rc[2].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
                 rc[3].markdown(
                     f'<span class="criterion">{format_criterion(m)}</span>',
                     unsafe_allow_html=True,
                 )
                 if result is True:
-                    rc[4].markdown(_badge("PASS ✓", "#16a34a"), unsafe_allow_html=True)
+                    rc[4].markdown(badge("PASS ✓", "#16a34a"), unsafe_allow_html=True)
                 elif result is False:
-                    rc[4].markdown(_badge("FAIL ✗", "#dc2626"), unsafe_allow_html=True)
+                    rc[4].markdown(badge("FAIL ✗", "#dc2626"), unsafe_allow_html=True)
                 else:
-                    rc[4].markdown(_badge("N/A",   "#475569"), unsafe_allow_html=True)
+                    rc[4].markdown(badge("N/A",   "#475569"), unsafe_allow_html=True)
 
     st.divider()
 
@@ -311,3 +279,24 @@ def render() -> None:
         st.divider()
         st.subheader("Final LLM Response")
         st.write(tel["llm_response"])
+
+    # ── CAF Attack Tree & Judge Panel ──────────────────────────────────────────
+    if tel.get("caf_trajectory"):
+        st.divider()
+
+        # Build a quick metrics_summary dict for the judge panel
+        _matrix_for_summary = tel.get("metrics_matrix", []) or st.session_state.get("metrics_matrix", [])
+        _metrics_summary: dict = {}
+        for _m in _matrix_for_summary:
+            if _m.get("type", "").startswith("caf_"):
+                _metrics_summary[_m["type"]] = evaluate_metric(_m, tel)
+
+        render_attack_tree(tel)
+        render_judge_panel(tel, _metrics_summary)
+
+    # ── AI Judge Evaluation ────────────────────────────────────────────────────
+    if tel.get("judge_scores"):
+        st.divider()
+        st.subheader("AI Judge Evaluation")
+        from ui.judge_config import render_judge_results
+        render_judge_results(tel)

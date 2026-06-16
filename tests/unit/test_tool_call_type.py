@@ -17,9 +17,7 @@ for _mod in ("streamlit", "requests", "pandas"):
     if _mod not in sys.modules:
         sys.modules[_mod] = types.ModuleType(_mod)
 
-import importlib
-evaluator = importlib.import_module("core.evaluator")
-_stream_llama_cpp = evaluator._stream_llama_cpp
+from core.streaming import stream_llama_cpp as _stream_llama_cpp
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +50,7 @@ class TestToolCallTypeField(unittest.TestCase):
 
     def _run_stream(self, sse_lines):
         """Patch requests.post and call _stream_llama_cpp, return the message dict."""
-        with patch("core.evaluator.requests") as mock_req:
+        with patch("core.streaming.requests") as mock_req:
             mock_req.post.return_value = _mock_resp(sse_lines)
             result = _stream_llama_cpp(
                 base_url="http://localhost:8080",

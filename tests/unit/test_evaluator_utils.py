@@ -2,7 +2,8 @@ import pytest
 import json
 import os
 from unittest.mock import MagicMock, patch
-from core.evaluator import _process_think_tags, _flush_buf, _load_tool_schemas
+from core.streaming import _process_think_tags, _flush_buf
+from core.evaluator import _load_tool_schemas
 
 def test_flush_buf_thinking():
     log_mock = MagicMock()

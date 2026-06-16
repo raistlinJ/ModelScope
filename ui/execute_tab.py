@@ -6,6 +6,7 @@ from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from config.scenarios import SCENARIOS
 from core.evaluator import run_evaluation
 from core import llama_server
+from ui.components import status_pill
 
 
 _LOG_TAG_MAP = {
@@ -71,13 +72,6 @@ def _render_terminal(placeholder, logs: list[dict]) -> None:
     )
 
 
-def _status_pill(label: str, state: str) -> str:
-    """Return an HTML status pill. state: 'up' | 'down' | 'wait'"""
-    return (
-        f'<span class="status-pill status-pill-{state}">{label}</span>'
-    )
-
-
 def render() -> None:
     st.header("Execute Evaluation")
 
@@ -104,15 +98,15 @@ def render() -> None:
     )
     mod_state  = "up"   if model_sel    else "wait"
 
-    pills = _status_pill(f"Model: {model_sel or 'not chosen'}", mod_state)
+    pills = status_pill(f"Model: {model_sel or 'not chosen'}", mod_state)
     
     # Only show llama-server status if model has been chosen
     if model_sel:
-        pills += _status_pill(f"{'Ollama' if backend == 'ollama' else 'llama-server'}: {'ready' if llm_running else 'not ready'}", llm_state)
+        pills += status_pill(f"{'Ollama' if backend == 'ollama' else 'llama-server'}: {'ready' if llm_running else 'not ready'}", llm_state)
     
     pills += (
-        _status_pill(f"MCP: {'running' if mcp_running else 'stopped'}", mcp_state)
-        + _status_pill(f"Tools: {len(st.session_state.get('mcp_tools', {}))}", tool_state)
+        status_pill(f"MCP: {'running' if mcp_running else 'stopped'}", mcp_state)
+        + status_pill(f"Tools: {len(st.session_state.get('mcp_tools', {}))}", tool_state)
     )
     st.markdown(pills, unsafe_allow_html=True)
 
@@ -253,29 +247,36 @@ def render() -> None:
             "expected_stdout":     _scenario_data.get("expected_stdout", ""),
             "pre_run_cleanup":     _scenario_data.get("pre_run_cleanup", []),
             "cancel_requested_ref": cancel_ref,
+            # CAF 4-Pillar runtime config
+            "caf_scope":              st.session_state.get("caf_scope", "Narrow"),
+            "caf_urgency":            st.session_state.get("caf_urgency", "Speed"),
+            "caf_allowed_subnets":    st.session_state.get("caf_allowed_subnets", []),
+            "caf_target_credentials": st.session_state.get("caf_target_credentials", []),
         }
 
         # Spinner shows during the run (fix #15)
         with st.spinner("Evaluation running…"):
-            from core.environment import LocalEnvironment
-            # ── SSH execution target — FUTURE RELEASE ─────────────────────────
-            # Remote SSH execution is planned for a future release.
-            # from core.environment import LocalEnvironment, SSHEnvironment
-            # if env_type == "ssh":
-            #     env = SSHEnvironment(
-            #         host=st.session_state.get("target_ssh_host"),
-            #         port=st.session_state.get("target_ssh_port", 22),
-            #         username=st.session_state.get("target_ssh_user"),
-            #         password=st.session_state.get("target_ssh_password"),
-            #         key_path=st.session_state.get("target_ssh_key_path"),
-            #     )
-            #     on_log(f"[INIT] Target: SSH ({st.session_state.get('target_ssh_user')}@{st.session_state.get('target_ssh_host')})")
-            # ──────────────────────────────────────────────────────────────────
+            from core.environment import LocalEnvironment, SSHEnvironment
             env_type = st.session_state.get("target_env_type", "local")
             env = None
             try:
-                env = LocalEnvironment()
-                on_log("[INIT] Target: Local")
+                if env_type == "remote (SSH)":
+                    env = SSHEnvironment(
+                        host=st.session_state.get("target_ssh_host", ""),
+                        port=int(st.session_state.get("target_ssh_port") or 22),
+                        username=st.session_state.get("target_ssh_user", "root"),
+                        password=st.session_state.get("target_ssh_password") or None,
+                        key_path=st.session_state.get("target_ssh_key_path") or None,
+                        remote_cwd=st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow",
+                    )
+                    on_log(
+                        f"[INIT] Target: SSH "
+                        f"({st.session_state.get('target_ssh_user', 'root')}@"
+                        f"{st.session_state.get('target_ssh_host', '?')})"
+                    )
+                else:
+                    env = LocalEnvironment()
+                    on_log("[INIT] Target: Local")
 
                 telemetry = run_evaluation(env, config, on_log)
             finally:

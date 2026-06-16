@@ -169,7 +169,7 @@ def check_config_no_mutation(state: dict) -> TestResult:
 
 def check_backend_connectivity(state: dict) -> TestResult:
     """HTTP probe to the configured LLM backend URL."""
-    from core.models import _ensure_scheme
+    from core.utils import ensure_http_scheme as _ensure_scheme
 
     backend = state.get("backend_type", "llama.cpp")
     url     = _ensure_scheme(state.get("llm_url", "") or "")
@@ -517,7 +517,7 @@ def check_llm_smoke(state: dict, timeout_s: int = 90) -> TestResult:
     Uses a background thread so we can enforce a hard timeout.
     """
     from core import llama_server
-    from core.models import _ensure_scheme
+    from core.utils import ensure_http_scheme as _ensure_scheme
     from core.evaluator import run_evaluation
     from core.environment import LocalEnvironment
 

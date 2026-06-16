@@ -53,7 +53,7 @@ def _config(**overrides):
 
 # ── 8-round hard limit ─────────────────────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 @patch("core.evaluator._run_validation")
 def test_max_8_rounds(mock_val, mock_stream):
     mock_stream.return_value = _tool_resp()
@@ -72,7 +72,7 @@ def test_max_8_rounds(mock_val, mock_stream):
 
 # ── Early termination when LLM gives final answer ────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_early_termination_on_final_answer(mock_stream):
     mock_stream.return_value = _text_resp("Done!")
 
@@ -86,7 +86,7 @@ def test_early_termination_on_final_answer(mock_stream):
 
 # ── Cancel before first round ─────────────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_cancel_before_first_round(mock_stream):
     cancel_ref = [True]
     _, on_log = _logs()
@@ -99,7 +99,7 @@ def test_cancel_before_first_round(mock_stream):
 
 # ── Cancel mid-loop after first round ─────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 @patch("core.evaluator._run_validation")
 def test_cancel_after_first_round(mock_val, mock_stream):
     cancel_ref = [False]
@@ -125,7 +125,7 @@ def test_cancel_after_first_round(mock_val, mock_stream):
 
 # ── Token accounting across rounds ────────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_token_accumulation(mock_stream):
     responses = [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
@@ -151,7 +151,7 @@ def test_token_accumulation(mock_stream):
 # ── tokens_per_second computed when > 0 ───────────────────────────────────────
 
 @patch("core.evaluator.time")
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_tokens_per_second_computed(mock_stream, mock_time):
     # Control time so latency = 5.0 s, completion = 50 tokens → 10.0 tok/s
     mock_time.time.side_effect = [0.0, 5.0]
@@ -170,7 +170,7 @@ def test_tokens_per_second_computed(mock_stream, mock_time):
 
 # ── Abort with no activity → validation skipped ───────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp",
+@patch("core.evaluator.stream_llama_cpp",
        side_effect=Exception("Network unreachable"))
 def test_abort_no_activity_skips_validation(mock_stream):
     _, on_log = _logs()
@@ -187,7 +187,7 @@ def test_abort_no_activity_skips_validation(mock_stream):
 
 # ── Abort with prior activity → validation still runs ─────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 @patch("core.evaluator._run_validation")
 def test_abort_with_activity_runs_validation(mock_val, mock_stream):
     responses = [
@@ -223,7 +223,7 @@ def test_abort_with_activity_runs_validation(mock_val, mock_stream):
 
 # ── Ollama backend dispatches to _stream_ollama ───────────────────────────────
 
-@patch("core.evaluator._stream_ollama")
+@patch("core.evaluator.stream_ollama")
 def test_ollama_backend_dispatch(mock_ollama):
     mock_ollama.return_value = _text_resp("ollama answer")
 
@@ -240,7 +240,7 @@ def test_ollama_backend_dispatch(mock_ollama):
 
 # ── Connection error marks run aborted ────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_connection_error_aborts(mock_stream):
     import requests
     mock_stream.side_effect = requests.exceptions.ConnectionError("refused")
@@ -254,7 +254,7 @@ def test_connection_error_aborts(mock_stream):
 
 # ── Inefficiency detection ────────────────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_repeated_tool_calls_logged_as_inefficiency(mock_stream):
     same_args = '{"path":"/tmp/x","content":"1"}'
     responses = [
@@ -276,7 +276,7 @@ def test_repeated_tool_calls_logged_as_inefficiency(mock_stream):
 
 # ── Pre-run cleanup ────────────────────────────────────────────────────────────
 
-@patch("core.evaluator._stream_llama_cpp")
+@patch("core.evaluator.stream_llama_cpp")
 def test_pre_run_cleanup_called(mock_stream):
     mock_stream.return_value = _text_resp("done")
     env = MagicMock()

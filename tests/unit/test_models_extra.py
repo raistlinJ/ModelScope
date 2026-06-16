@@ -2,7 +2,8 @@ import pytest
 import requests
 from unittest.mock import patch, MagicMock
 from core import models
-from core.models import _ensure_scheme, _is_inference_model
+from core.utils import ensure_http_scheme as _ensure_scheme
+from core.models import _is_inference_model
 
 @patch("requests.get")
 def test_fetch_ollama_models_404(mock_get):
