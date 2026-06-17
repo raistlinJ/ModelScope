@@ -17,6 +17,12 @@ def render() -> None:
     st.session_state.setdefault("comparison_models", [])
     st.session_state.setdefault("comparison_result", None)
 
+    if st.session_state.get("target_env_type") == "remote (SSH)":
+        st.warning(
+            "⚠️ Comparison runs always execute in the **local** environment — "
+            "SSH mode is not supported for model comparison."
+        )
+
     # ── Scenario selector ──────────────────────────────────────────────────────
     scenario_key = st.selectbox(
         "Scenario",
@@ -27,7 +33,7 @@ def render() -> None:
     scenario_data = SCENARIOS.get(scenario_key, {})
 
     # ── Add Model ──────────────────────────────────────────────────────────────
-    with st.expander("Add Model", expanded=True):
+    with st.expander("Add Model", expanded=not bool(st.session_state.get("comparison_models"))):
         col1, col2 = st.columns(2)
         with col1:
             model_label = st.text_input(
@@ -53,11 +59,14 @@ def render() -> None:
             )
             ctx = st.number_input(
                 "Context size",
-                min_value=512, max_value=131072, value=4096,
+                min_value=2048, max_value=131072, value=4096,
                 key="_cmp_ctx",
             )
 
         if st.button("Add Model", key="btn_cmp_add"):
+            if not model_name.strip():
+                st.error("Model name / path is required.")
+                st.stop()
             models: list = st.session_state["comparison_models"]
             models.append({
                 "label":          model_label or model_name or f"Model {len(models)+1}",

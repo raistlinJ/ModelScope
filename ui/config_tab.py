@@ -1,3 +1,4 @@
+import html
 import re
 import time
 import streamlit as st
@@ -17,18 +18,35 @@ from ui.workflow_config import render_workflow_config
 
 # Tool focus → scenario mapping
 _TOOL_SCENARIOS = {
-    "file_creator":          "Scenario 1 – File Creation",
-    "run_nmap_scan":         "Scenario 2 – Network Scan",
-    "mcp_kali_run_command":  "CAF – Reconnaissance",
-    "msf_run":               "CAF – Exploitation",
-    "caf_guardrail_test":    "CAF – Guardrail Test",
+    # Local tools
+    "file_creator":               "Scenario 1 – File Creation",
+    "run_nmap_scan":              "Scenario 2 – Network Scan",
+    # CAF general scenarios
+    "mcp_kali_run_command":       "CAF – Reconnaissance",
+    "msf_run":                    "CAF – Exploitation",
+    "caf_guardrail_test":         "CAF – Guardrail Test",
+    # CAF per-tool scenarios
+    "shell":                      "CAF – Shell Command Execution",
+    "shell_extended":             "CAF – Extended Shell Execution",
+    "shell_dangerous":            "CAF – Dangerous Command Audit",
+    "shell_sequence":             "CAF – Command Sequence",
+    "interactive_session_write":  "CAF – Interactive Session",
+    "ospf_sniff":                 "CAF – OSPF Sniffing",
+    "RIPv2":                      "CAF – RIPv2 Analysis",
 }
 _TOOL_LABELS = {
-    "file_creator":         "file_creator — File Creation",
-    "run_nmap_scan":        "run_nmap_scan — Network Scanner",
-    "mcp_kali_run_command": "mcp_kali_run_command — CAF Reconnaissance",
-    "msf_run":              "msf_run — CAF Exploitation",
-    "caf_guardrail_test":   "caf_guardrail_test — CAF Guardrail Test",
+    "file_creator":               "file_creator — File Creation",
+    "run_nmap_scan":              "run_nmap_scan — Network Scanner",
+    "mcp_kali_run_command":       "mcp_kali_run_command — CAF Reconnaissance",
+    "msf_run":                    "msf_run — CAF Exploitation (Metasploit)",
+    "caf_guardrail_test":         "caf_guardrail_test — CAF Guardrail Test",
+    "shell":                      "shell — CAF Shell Command Execution",
+    "shell_extended":             "shell_extended — CAF Extended Shell (long-running)",
+    "shell_dangerous":            "shell_dangerous — CAF Dangerous Command Audit",
+    "shell_sequence":             "shell_sequence — CAF Command Sequence Chain",
+    "interactive_session_write":  "interactive_session_write — CAF Interactive Session",
+    "ospf_sniff":                 "ospf_sniff — CAF OSPF Protocol Analysis",
+    "RIPv2":                      "RIPv2 — CAF RIPv2 Protocol Analysis",
 }
 
 
@@ -286,6 +304,9 @@ def _test_ssh_connection() -> None:
         return
     try:
         client = paramiko.SSHClient()
+        # SECURITY: AutoAddPolicy trusts unknown host keys (no MITM protection).
+        # Intended only for the trusted lab network this tool targets; mirror any
+        # change here with the policy in core/environment.py.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
         if key_path:
@@ -413,13 +434,8 @@ def _mcp_server_section() -> None:
         else:
             st.error(msg)
 
-    conn_type = st.selectbox(
-        "Connection Type",
-        options=["Local"],
-        index=0,
-        key="_mcp_conn_type_sel",
-        help="Local: start a Node.js MCP server on this machine.",
-    )
+    st.caption("Connection type: **Local** — SSH tunnel support coming soon.")
+    conn_type = "Local"
 
     if conn_type == "Local":
         # ── Local MCP ─────────────────────────────────────────────────────────
@@ -805,7 +821,7 @@ def _metrics_setup() -> None:
             rc[2].write(m["name"])
             rc[3].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
             rc[4].markdown(
-                f'<span class="criterion">{format_criterion(m)}</span>',
+                f'<span class="criterion">{html.escape(format_criterion(m))}</span>',
                 unsafe_allow_html=True,
             )
             if rc[5].button("✕", key=f"md_{i}"):

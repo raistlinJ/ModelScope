@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 import time
 from datetime import datetime
 from typing import Callable
@@ -8,7 +9,7 @@ from typing import Callable
 import requests
 
 from config.defaults import MCP_SERVER_BASE_URL
-from core.caf_state import StepTelemetry
+from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment
 from core.mcp_manager import call_mcp_tool
 from core.streaming import stream_ollama, stream_llama_cpp
@@ -73,6 +74,11 @@ def _load_all_tool_schemas(mcp_script_path: str) -> list[dict]:
 
 # ── Tool execution ─────────────────────────────────────────────────────────────
 
+# Legal characters in a scan target: hostnames, IPv4/IPv6 literals, CIDR masks.
+# Anything else (whitespace, shell metacharacters, newlines) is rejected outright.
+_NMAP_TARGET_RE = re.compile(r"^[A-Za-z0-9.:/_-]+$")
+
+
 def _execute_tool_in_env(env: BaseEnvironment, tool_name: str, tool_args: dict) -> dict:
     if tool_name == "file_creator":
         return env.write_file(tool_args.get("path", ""), tool_args.get("content", ""))
@@ -80,9 +86,21 @@ def _execute_tool_in_env(env: BaseEnvironment, tool_name: str, tool_args: dict) 
     if tool_name == "run_nmap_scan":
         target    = tool_args.get("target", "127.0.0.1")
         arguments = tool_args.get("arguments", "-F")
-        if any(c in target + arguments for c in (";", "&", "|", "`", "$", ">")):
-            return {"error": "Disallowed characters in arguments"}
-        return env.execute(f"nmap {arguments} {target}", timeout=30)
+        # Reject any target that is not a bare hostname / IP / CIDR. The previous
+        # denylist ({; & | ` $ >}) missed newlines, parentheses, whitespace and
+        # quotes — all of which break out of a `shell=True` command. An allowlist
+        # of the characters legal in a host/IP/CIDR closes every one of those.
+        if not target or not _NMAP_TARGET_RE.match(target):
+            return {"error": "Invalid scan target"}
+        # Tokenise arguments through shlex so embedded separators cannot survive,
+        # then re-quote every token as defence in depth.
+        try:
+            arg_tokens = shlex.split(arguments)
+        except ValueError:
+            return {"error": "Malformed arguments"}
+        safe_args   = " ".join(shlex.quote(tok) for tok in arg_tokens)
+        safe_target = shlex.quote(target)
+        return env.execute(f"nmap {safe_args} {safe_target}".strip(), timeout=30)
 
     return {"error": f"Unknown tool: {tool_name}"}
 
@@ -160,10 +178,11 @@ def _check_inefficiencies(tool_calls: list[dict]) -> list[str]:
     seen: dict[tuple, int] = {}
     issues = []
     for call in tool_calls:
-        key = (call.get("tool"), json.dumps(call.get("args", {}), sort_keys=True))
+        tool = call.get("tool")
+        key  = (tool, json.dumps(call.get("args", {}), sort_keys=True))
         seen[key] = seen.get(key, 0) + 1
         if seen[key] == 2:
-            issues.append(f"Repeated call: {call['tool']} with identical arguments")
+            issues.append(f"Repeated call: {tool} with identical arguments")
     return issues
 
 
@@ -175,18 +194,32 @@ def _calculate_step_tdi(
     tokens: int,
     recent_steps: list[dict],
     context_size: int = 4096,
-) -> float:
+    exit_code: int = 0,
+) -> tuple[float, float, float, float, float]:
     """
-    Task Difficulty Index (0–1): blends context load, recent failure rate,
-    and evidence signal.  High TDI → BFS exploration; low → DFS exploitation.
+    3-component Task Difficulty Index (PENTESTGPT V2, H-dimension dropped).
+
+    TDI = 0.4·(1-E) + 0.3·C + 0.3·(1-S)
+
+    Components:
+      E — evidence confidence (0–1): how actionable is the current output?
+      C — context load ratio (0–1): fraction of context window consumed
+      S — recent success rate (0–1): fraction of last 3 steps that succeeded
+
+    Returns (tdi, e, c, s, evidence_confidence).
+    High TDI (>0.6) → BFS exploration mode; low (<0.3) → DFS exploitation.
     """
-    context_load_ratio = min(tokens / max(context_size, 1), 1.0)
-    recent_failures    = sum(1 for s in recent_steps[-3:] if s.get("exit_code", 0) != 0)
-    failure_penalty    = recent_failures / 3.0
-    output_str         = str(result.get("stdout", "") or result).lower()
-    evidence_signal    = 0.0 if "error" in output_str else 0.5
-    tdi = (0.4 * context_load_ratio) + (0.4 * failure_penalty) + (0.2 * (1.0 - evidence_signal))
-    return round(tdi, 2)
+    output_str = str(result.get("stdout", "") or result)
+    evidence_confidence = score_evidence_confidence(tool, output_str, exit_code)
+
+    c = min(tokens / max(context_size, 1), 1.0)
+
+    recent = recent_steps[-3:] if recent_steps else []
+    successes = sum(1 for s in recent if s.get("exit_code", 0) == 0)
+    s = successes / max(len(recent), 1) if recent else 1.0
+
+    tdi = 0.4 * (1.0 - evidence_confidence) + 0.3 * c + 0.3 * (1.0 - s)
+    return round(tdi, 3), evidence_confidence, round(c, 3), round(s, 3), evidence_confidence
 
 
 # ── Evaluation helpers ─────────────────────────────────────────────────────────
@@ -289,12 +322,13 @@ def _process_tool_calls(
 
         # CAF 4-Pillar: per-step telemetry
         tokens_so_far = telemetry["prompt_tokens"] + telemetry["completion_tokens"]
-        tdi = _calculate_step_tdi(
+        tdi, e, c, s, ev_conf = _calculate_step_tdi(
             tool=tool_name,
             result=result,
             tokens=tokens_so_far,
             recent_steps=telemetry["caf_trajectory"],
             context_size=config.get("context_size", 4096),
+            exit_code=step_exit,
         )
         caf_step = StepTelemetry(
             step_number=len(telemetry["caf_trajectory"]),
@@ -305,9 +339,14 @@ def _process_tool_calls(
             execution_time_ms=round(elapsed * 1000, 1),
             context_tokens_used=tokens_so_far,
             calculated_tdi=tdi,
+            tdi_e=e,
+            tdi_c=c,
+            tdi_s=s,
+            evidence_confidence=ev_conf,
+            phase=infer_phase(tool_name),
         )
         telemetry["caf_trajectory"].append(caf_step.to_dict())
-        on_log(f"[CAF] Step {caf_step.step_number} TDI={tdi:.2f}  ctx={tokens_so_far}")
+        on_log(f"[CAF] Step {caf_step.step_number} TDI={tdi:.3f}  E={e:.2f}  C={c:.2f}  S={s:.2f}  phase={caf_step.phase}")
 
         messages.append({
             "role":         "tool",
@@ -333,7 +372,7 @@ def _finalize_telemetry(telemetry: dict, start_t: float) -> None:
 def _caf_provider_flags(config: dict) -> str:
     """Map ModelScope backend config to CAF CLI provider flags."""
     backend = config.get("backend_type", "llama.cpp")
-    url     = config.get("llm_url", "").rstrip("/")
+    url     = shlex.quote(config.get("llm_url", "").rstrip("/"))
     if backend == "ollama":
         return f"--provider ollama_direct --url {url}"
     # llama.cpp serves an OpenAI-compatible API
@@ -416,20 +455,55 @@ def _telemetry_from_caf(
     # Parse tool calls from pulled tool_calls/*.json
     tools_path = pathlib.Path(local_run_dir) / run_id / "tool_calls"
     caf_tool_calls: list[dict] = []
+    caf_trajectory: list[dict] = []
+    context_window = int(metadata.get("context_window", 8192))
     if tools_path.exists():
-        for tc_file in sorted(tools_path.glob("*.json")):
+        sorted_files = sorted(tools_path.glob("*.json"))
+        for seq_idx, tc_file in enumerate(sorted_files):
             try:
                 tc = json.loads(tc_file.read_text(encoding="utf-8"))
+                tool_name = tc.get("tool", "")
+                exit_code = tc.get("exit_code", 0)
+                result_text = tc.get("result", "")
+                duration_ms = tc.get("duration_ms", 0)
+                result_dict = {"stdout": result_text, "exit_code": exit_code,
+                               "stderr": tc.get("stderr", "")}
                 caf_tool_calls.append({
-                    "tool":      tc.get("tool", ""),
+                    "tool":      tool_name,
                     "args":      tc.get("args", {}),
-                    "result":    {"stdout": tc.get("result", ""), "exit_code": tc.get("exit_code", 0)},
-                    "runtime":   round(tc.get("duration_ms", 0) / 1000, 3),
-                    "exit_code": tc.get("exit_code", 0),
+                    "result":    result_dict,
+                    "runtime":   round(duration_ms / 1000, 3),
+                    "exit_code": exit_code,
                 })
+                # Build trajectory steps with TDI dimensions
+                tdi, e, c, s, ev_conf = _calculate_step_tdi(
+                    tool=tool_name,
+                    result=result_dict,
+                    tokens=0,                   # CAF doesn't log token counts
+                    recent_steps=caf_trajectory,
+                    context_size=context_window,
+                    exit_code=exit_code,
+                )
+                step = StepTelemetry(
+                    step_number=seq_idx,
+                    tool_called=tool_name,
+                    arguments=tc.get("args", {}),
+                    exit_code=exit_code,
+                    output_preview=result_text[:500],
+                    execution_time_ms=float(duration_ms),
+                    context_tokens_used=0,
+                    calculated_tdi=tdi,
+                    tdi_e=e,
+                    tdi_c=c,
+                    tdi_s=s,
+                    evidence_confidence=ev_conf,
+                    phase=infer_phase(tool_name),
+                )
+                caf_trajectory.append(step.to_dict())
             except Exception:
                 pass
-    telemetry["tool_calls"] = caf_tool_calls
+    telemetry["tool_calls"]     = caf_tool_calls
+    telemetry["caf_trajectory"] = caf_trajectory
 
     # Read transcript for llm_response
     transcript_path = pathlib.Path(local_run_dir) / run_id / "transcript.md"
@@ -459,10 +533,12 @@ def run_caf_ssh_evaluation(
     """
     start_t = time.time()
 
-    model   = config.get("selected_model") or ""
-    prompt  = config.get("user_prompt", "").replace("'", "'\\''")
-    scope   = config.get("caf_scope", "Narrow").lower()
-    urgency = config.get("caf_urgency", "Speed").lower()
+    model   = shlex.quote(config.get("selected_model") or "")
+    # shlex.quote handles every shell-significant character in the prompt,
+    # including the single quotes the previous hand-rolled escaping covered.
+    prompt  = shlex.quote(config.get("user_prompt", ""))
+    scope   = shlex.quote(config.get("caf_scope", "Narrow").lower())
+    urgency = shlex.quote(config.get("caf_urgency", "Speed").lower())
     prov    = _caf_provider_flags(config)
 
     cmd = (
@@ -471,10 +547,10 @@ def run_caf_ssh_evaluation(
         f"--model {model} "
         f"--scope {scope} "
         f"--urgency {urgency} "
-        f"'{prompt}'"
+        f"{prompt}"
     )
     on_log(f"[CAF] Remote command: {cmd}")
-    on_log(f"[CAF] Executing on {env._host} (this may take several minutes)…")
+    on_log(f"[CAF] Executing on {env.host} (this may take several minutes)…")
 
     result = env.execute(cmd, timeout=600)
     combined_output = result["stdout"] + result["stderr"]
@@ -534,14 +610,24 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
         sys_prompt, user_prompt, mcp_url, mcp_tools,
         validation_command, fail_patterns, mcp_running,
         active_scenario, cancel_requested_ref,
-        caf_scope, caf_urgency, caf_allowed_subnets, caf_target_credentials
+        caf_scope, caf_urgency, caf_allowed_subnets, caf_target_credentials,
+        execution_mode  ("local" | "caf_ssh"; auto-detected from env when absent)
+
+    Dispatch is driven by an explicit ``execution_mode``. When the caller does
+    not set it, the mode is inferred once from the environment's
+    ``is_remote_caf`` capability flag so legacy callers keep working — but the
+    generic entry point no longer hard-codes a dependency on a specific
+    environment subclass.
     """
     start_t    = time.time()
 
+    mode = config.get("execution_mode") or (
+        "caf_ssh" if getattr(env, "is_remote_caf", False) is True else "local"
+    )
+
     # CAF SSH mode: delegate entire execution to the remote CAF CLI
-    from core.environment import SSHEnvironment
-    if isinstance(env, SSHEnvironment):
-        on_log(f"[INIT] SSH target: {env._username}@{env._host}  |  CAF dir: {env.remote_cwd}")
+    if mode == "caf_ssh":
+        on_log(f"[INIT] SSH target: {env.username}@{env.host}  |  CAF dir: {env.remote_cwd}")
         return run_caf_ssh_evaluation(env, config, on_log)
 
     backend    = config.get("backend_type", "llama.cpp")

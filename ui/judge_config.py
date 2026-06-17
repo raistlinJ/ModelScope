@@ -42,11 +42,10 @@ def render() -> None:
             key="judge_provider",
         )
         default_model = "claude-sonnet-4-6" if provider == "anthropic" else "gpt-4o"
-        model = st.text_input(
-            "Model",
-            value=st.session_state.get("judge_model", default_model),
-            key="judge_model",
-        )
+        if st.session_state.get("_last_judge_provider") != provider:
+            st.session_state["judge_model"] = default_model
+            st.session_state["_last_judge_provider"] = provider
+        model = st.text_input("Model", key="judge_model")
     with col2:
         st.text_input(
             "API Key",

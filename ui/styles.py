@@ -242,7 +242,7 @@ h3 {
 .terminal-window::-webkit-scrollbar-thumb { background: #333; border-radius: 0; }
 
 /* Log-line colour coding */
-.log-init     { color: #4a4030; }
+.log-init     { color: #a8956a; }
 .log-tools    { color: #d97706; font-weight: 500; }
 .log-llm      { color: #e8dfc4; }
 .log-thinking { color: #c4a060; font-style: italic; }

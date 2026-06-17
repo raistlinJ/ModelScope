@@ -73,11 +73,33 @@ class TestRunNmapScan:
         assert "error" in result
         env.execute.assert_not_called()
 
-    def test_injection_in_arguments_blocked(self):
+    def test_injection_in_arguments_neutralized(self):
+        # Arguments are tokenised + shlex-quoted, so embedded separators cannot
+        # break out into a second command. The call still proceeds (nmap will
+        # simply reject the bogus flag), but no injected command can execute.
+        env = _env()
+        _execute_tool_in_env(env, "run_nmap_scan",
+                             {"target": "127.0.0.1",
+                              "arguments": "-F; cat /etc/passwd"})
+        call_cmd = env.execute.call_args[0][0]
+        # The ';' must be inside a quoted token, never a bare shell separator.
+        assert "; cat" not in call_cmd
+
+    def test_newline_in_target_blocked(self):
+        # Regression: the old denylist missed '\n', which is a command
+        # separator under shell=True.
+        env = _env()
+        result = _execute_tool_in_env(env, "run_nmap_scan",
+                                       {"target": "127.0.0.1\nrm -rf /tmp/x",
+                                        "arguments": "-F"})
+        assert "error" in result
+        env.execute.assert_not_called()
+
+    def test_malformed_arguments_rejected(self):
         env = _env()
         result = _execute_tool_in_env(env, "run_nmap_scan",
                                        {"target": "127.0.0.1",
-                                        "arguments": "-F; cat /etc/passwd"})
+                                        "arguments": 'unbalanced "quote'})
         assert "error" in result
         env.execute.assert_not_called()
 

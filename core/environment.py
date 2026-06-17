@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 import pathlib
 import os
@@ -7,6 +8,12 @@ from typing import Dict, Any, Optional
 
 class BaseEnvironment(ABC):
     """Abstract base class for all target execution environments."""
+
+    #: Capability flag: when True, the evaluator delegates the entire run to a
+    #: remote CyberAgentFlow CLI instead of driving the local LLM/tool loop.
+    #: Environments advertise their capabilities here so the orchestrator never
+    #: needs to branch on a concrete subclass (open/closed principle).
+    is_remote_caf: bool = False
 
     @abstractmethod
     def execute(self, command: str, timeout: int = 15) -> Dict[str, Any]:
@@ -81,6 +88,9 @@ class LocalEnvironment(BaseEnvironment):
 class SSHEnvironment(BaseEnvironment):
     """Execution environment for a remote Kali Linux machine via SSH."""
 
+    #: SSH targets host the CyberAgentFlow CLI; the evaluator delegates to it.
+    is_remote_caf: bool = True
+
     def __init__(
         self,
         host: str,
@@ -109,6 +119,11 @@ class SSHEnvironment(BaseEnvironment):
         ):
             return
         client = paramiko.SSHClient()
+        # SECURITY: AutoAddPolicy trusts unknown host keys on first contact,
+        # so this connection is NOT protected against MITM. It is acceptable
+        # only for the trusted lab/VM network this tool targets. Do NOT
+        # "upgrade" to a stricter policy without also giving operators a way to
+        # manage known_hosts, or remote evaluations will silently break.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         kwargs: dict = {
             "hostname": self._host,
@@ -122,7 +137,13 @@ class SSHEnvironment(BaseEnvironment):
             kwargs["password"] = self._password
         client.connect(**kwargs)
         self._client = client
-        self._sftp   = client.open_sftp()
+        sftp = client.open_sftp()
+        try:
+            sftp.chdir(self._remote_cwd)
+            self._remote_cwd = sftp.getcwd() or self._remote_cwd
+        except IOError:
+            pass  # Directory may not exist yet; execute() will cd there anyway
+        self._sftp = sftp
 
     def close(self) -> None:
         """Close SSH and SFTP connections."""
@@ -139,10 +160,21 @@ class SSHEnvironment(BaseEnvironment):
     def remote_cwd(self) -> str:
         return self._remote_cwd
 
-    def execute(self, command: str, timeout: int = 15) -> Dict[str, Any]:
+    @property
+    def host(self) -> str:
+        return self._host
+
+    @property
+    def username(self) -> str:
+        return self._username
+
+    def execute(self, command: str, timeout: int = 15, env_vars: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             self.connect()
-            full_cmd = f"cd {self._remote_cwd} && {command}"
+            exports = " ".join(
+                f"export {k}={shlex.quote(str(v))};" for k, v in (env_vars or {}).items()
+            )
+            full_cmd = f"cd {self._remote_cwd} && {exports + ' ' if exports else ''}{command}"
             _, stdout, stderr = self._client.exec_command(full_cmd, timeout=timeout)
             exit_code = stdout.channel.recv_exit_status()
             return {
@@ -163,7 +195,9 @@ class SSHEnvironment(BaseEnvironment):
             self.connect()
             parent = "/".join(path.rstrip("/").split("/")[:-1])
             if parent:
-                self.execute(f"mkdir -p {parent}", timeout=10)
+                # Quote the path so a remote directory name can never inject a
+                # second shell command into the mkdir invocation.
+                self.execute(f"mkdir -p {shlex.quote(parent)}", timeout=10)
             encoded = content.encode("utf-8")
             with self._sftp.open(path, "wb") as fh:
                 fh.write(encoded)

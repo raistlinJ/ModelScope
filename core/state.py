@@ -124,7 +124,6 @@ def sync_scenario(scenario_key: str) -> None:
     st.session_state["fail_patterns"]       = list(_s["fail_patterns"])
     st.session_state["metrics_matrix"]      = list(_s["default_metrics"])
     st.session_state["_last_exec_scenario"] = scenario_key
-    st.session_state["_prompts_user_edited"] = False
     if "caf_scope" in _s:
         st.session_state["caf_scope"]              = _s["caf_scope"]
         st.session_state["caf_urgency"]            = _s["caf_urgency"]

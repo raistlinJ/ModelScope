@@ -1,5 +1,5 @@
 import streamlit as st
-from config.defaults import DEFAULT_CONTEXT_SIZE
+from config.defaults import DEFAULT_CONTEXT_SIZE, MIN_CONTEXT_SIZE
 from config.scenarios import DEFAULT_SCENARIO
 from core.state import init_state, sync_scenario
 from core.models import scan_gguf_models
@@ -43,13 +43,24 @@ _ctx      = st.session_state.get("context_size", DEFAULT_CONTEXT_SIZE)
 _mcp_on   = st.session_state.get("mcp_running", False)
 _tool_foc = st.session_state.get("tool_focus", "")
 
-_srv_state = "up" if _running else ("wait" if _backend == "ollama" else "down")
+_process  = st.session_state.get("llama_server_process")
+_crashed  = st.session_state.get("llama_server_crashed", False)
+if _running:
+    _srv_state = "up"
+elif _backend == "ollama":
+    _srv_state = "wait"
+elif _crashed:
+    _srv_state = "down"
+else:
+    _srv_state = "wait"   # never started or loading
+
 _mod_state = "up" if _model != "not chosen" else "wait"
+_ctx_state = "up" if _ctx >= MIN_CONTEXT_SIZE else "wait"
 
 _pills = (
     status_pill(f"Model: {_model.split('/')[-1] if '/' in _model else _model}", _mod_state)
     + status_pill(f"{_backend}: {'running' if _running else 'stopped'}", _srv_state)
-    + status_pill(f"ctx: {_ctx:,}", "wait")
+    + status_pill(f"ctx: {_ctx:,}", _ctx_state)
     + status_pill(f"MCP: {'on' if _mcp_on else 'off'}", "up" if _mcp_on else "wait")
 )
 if _tool_foc:

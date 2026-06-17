@@ -4,9 +4,9 @@ import os
 LLAMA_CPP_DEFAULT_URL = "http://localhost:8080"
 OLLAMA_DEFAULT_URL    = "http://localhost:11434"
 
-# Paths on this machine (also exposed as editable state via core/state.py)
-LLAMA_SERVER_BIN = "/home/dsch/llama.cpp/build/bin/llama-server"
-GGUF_MODELS_DIR  = "/home/dsch/llama.cpp/models"
+# Paths on this machine (override via env vars for portability)
+LLAMA_SERVER_BIN = os.environ.get("LLAMA_SERVER_BIN", "/home/dsch/llama.cpp/build/bin/llama-server")
+GGUF_MODELS_DIR  = os.environ.get("GGUF_MODELS_DIR",  "/home/dsch/llama.cpp/models")
 
 # MCP server script path (absolute, derived at import time)
 _GUI_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -170,6 +170,15 @@ def render() -> None:
     # ── Run / Cancel / Clear row ──────────────────────────────────────────────
     run_in_progress = st.session_state.get("_run_in_progress", False)
     model_chosen = bool(st.session_state.get("selected_model"))
+    ssh_ready = (
+        st.session_state.get("target_env_type", "local") != "remote (SSH)"
+        or bool(st.session_state.get("target_ssh_host", "").strip())
+    )
+
+    if not ssh_ready:
+        st.warning(
+            "⚠️ SSH host is required — configure it in **Configuration → Execution Target**."
+        )
 
     col_run, col_cancel, col_clear = st.columns([3, 1, 1])
     with col_run:
@@ -177,7 +186,7 @@ def render() -> None:
             "▶  Run Evaluation",
             type="primary",
             use_container_width=True,
-            disabled=run_in_progress or not model_chosen,
+            disabled=run_in_progress or not model_chosen or not ssh_ready,
         )
     with col_cancel:
         # Cancel button (fix #16)
@@ -278,6 +287,11 @@ def render() -> None:
                     env = LocalEnvironment()
                     on_log("[INIT] Target: Local")
 
+                # Make the dispatch mode explicit rather than relying on the
+                # evaluator to sniff the environment type.
+                config["execution_mode"] = (
+                    "caf_ssh" if env_type == "remote (SSH)" else "local"
+                )
                 telemetry = run_evaluation(env, config, on_log)
             finally:
                 if env and hasattr(env, "close"):
@@ -293,3 +307,15 @@ def render() -> None:
         history.append(telemetry)
         from config.defaults import MAX_RUN_HISTORY
         st.session_state["run_history"] = history[-MAX_RUN_HISTORY:]
+
+        if telemetry.get("run_aborted"):
+            st.warning("⚠️ Run was cancelled.")
+        elif telemetry.get("validation_passed"):
+            st.success(
+                "✓ Evaluation complete — validation passed. "
+                "Open **📊 Analytical Dashboard** to view metrics."
+            )
+        else:
+            st.info(
+                "📊 Evaluation complete — open **Analytical Dashboard** to review results."
+            )

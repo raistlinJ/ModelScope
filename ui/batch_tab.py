@@ -126,6 +126,12 @@ def render() -> None:
         "Results are collected into a consolidated report when the batch completes."
     )
 
+    if st.session_state.get("target_env_type") == "remote (SSH)":
+        st.warning(
+            "⚠️ Batch runs always execute in the **local** environment — "
+            "SSH mode is not supported for batch evaluation."
+        )
+
     runner: BatchRunner = _get_runner()
     st.session_state.setdefault("batch_queue", [])
     queue: list[dict] = st.session_state["batch_queue"]
@@ -203,6 +209,9 @@ def render() -> None:
                 )
 
         if st.button("Add to Queue", type="primary", key="btn_batch_add"):
+            if backend == "llama.cpp" and not model_path.strip():
+                st.error("Model path is required when using llama.cpp backend.")
+                st.stop()
             model_config = {
                 "backend_type":        backend,
                 "llm_url":             server_url.strip(),

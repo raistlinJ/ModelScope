@@ -84,6 +84,50 @@ def test_early_termination_on_final_answer(mock_stream):
     assert tel["llm_response"] == "Done!"
 
 
+# ── Execution-mode dispatch ───────────────────────────────────────────────────
+
+@patch("core.evaluator.run_caf_ssh_evaluation")
+@patch("core.evaluator.stream_llama_cpp")
+def test_explicit_caf_ssh_mode_delegates(mock_stream, mock_caf):
+    """config execution_mode='caf_ssh' routes to the remote CAF path."""
+    mock_caf.return_value = {"run_aborted": False}
+    env = MagicMock()
+    env.username, env.host, env.remote_cwd = "kali", "10.0.0.1", "/opt/caf"
+    _, on_log = _logs()
+
+    evaluator.run_evaluation(env, _config(execution_mode="caf_ssh"), on_log)
+
+    mock_caf.assert_called_once()
+    mock_stream.assert_not_called()
+
+
+@patch("core.evaluator.run_caf_ssh_evaluation")
+@patch("core.evaluator.stream_llama_cpp")
+def test_capability_flag_drives_dispatch(mock_stream, mock_caf):
+    """An env advertising is_remote_caf=True auto-routes to the CAF path."""
+    mock_caf.return_value = {"run_aborted": False}
+
+    class _RemoteEnv(MagicMock):
+        is_remote_caf = True
+
+    env = _RemoteEnv()
+    env.username, env.host, env.remote_cwd = "kali", "10.0.0.1", "/opt/caf"
+    _, on_log = _logs()
+
+    evaluator.run_evaluation(env, _config(), on_log)
+
+    mock_caf.assert_called_once()
+
+
+@patch("core.evaluator.run_caf_ssh_evaluation")
+@patch("core.evaluator.stream_llama_cpp")
+def test_local_mode_does_not_delegate(mock_stream, mock_caf):
+    """A plain (local) env never hits the CAF path."""
+    mock_stream.return_value = _text_resp("Done!")
+    evaluator.run_evaluation(MagicMock(), _config(), lambda m: None)
+    mock_caf.assert_not_called()
+
+
 # ── Cancel before first round ─────────────────────────────────────────────────
 
 @patch("core.evaluator.stream_llama_cpp")

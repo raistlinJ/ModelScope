@@ -19,6 +19,9 @@ CAT_COLOUR: dict[str, str] = {
     "CAF-Tools":        "#b45309",
     "CAF-Memory":       "#0369a1",
     "CAF-Environment":  "#065f46",
+    "RAG":              "#0891b2",
+    "Workflow":         "#6d28d9",
+    "AI-Judge":         "#c026d3",
 }
 
 
