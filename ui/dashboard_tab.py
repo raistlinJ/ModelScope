@@ -43,11 +43,15 @@ def _render_sessions_viewer() -> None:
         st.caption(f"Path: `{sel_dir}`")
 
         # ── Telemetry summary ──────────────────────────────────────────────
+        # Prefer telemetry.json; fall back to indexed CAF files (telemetry_0.json, etc.)
         tel_path = sel_dir / "telemetry.json"
-        if tel_path.exists():
+        indexed_paths = sorted(sel_dir.glob("telemetry_*.json"))
+        tel_files = [tel_path] if tel_path.exists() else indexed_paths
+        for t_idx, t_path in enumerate(tel_files):
             try:
-                tel_data = json.loads(tel_path.read_text(encoding="utf-8"))
-                st.markdown("**Telemetry summary**")
+                tel_data = json.loads(t_path.read_text(encoding="utf-8"))
+                label = "**Telemetry summary**" if len(tel_files) == 1 else f"**Prompt {t_idx + 1}**"
+                st.markdown(label)
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Model", tel_data.get("run_model") or tel_data.get("selected_model") or "?")
                 c2.metric("Latency", f"{tel_data.get('total_latency', 0):.2f} s")
@@ -55,8 +59,10 @@ def _render_sessions_viewer() -> None:
                 _val = tel_data.get("validation_passed")
                 _val_label = "PASS" if _val is True else ("FAIL" if _val is False else "N/A")
                 c4.metric("Validation", _val_label)
+                if len(tel_files) > 1 and t_idx < len(tel_files) - 1:
+                    st.divider()
             except Exception:
-                st.warning("Could not parse telemetry.json.")
+                st.warning(f"Could not parse {t_path.name}.")
 
         # ── run.log viewer ────────────────────────────────────────────────
         log_path = sel_dir / "run.log"

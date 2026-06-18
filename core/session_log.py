@@ -104,14 +104,22 @@ class SessionLog:
             index:     When provided, writes ``telemetry_<index>.json`` instead
                        of ``telemetry.json``.  Used by the CAF tab's multi-prompt
                        loop so each prompt gets its own artefact.
+
+        ``caf_config.target_credentials`` is stripped before writing — it may
+        contain plaintext credentials entered by the user.
         """
         try:
+            safe = dict(telemetry)
+            if "caf_config" in safe and isinstance(safe["caf_config"], dict):
+                caf_cfg = dict(safe["caf_config"])
+                caf_cfg.pop("target_credentials", None)
+                safe["caf_config"] = caf_cfg
             filename = f"telemetry_{index}.json" if index is not None else "telemetry.json"
             with self._lock:
                 self._ensure_dir()
                 dest = self._session_dir / filename
                 dest.write_text(
-                    json.dumps(telemetry, indent=2, default=str),
+                    json.dumps(safe, indent=2, default=str),
                     encoding="utf-8",
                 )
         except Exception:
