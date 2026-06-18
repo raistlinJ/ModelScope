@@ -125,8 +125,12 @@ def render() -> None:
             f"⚠️  Server URL is empty — defaulting to `{_default_u}`. "
             "Set it in **Configuration → Model Setup**."
         )
-    # Warn if the server is loaded with a different model than the one selected
-    if _backend == "llama.cpp" and llm_running and model_sel:
+    # Warn if the server is loaded with a different model than the one selected.
+    # Skip this check in remote/pre-compiled mode: the server reports a GGUF
+    # filename while selected_model_path holds an Ollama model ID — different
+    # naming formats for the same model, not a genuine mismatch.
+    _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
+    if _backend == "llama.cpp" and _src_mode != "pre_compiled_remote" and llm_running and model_sel:
         _info = llama_server.get_server_info((_url or _default_u))
         if _info and _info.get("model_path"):
             _running_base  = os.path.basename(_info["model_path"])
