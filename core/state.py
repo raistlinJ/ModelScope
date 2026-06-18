@@ -57,6 +57,9 @@ _DEFAULTS: dict = {
     "mcp_tools":             {},
     "mcp_running":           False,
 
+    # Active project (drives tool_focus and active_scenario defaults)
+    "active_project":     "file_creator",
+
     # Metrics setup
     "active_scenario":    DEFAULT_SCENARIO,
     "tool_focus":         _SCENARIO.get("related_tool", "file_creator"),

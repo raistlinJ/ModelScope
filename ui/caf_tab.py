@@ -119,78 +119,19 @@ def _prompt_list_editor() -> None:
                 st.rerun()
 
 
-# ── SSH target section ─────────────────────────────────────────────────────────
+# ── SSH status display (read-only) ─────────────────────────────────────────────
 
-def _ssh_target_section() -> None:
-    """Compact SSH target editor, pre-filled from config_tab values."""
+def _ssh_status_display() -> None:
+    """Read-only status showing the SSH target configured in the Target tab."""
     with st.expander("SSH Target (Kali machine)", expanded=True):
-        st.caption(
-            "These settings are shared with the main Execution Target in Configuration. "
-            "Changes here are reflected there and vice versa."
-        )
-        col_h, col_p = st.columns([4, 1])
-        with col_h:
-            st.text_input(
-                "Host",
-                key="target_ssh_host",
-                placeholder="192.168.x.x or hostname",
-            )
-        with col_p:
-            st.number_input(
-                "Port",
-                min_value=1,
-                max_value=65535,
-                step=1,
-                key="target_ssh_port",
-            )
-        col_u, col_pw = st.columns(2)
-        with col_u:
-            st.text_input("Username", key="target_ssh_user", placeholder="root")
-        with col_pw:
-            st.text_input("Password", type="password", key="target_ssh_password")
-        st.text_input(
-            "Private Key Path",
-            key="target_ssh_key_path",
-            placeholder="/home/user/.ssh/id_rsa (leave blank if using password)",
-        )
-        st.text_input(
-            "CAF Directory on Remote",
-            key="target_ssh_caf_dir",
-            placeholder="~/cyber-agent-flow",
-            help="Absolute or ~ path where CyberAgentFlow is installed on the Kali machine.",
-        )
-
-        col_test, _ = st.columns([2, 5])
-        with col_test:
-            if st.button("Test Connection", key="btn_caf_test_ssh", use_container_width=True):
-                _test_ssh()
-
-
-def _test_ssh() -> None:
-    from core.environment import SSHEnvironment
-    host     = st.session_state.get("target_ssh_host", "").strip()
-    port     = int(st.session_state.get("target_ssh_port") or 22)
-    username = st.session_state.get("target_ssh_user", "root")
-    password = st.session_state.get("target_ssh_password") or None
-    key_path = st.session_state.get("target_ssh_key_path") or None
-    caf_dir  = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
-
-    if not host:
-        st.error("Host is required.")
-        return
-    try:
-        env = SSHEnvironment(
-            host=host, port=port, username=username,
-            password=password, key_path=key_path, remote_cwd=caf_dir,
-        )
-        result = env.execute("echo OK", timeout=10)
-        env.close()
-        if result.get("stdout", "").strip() == "OK":
-            st.success(f"Connected to {username}@{host}:{port}")
+        host    = (st.session_state.get("target_ssh_host") or "").strip()
+        user    = st.session_state.get("target_ssh_user", "root")
+        caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
+        if host:
+            st.success(f"SSH Target: `{user}@{host}` | CAF dir: `{caf_dir}`")
+            st.caption("Change SSH settings in the **🎯 Target** tab.")
         else:
-            st.warning(f"Unexpected response: {result}")
-    except Exception as exc:
-        st.error(f"Connection failed: {exc}")
+            st.warning("SSH target not configured — set it in the **🎯 Target** tab.")
 
 
 # ── CAF 4-Pillar controls ──────────────────────────────────────────────────────
@@ -247,7 +188,7 @@ def _status_bar() -> None:
     if not model_sel:
         st.warning("⚠️ No model selected — choose one in **Configuration → Model Setup**.")
     if not ssh_host:
-        st.warning("⚠️ SSH host not set — fill in the **SSH Target** section below.")
+        st.warning("⚠️ SSH host not set — configure it in the **🎯 Target** tab.")
     if not prompts:
         st.error("⚠️ Prompt list is empty — add at least one prompt.")
 
@@ -256,7 +197,6 @@ def _status_bar() -> None:
 
 def render() -> None:
     _init_caf_prompts()
-    st.session_state.setdefault("target_ssh_port", 22)
 
     st.header("CyberAgentFlow Evaluation")
     st.caption(
@@ -275,7 +215,7 @@ def render() -> None:
         _prompt_list_editor()
 
     with col_right:
-        _ssh_target_section()
+        _ssh_status_display()
         st.write("")
         _pillar_controls()
 

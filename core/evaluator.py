@@ -15,6 +15,13 @@ from core.mcp_manager import call_mcp_tool
 from core.streaming import stream_ollama, stream_llama_cpp
 
 
+# ── ANSI helper ────────────────────────────────────────────────────────────────
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return re.sub(r'\x1b(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])', '', text)
+
+
 # ── Tool schema loading ────────────────────────────────────────────────────────
 
 def _load_tool_schemas(
@@ -402,6 +409,27 @@ def _pull_caf_artifacts(
 
     metadata: dict = {}
 
+    # Diagnostic: confirm what actually lives in the remote run directory before
+    # attempting individual file pulls. This catches two known failure modes:
+    # (a) the path doesn't exist at all (CAF wrote elsewhere), or
+    # (b) the shell cwd and SFTP cwd disagree (tilde-expansion mismatch in
+    #     SSHEnvironment.connect() where sftp.chdir("~/...") is a no-op).
+    try:
+        ls_result = env.execute(f"ls runs/{run_id}/ 2>/dev/null || echo 'DIR_NOT_FOUND'", timeout=10)
+        ls_out = _strip_ansi(ls_result.get("stdout", "")).strip()
+        if ls_out == "DIR_NOT_FOUND" or not ls_out:
+            # Directory absent under remote_cwd — search the whole home tree
+            find_result = env.execute(
+                f"find . -name 'metadata.json' -path '*{run_id}*' 2>/dev/null | head -5",
+                timeout=15,
+            )
+            found = _strip_ansi(find_result.get("stdout", "")).strip()
+            on_log(f"[CAF] Searching for run artifacts: {found or 'not found'}")
+        else:
+            on_log(f"[CAF] Run directory contents: {ls_out}")
+    except Exception as diag_exc:
+        on_log(f"[CAF] Could not list run directory: {diag_exc}")
+
     for fname in ("transcript.md", "metadata.json"):
         remote_path = f"runs/{run_id}/{fname}"
         try:
@@ -553,13 +581,13 @@ def run_caf_ssh_evaluation(
     on_log(f"[CAF] Executing on {env.host} (this may take several minutes)…")
 
     result = env.execute(cmd, timeout=600)
-    combined_output = result["stdout"] + result["stderr"]
+    combined_output = _strip_ansi(result["stdout"] + result["stderr"])
 
     on_log(f"[CAF] Exit code: {result['exit_code']}")
     if result["stdout"]:
-        on_log(f"[CAF OUTPUT]\n{result['stdout'][:1000]}")
+        on_log(f"[CAF OUTPUT]\n{_strip_ansi(result['stdout'])[:2000]}")
     if result["stderr"]:
-        on_log(f"[CAF STDERR]\n{result['stderr'][:500]}")
+        on_log(f"[CAF STDERR]\n{_strip_ansi(result['stderr'])[:500]}")
 
     run_id = _parse_caf_run_id(combined_output)
     if not run_id:

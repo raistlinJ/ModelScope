@@ -1,5 +1,6 @@
 """
 Unit tests for the CAF SSH helper functions in core.evaluator:
+  - _strip_ansi
   - _pull_caf_artifacts
   - _telemetry_from_caf
   - run_caf_ssh_evaluation
@@ -10,11 +11,54 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 from core.evaluator import (
+    _strip_ansi,
     _pull_caf_artifacts,
     _telemetry_from_caf,
     run_caf_ssh_evaluation,
     _init_telemetry,
 )
+
+
+# ── _strip_ansi ───────────────────────────────────────────────────────────────
+
+class TestStripAnsi:
+    def test_removes_color_codes(self):
+        raw = "\x1b[38;5;246m[status]\x1b[0m Starting session..."
+        assert _strip_ansi(raw) == "[status] Starting session..."
+
+    def test_removes_cursor_control_sequences(self):
+        # ESC[1;21r  ESC[22;1H  ESC[K
+        raw = "\x1b[1;21r\x1b[22;1H\x1b[K waiting"
+        assert _strip_ansi(raw) == " waiting"
+
+    def test_removes_bold_and_reset(self):
+        raw = "\x1b[1mbold text\x1b[0m normal"
+        assert _strip_ansi(raw) == "bold text normal"
+
+    def test_plain_text_unchanged(self):
+        text = "[run] Transcript: runs/2026-06-18_14-41-10_cli/transcript.md"
+        assert _strip_ansi(text) == text
+
+    def test_empty_string(self):
+        assert _strip_ansi("") == ""
+
+    def test_run_id_still_parseable_after_strip(self):
+        """Stripping ANSI from CAF output must not destroy the run_id line."""
+        from core.evaluator import _parse_caf_run_id
+        raw = (
+            "\x1b[1m[run]\x1b[0m Transcript: \x1b[32mruns/2026-06-18_14-41-10_cli/"
+            "transcript.md\x1b[0m"
+        )
+        cleaned = _strip_ansi(raw)
+        run_id = _parse_caf_run_id(cleaned)
+        assert run_id == "2026-06-18_14-41-10_cli"
+
+    def test_multiple_sequences_in_one_string(self):
+        raw = "\x1b[38;5;246m[status]\x1b[0m \x1b[1;21r\x1b[22;1H\x1b[K \x1b[2mwaiting\x1b[0m"
+        result = _strip_ansi(raw)
+        assert "\x1b" not in result
+        assert "status" in result
+        assert "waiting" in result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

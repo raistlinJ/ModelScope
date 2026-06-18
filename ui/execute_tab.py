@@ -132,11 +132,29 @@ def render() -> None:
             _running_base  = os.path.basename(_info["model_path"])
             _selected_base = os.path.basename(st.session_state.get("selected_model_path") or "")
             if _running_base and _selected_base and _running_base != _selected_base:
-                st.error(
-                    f"🚨  Model mismatch: server is running **{_running_base}** "
-                    f"but **{_selected_base}** is selected. "
-                    f"Go to **Configuration → llama-server → Restart** to load the correct model."
-                )
+                col_warn, col_fix = st.columns([5, 1])
+                with col_warn:
+                    st.error(
+                        f"🚨  Model mismatch: server running **{_running_base}** "
+                        f"but **{_selected_base}** is selected."
+                    )
+                with col_fix:
+                    if st.button(
+                        "↺ Restart",
+                        key="btn_exec_restart_mismatch",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        from core import llama_server as _ls
+                        _ls.stop()
+                        _mp = st.session_state.get("selected_model_path")
+                        if _mp:
+                            ok, msg = _ls.start(
+                                _mp,
+                                context_size=st.session_state.get("context_size", 4096),
+                            )
+                            st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
+                        st.rerun()
 
     # ── Active scenario / tool info ────────────────────────────────────────────
     _active_sc  = st.session_state.get("active_scenario", "")
@@ -179,7 +197,7 @@ def render() -> None:
 
     if not ssh_ready:
         st.warning(
-            "⚠️ SSH host is required — configure it in **Configuration → Execution Target**."
+            "⚠️ SSH host is required — configure it in the **🎯 Target** tab."
         )
 
     col_run, col_cancel, col_clear = st.columns([3, 1, 1])

@@ -7,7 +7,7 @@ from core import llama_server
 from core.logsetup import configure_logging
 from ui.components import status_pill
 from ui.styles import inject
-from ui import config_tab, execute_tab, dashboard_tab, batch_tab, comparison_tab, caf_tab
+from ui import config_tab, execute_tab, dashboard_tab, batch_tab, comparison_tab, caf_tab, target_tab
 
 st.set_page_config(
     page_title="ModelScope",
@@ -115,8 +115,9 @@ with _restart_col:
             st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
         st.rerun()
 
-tab_cfg, tab_exec, tab_caf, tab_dash, tab_batch, tab_compare = st.tabs([
+tab_cfg, tab_target, tab_exec, tab_caf, tab_dash, tab_batch, tab_compare = st.tabs([
     "⚙  Configuration",
+    "🎯  Target",
     "▶  Execute Evaluation",
     "🤖  CyberAgentFlow",
     "📊  Analytical Dashboard",
@@ -126,6 +127,9 @@ tab_cfg, tab_exec, tab_caf, tab_dash, tab_batch, tab_compare = st.tabs([
 
 with tab_cfg:
     config_tab.render()
+
+with tab_target:
+    target_tab.render()
 
 with tab_exec:
     execute_tab.render()

@@ -26,6 +26,9 @@ PERSIST_KEYS: frozenset[str] = frozenset({
     "model_source_mode",
     "external_llm_url",
 
+    # Active project
+    "active_project",
+
     # Target environment
     "target_env_type",
     "target_ssh_host",

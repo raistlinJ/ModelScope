@@ -61,8 +61,43 @@ def render() -> None:
             from core.settings_store import save_settings
             save_settings(st.session_state)
             st.toast("Settings saved!", icon="✅")
-    sub_model, sub_metrics, sub_judge, sub_verify = st.tabs(
-        ["⚙  Model Setup", "📐  Metrics Setup", "🤖  AI Judge", "🔬  Platform Verification"]
+
+    # ── Active Project selector ────────────────────────────────────────────────
+    st.subheader("Active Project")
+    _PROJECT_OPTIONS = {
+        "file_creator":   "📁  File Creator  — local file creation benchmark",
+        "nmap_scanner":   "🔍  Network Scanner  — nmap reconnaissance benchmark",
+        "cyberagentflow": "🤖  CyberAgentFlow  — remote autonomous pentest (CAF)",
+    }
+    project = st.radio(
+        "Project",
+        options=list(_PROJECT_OPTIONS.keys()),
+        format_func=lambda k: _PROJECT_OPTIONS[k],
+        key="active_project",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    # Sync project selection to tool_focus and active_scenario
+    _PROJECT_TOOL_MAP = {
+        "file_creator":   "file_creator",
+        "nmap_scanner":   "run_nmap_scan",
+        "cyberagentflow": "mcp_kali_run_command",
+    }
+    if st.session_state.get("_last_project") != project:
+        st.session_state["tool_focus"]    = _PROJECT_TOOL_MAP[project]
+        st.session_state["_last_project"] = project
+        _sc = {
+            "file_creator":   "Scenario 1 – File Creation",
+            "nmap_scanner":   "Scenario 2 – Network Scan",
+            "cyberagentflow": "CAF – Reconnaissance",
+        }.get(project, "")
+        if _sc:
+            st.session_state["active_scenario"] = _sc
+            sync_scenario(_sc)
+    st.divider()
+
+    sub_model, sub_metrics, sub_judge = st.tabs(
+        ["⚙  Model Setup", "📐  Metrics Setup", "🤖  AI Judge"]
     )
     with sub_model:
         _model_setup()
@@ -71,8 +106,6 @@ def render() -> None:
     with sub_judge:
         from ui.judge_config import render as _render_judge
         _render_judge()
-    with sub_verify:
-        _platform_verification()
 
 
 def _platform_verification() -> None:
@@ -101,65 +134,25 @@ def _model_setup() -> None:
         st.session_state["llm_models"]    = []
         st.session_state["selected_model"] = None
 
-    # ── Model Source ───────────────────────────────────────────────────────────
-    with st.expander("Model Source", expanded=True):
-        _model_source_section()
-
-    # Resolve the effective source mode before the backend section reads it
-    _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
-
-    # ── Execution Target ───────────────────────────────────────────────────────
-    with st.expander("Execution Target", expanded=False):
-        target_env = st.selectbox(
-            "Mode",
-            options=["local", "remote (SSH)"],
-            index=0 if st.session_state.get("target_env_type", "local") == "local" else 1,
-            key="target_env_type",
-            help="Where evaluation commands and CAF will execute.",
-        )
-        if target_env == "remote (SSH)":
-            st.caption("SSH credentials for the remote Kali machine running CyberAgentFlow.")
-            c_host, c_port = st.columns([3, 1])
-            with c_host:
-                st.text_input("Host", key="target_ssh_host", placeholder="192.168.1.100")
-            with c_port:
-                st.number_input(
-                    "Port", key="target_ssh_port",
-                    min_value=1, max_value=65535, step=1,
-                )
-            c_user, c_pass = st.columns(2)
-            with c_user:
-                st.text_input("Username", key="target_ssh_user", placeholder="root")
-            with c_pass:
-                st.text_input(
-                    "Password", key="target_ssh_password",
-                    type="password", placeholder="(leave blank if using key)",
-                )
-            st.text_input(
-                "Key Path", key="target_ssh_key_path",
-                placeholder="/home/user/.ssh/id_rsa",
-                help="Path to SSH private key on THIS machine. Leave blank to use password.",
-            )
-            st.text_input(
-                "Remote CAF Directory",
-                key="target_ssh_caf_dir",
-                placeholder="~/cyber-agent-flow",
-                help="Absolute path on the remote machine where CyberAgentFlow is installed.",
-            )
-            col_test, _ = st.columns([2, 5])
-            with col_test:
-                if st.button("Test Connection", key="btn_test_ssh", use_container_width=True):
-                    _test_ssh_connection()
-
-    # ── Backend & Model ────────────────────────────────────────────────────────
+    # ── Backend & Model (with Model Source merged at the top) ──────────────────
     # The "remote pre-compiled" source mode bypasses local backend machinery
     # entirely — the server is already running at the external URL.
     _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
 
-    if _src_mode == "pre_compiled_remote":
-        _remote_model_section()
-    else:
-        with st.expander("Backend & Model", expanded=True):
+    with st.expander("Backend & Model", expanded=True):
+        # ── Model Source (merged here from the old separate expander) ──────────
+        _model_source_section()
+        st.divider()
+
+        # Re-read mode after the selectbox above may have changed it
+        _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
+
+        if _src_mode == "pre_compiled_remote":
+            # Remote mode renders its own sub-section (URL fetch, model select,
+            # context slider, status check).  Local server controls are absent.
+            _remote_model_section_inline()
+        else:
+            # ── Local / compile mode — Backend & Connection ────────────────────
             st.subheader("Backend & Connection")
             c_be, c_url = st.columns([2, 5])
             with c_be:
@@ -292,39 +285,6 @@ def _caf_config_section() -> None:
         f"Subnets: {len(subnets)} | Credentials: {len(creds)}"
     )
 
-
-def _test_ssh_connection() -> None:
-    """Attempt a probe connection and show success or error inline."""
-    import paramiko
-    host     = (st.session_state.get("target_ssh_host") or "").strip()
-    port     = int(st.session_state.get("target_ssh_port") or 22)
-    user     = (st.session_state.get("target_ssh_user") or "").strip()
-    password = st.session_state.get("target_ssh_password") or ""
-    key_path = (st.session_state.get("target_ssh_key_path") or "").strip()
-    if not host:
-        st.error("Host is required.")
-        return
-    try:
-        client = paramiko.SSHClient()
-        # SECURITY: AutoAddPolicy trusts unknown host keys (no MITM protection).
-        # Intended only for the trusted lab network this tool targets; mirror any
-        # change here with the policy in core/environment.py.
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
-        if key_path:
-            kwargs["key_filename"] = key_path
-        if password:
-            kwargs["password"] = password
-        client.connect(**kwargs)
-        _, stdout, _ = client.exec_command("echo ok")
-        result = stdout.read().decode().strip()
-        client.close()
-        if result == "ok":
-            st.success(f"Connected to {user}@{host}:{port}")
-        else:
-            st.warning(f"Connected but unexpected echo: {result!r}")
-    except Exception as exc:
-        st.error(f"Connection failed: {exc}")
 
 
 def _llama_server_controls() -> None:
@@ -635,117 +595,123 @@ def _compile_gguf_section() -> None:
             st.error(f"Compile failed: {result}")
 
 
-def _remote_model_section() -> None:
+def _remote_model_section_inline() -> None:
     """
-    UI for the 'Pre-compiled (remote server endpoint)' mode.
-    Connects to an external llama.cpp server and lets the user pick a model.
+    Inline UI for the 'Pre-compiled (remote server endpoint)' mode.
+    Rendered inside the Backend & Model expander — no extra wrapper.
     Local server start/stop controls are intentionally absent here.
     """
-    with st.expander("Remote Endpoint & Model", expanded=True):
-        st.subheader("Remote llama.cpp Server")
-        st.caption(
-            "Connect to an external llama.cpp server. "
-            "Server management (start/stop) is not available for remote endpoints."
+    st.subheader("Remote llama.cpp Server")
+    st.caption(
+        "Connect to an external llama.cpp server. "
+        "Server management (start/stop) is not available for remote endpoints."
+    )
+
+    col_url, col_fetch = st.columns([5, 1])
+    with col_url:
+        if not (st.session_state.get("external_llm_url") or "").strip():
+            st.session_state["external_llm_url"] = EXTERNAL_LLAMA_CPP_URL
+        st.text_input("Server URL", key="external_llm_url")
+    with col_fetch:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("Fetch", use_container_width=True, key="btn_fetch_remote_models"):
+            found, err = fetch_llama_cpp_models(st.session_state["external_llm_url"])
+            if found:
+                st.session_state["external_llm_models"] = found
+                st.success(f"{len(found)} model(s) available")
+            elif err:
+                st.error(err)
+            else:
+                st.warning("No models returned — is the server running?")
+
+    remote_models = st.session_state.get("external_llm_models", [])
+
+    # If no models fetched yet, seed from the known external model constant
+    if not remote_models:
+        remote_models = [
+            {
+                "name":         EXTERNAL_LLAMA_CPP_MODEL,
+                "path":         EXTERNAL_LLAMA_CPP_MODEL,
+                "size_gb":      22.1,
+                "context_size": 262144,
+                "source":       "remote",
+            }
+        ]
+        st.info(
+            f"Known model pre-loaded: `{EXTERNAL_LLAMA_CPP_MODEL}`. "
+            "Click **Fetch** to refresh from the server."
         )
 
-        col_url, col_fetch = st.columns([5, 1])
-        with col_url:
-            if not (st.session_state.get("external_llm_url") or "").strip():
-                st.session_state["external_llm_url"] = EXTERNAL_LLAMA_CPP_URL
-            st.text_input("Server URL", key="external_llm_url")
-        with col_fetch:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("Fetch", use_container_width=True, key="btn_fetch_remote_models"):
-                found, err = fetch_llama_cpp_models(st.session_state["external_llm_url"])
-                if found:
-                    st.session_state["external_llm_models"] = found
-                    st.success(f"{len(found)} model(s) available")
-                elif err:
-                    st.error(err)
+    labels    = []
+    for m in remote_models:
+        size_str = f"{m.get('size_gb', '?')} GB" if m.get("size_gb") else "?"
+        ctx_str  = f"  ctx: {m['context_size']:,}" if m.get("context_size") else ""
+        labels.append(f"{m['name']}  ({size_str}{ctx_str})")
+
+    raw_names = [m["name"] for m in remote_models]
+    cur       = st.session_state.get("external_selected_model", EXTERNAL_LLAMA_CPP_MODEL)
+    idx       = raw_names.index(cur) if cur in raw_names else 0
+
+    sel_label = st.selectbox(
+        "Select Remote Model",
+        options=labels,
+        index=idx,
+        key="_remote_model_label_sel",
+    )
+    sel_name = raw_names[labels.index(sel_label)]
+
+    # Write the selection into the standard eval keys so the evaluator
+    # doesn't need to know about the source mode.
+    st.session_state["external_selected_model"] = sel_name
+    st.session_state["selected_model"]          = sel_name
+    st.session_state["selected_model_path"]     = sel_name  # remote: name IS the path
+    st.session_state["backend_type"]            = "llama.cpp"
+    st.session_state["llm_url"]                 = st.session_state["external_llm_url"]
+
+    sel_meta = next((m for m in remote_models if m["name"] == sel_name), {})
+    parts = [f"Source: remote  |  URL: `{st.session_state['external_llm_url']}`"]
+    if sel_meta.get("size_gb"):
+        parts.append(f"Size: `{sel_meta['size_gb']} GB`")
+    if sel_meta.get("context_size"):
+        ctx_val = int(sel_meta["context_size"])
+        parts.append(f"Max ctx: `{ctx_val:,}`")
+        # Push the remote server's n_ctx into the context slider when it
+        # would otherwise be capped below the server's capability.
+        if ctx_val > st.session_state.get("context_size", 0):
+            st.session_state["context_size"] = min(ctx_val, MAX_CONTEXT_SIZE)
+    st.caption("  |  ".join(parts))
+
+    # Remote server status (read-only — no start/stop)
+    ext_url = st.session_state.get("external_llm_url", "")
+    if ext_url:
+        col_chk, _ = st.columns([2, 5])
+        with col_chk:
+            if st.button("Check Status", key="btn_check_remote_status", use_container_width=True):
+                info = llama_server.get_server_info(ext_url)
+                if info:
+                    st.success(
+                        f"Online  |  model: `{(info.get('model_path') or '').split('/')[-1]}`"
+                        f"  |  n_ctx: `{info.get('n_ctx', '?')}`"
+                    )
                 else:
-                    st.warning("No models returned — is the server running?")
+                    st.error("Could not reach server. Check the URL and server status.")
 
-        remote_models = st.session_state.get("external_llm_models", [])
+    st.subheader("Context Window")
+    st.slider(
+        "Tokens",
+        min_value=MIN_CONTEXT_SIZE,
+        max_value=MAX_CONTEXT_SIZE,
+        step=CONTEXT_STEP,
+        key="context_size",
+        help="Tokens sent per request. Remote server's actual n_ctx is shown via Check Status.",
+    )
 
-        # If no models fetched yet, seed from the known external model constant
-        if not remote_models:
-            remote_models = [
-                {
-                    "name":         EXTERNAL_LLAMA_CPP_MODEL,
-                    "path":         EXTERNAL_LLAMA_CPP_MODEL,
-                    "size_gb":      22.1,
-                    "context_size": 262144,
-                    "source":       "remote",
-                }
-            ]
-            st.info(
-                f"Known model pre-loaded: `{EXTERNAL_LLAMA_CPP_MODEL}`. "
-                "Click **Fetch** to refresh from the server."
-            )
 
-        labels    = []
-        for m in remote_models:
-            size_str = f"{m.get('size_gb', '?')} GB" if m.get("size_gb") else "?"
-            ctx_str  = f"  ctx: {m['context_size']:,}" if m.get("context_size") else ""
-            labels.append(f"{m['name']}  ({size_str}{ctx_str})")
-
-        raw_names = [m["name"] for m in remote_models]
-        cur       = st.session_state.get("external_selected_model", EXTERNAL_LLAMA_CPP_MODEL)
-        idx       = raw_names.index(cur) if cur in raw_names else 0
-
-        sel_label = st.selectbox(
-            "Select Remote Model",
-            options=labels,
-            index=idx,
-            key="_remote_model_label_sel",
-        )
-        sel_name = raw_names[labels.index(sel_label)]
-
-        # Write the selection into the standard eval keys so the evaluator
-        # doesn't need to know about the source mode.
-        st.session_state["external_selected_model"] = sel_name
-        st.session_state["selected_model"]          = sel_name
-        st.session_state["selected_model_path"]     = sel_name  # remote: name IS the path
-        st.session_state["backend_type"]            = "llama.cpp"
-        st.session_state["llm_url"]                 = st.session_state["external_llm_url"]
-
-        sel_meta = next((m for m in remote_models if m["name"] == sel_name), {})
-        parts = [f"Source: remote  |  URL: `{st.session_state['external_llm_url']}`"]
-        if sel_meta.get("size_gb"):
-            parts.append(f"Size: `{sel_meta['size_gb']} GB`")
-        if sel_meta.get("context_size"):
-            ctx_val = int(sel_meta["context_size"])
-            parts.append(f"Max ctx: `{ctx_val:,}`")
-            # Push the remote server's n_ctx into the context slider when it
-            # would otherwise be capped below the server's capability.
-            if ctx_val > st.session_state.get("context_size", 0):
-                st.session_state["context_size"] = min(ctx_val, MAX_CONTEXT_SIZE)
-        st.caption("  |  ".join(parts))
-
-        # Remote server status (read-only — no start/stop)
-        ext_url = st.session_state.get("external_llm_url", "")
-        if ext_url:
-            col_chk, _ = st.columns([2, 5])
-            with col_chk:
-                if st.button("Check Status", key="btn_check_remote_status", use_container_width=True):
-                    info = llama_server.get_server_info(ext_url)
-                    if info:
-                        st.success(
-                            f"Online  |  model: `{(info.get('model_path') or '').split('/')[-1]}`"
-                            f"  |  n_ctx: `{info.get('n_ctx', '?')}`"
-                        )
-                    else:
-                        st.error("Could not reach server. Check the URL and server status.")
-
-        st.subheader("Context Window")
-        st.slider(
-            "Tokens",
-            min_value=MIN_CONTEXT_SIZE,
-            max_value=MAX_CONTEXT_SIZE,
-            step=CONTEXT_STEP,
-            key="context_size",
-            help="Tokens sent per request. Remote server's actual n_ctx is shown via Check Status.",
-        )
+def _remote_model_section() -> None:
+    """
+    Kept for backward compatibility. Renders inline content directly.
+    """
+    _remote_model_section_inline()
 
 
 def _gguf_model_selector() -> None:
