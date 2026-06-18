@@ -235,6 +235,18 @@ def render() -> None:
     )
 
     _status_bar()
+
+    # Warn if a non-CAF scenario is active so the user knows it will be
+    # auto-switched before the run starts.
+    _active_sc = st.session_state.get("active_scenario", "")
+    if _active_sc and not _active_sc.startswith("CAF"):
+        st.warning(
+            f"⚠️ Active scenario **{_active_sc}** is not a CAF scenario. "
+            f"It will be automatically switched to **{_CAF_DEFAULT_SCENARIO}** "
+            "when you run — or go to **⚙ Configuration → Projects** and select "
+            "**CyberAgentFlow**."
+        )
+
     st.divider()
 
     # ── Left / right column layout ─────────────────────────────────────────────
@@ -286,11 +298,36 @@ def render() -> None:
 
 # ── Execution logic ────────────────────────────────────────────────────────────
 
+_CAF_DEFAULT_SCENARIO = "CAF – Reconnaissance"
+
+
+def _ensure_caf_scenario() -> str:
+    """Auto-sync to the default CAF scenario if the active scenario is not CAF-specific.
+
+    Returns the effective scenario key.
+    """
+    from config.scenarios import SCENARIOS
+    from core.state import sync_scenario
+
+    active = st.session_state.get("active_scenario", "")
+    if not active.startswith("CAF"):
+        sync_scenario(_CAF_DEFAULT_SCENARIO)
+        st.session_state["active_scenario"] = _CAF_DEFAULT_SCENARIO
+        return _CAF_DEFAULT_SCENARIO
+    return active
+
+
 def _execute_caf_runs(log_placeholder) -> None:
     """Run each CAF prompt sequentially, streaming logs into the terminal widget."""
     from core.environment import SSHEnvironment
     from core.evaluator import run_caf_ssh_evaluation
     from config.defaults import MAX_RUN_HISTORY
+
+    # Guard: silently switch to the default CAF scenario if a non-CAF scenario
+    # (e.g. "Scenario 1 – File Creation") is still active.  This prevents the
+    # wrong validation_command / fail_patterns / sys_prompt from bleeding into
+    # the CAF evaluation.
+    _ensure_caf_scenario()
 
     prompts  = list(st.session_state.get("caf_prompts", []))
     model    = st.session_state.get("selected_model", "")
