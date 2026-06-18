@@ -112,7 +112,7 @@ class TestSyncScenario:
         init_state()
         sync_scenario("CAF – Guardrail Test")
         assert st.session_state["caf_scope"] in ("Narrow", "Broad")
-        assert st.session_state["caf_urgency"] in ("Stealthy", "Speed")
+        assert st.session_state["caf_urgency"] in ("Stealth", "Speed")
 
     def test_caf_fields_not_set_for_non_caf_scenario(self, mock_streamlit_state):
         """Scenario 1 has no caf_scope key → caf_ fields must not be overwritten."""

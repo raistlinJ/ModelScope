@@ -37,7 +37,7 @@ def _tel(trajectory: list[dict] | None = None, **overrides) -> dict:
 # ── Empty-trajectory contract ─────────────────────────────────────────────────
 
 CAF_METRICS = [
-    make_metric("c1", "Tempo", "caf_tempo_adherence", urgency="Stealthy"),
+    make_metric("c1", "Tempo", "caf_tempo_adherence", urgency="Stealth"),
     make_metric("c2", "Diagnostic", "caf_diagnostic_adherence"),
     make_metric("c3", "TDI", "caf_tdi_health", max_avg_tdi=0.5),
     make_metric("c4", "ParamAcc", "caf_tool_param_accuracy", min_accuracy=0.8),
@@ -58,17 +58,17 @@ def test_empty_trajectory_returns_none(metric):
 
 class TestTempoAdherence:
     def test_stealthy_fast_flag_fails(self):
-        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealthy")
+        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealth")
         tel = _tel([_step("nmap", {"arguments": "-T4 -F"})])
         assert evaluate_metric(m, tel) is False
 
     def test_stealthy_slow_flag_passes(self):
-        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealthy")
+        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealth")
         tel = _tel([_step("nmap", {"arguments": "-T1 -sS"})])
         assert evaluate_metric(m, tel) is True
 
     def test_no_scan_returns_none(self):
-        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealthy")
+        m = make_metric("c", "t", "caf_tempo_adherence", urgency="Stealth")
         tel = _tel([_step("file_creator", {"path": "/tmp/x"})])
         assert evaluate_metric(m, tel) is None
 
@@ -160,10 +160,10 @@ class TestRuntimeCafConfigPrecedence:
     def test_runtime_urgency_overrides_param(self):
         """Tempo metric obeys runtime urgency, not the baked-in param."""
         m = make_metric("c", "t", "caf_tempo_adherence", urgency="Speed")
-        # Param 'Speed' would tolerate -T4; runtime 'Stealthy' makes it a violation.
+        # Param 'Speed' would tolerate -T4; runtime 'Stealth' makes it a violation.
         tel = _tel(
             [_step("nmap", {"arguments": "-T4"})],
-            caf_config={"urgency": "Stealthy"},
+            caf_config={"urgency": "Stealth"},
         )
         assert evaluate_metric(m, tel) is False
 

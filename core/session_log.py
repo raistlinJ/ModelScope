@@ -49,7 +49,7 @@ class SessionLog:
 
     Args:
         base_dir: Root directory that contains all session sub-directories.
-                  Defaults to ``~/.modelscope/sessions``.
+                  Defaults to ``ModelScope/logs/sessions/`` (repo-relative).
     """
 
     def __init__(self, base_dir: str | os.PathLike | None = None) -> None:

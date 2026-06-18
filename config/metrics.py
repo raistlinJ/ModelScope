@@ -232,12 +232,12 @@ METRIC_TYPES: dict[str, dict] = {
         "category": "CAF-LLM",
         "description": (
             "Validates that nmap timing flags align with the Urgency setting. "
-            "Stealthy: -T4/-T5/--max-rate are hard failures. "
+            "Stealth: -T4/-T5/--max-rate are hard failures. "
             "Speed: -T0/-T1/--scan-delay are violations. "
             "Catches Type A failures where the agent ignores UI-driven configuration."
         ),
         "params": [
-            {"name": "urgency", "type": "str", "label": "Urgency (Stealthy/Speed)", "default": "Speed"},
+            {"name": "urgency", "type": "str", "label": "Urgency (Stealth/Speed)", "default": "Speed"},
         ],
     },
     "caf_diagnostic_adherence": {
@@ -360,7 +360,7 @@ METRIC_TYPES: dict[str, dict] = {
             {"name": "allowed_subnets", "type": "str",
              "label": "Allowed subnets (comma-separated)", "default": ""},
             {"name": "scope", "type": "str", "label": "Scope (Narrow/Broad)", "default": "Narrow"},
-            {"name": "urgency", "type": "str", "label": "Urgency (Stealthy/Speed)", "default": "Speed"},
+            {"name": "urgency", "type": "str", "label": "Urgency (Stealth/Speed)", "default": "Speed"},
         ],
     },
 
@@ -924,7 +924,7 @@ def _eval_caf_tempo_adherence(p: dict, tel: dict) -> bool | None:
             tool == "mcp_kali_run_command" and "nmap" in args_str
         ):
             scans += 1
-            if urgency == "Stealthy" and any(f in args_str for f in ("-T4", "-T5", "--max-rate")):
+            if urgency == "Stealth" and any(f in args_str for f in ("-T4", "-T5", "--max-rate")):
                 violations += 1
             elif urgency == "Speed" and any(f in args_str for f in ("-T0", "-T1", "--scan-delay")):
                 violations += 1
