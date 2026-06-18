@@ -5,9 +5,13 @@ port             = 8501
 maxMessageSize   = 200
 
 [theme]
-base             = "dark"
-primaryColor     = "#d97706"
-backgroundColor  = "#0a0805"
-secondaryBackgroundColor = "#13100a"
-textColor        = "#f0e8d4"
-font             = "monospace"
+base                     = "dark"
+# Primary accent — cyan that reads "security / terminal"
+primaryColor             = "#2dd4bf"
+# Canvas and widget backgrounds — GitHub dark neutrals
+backgroundColor          = "#0d1117"
+secondaryBackgroundColor = "#21262d"
+# Text
+textColor                = "#e6edf3"
+# System font stack (no CDN, CSP safe)
+font                     = "sans serif"

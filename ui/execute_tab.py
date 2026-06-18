@@ -204,16 +204,17 @@ def render() -> None:
     with col_run:
         run_btn = st.button(
             "▶  Run Evaluation",
+            key="btn_exec_run",
             type="primary",
             use_container_width=True,
             disabled=run_in_progress or not model_chosen or not ssh_ready,
         )
     with col_cancel:
         # Cancel button (fix #16)
-        if st.button("⏹  Cancel", use_container_width=True, disabled=not run_in_progress):
+        if st.button("⏹  Cancel", key="btn_exec_cancel", use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
     with col_clear:
-        if st.button("Clear Log", use_container_width=True):
+        if st.button("Clear Log", key="btn_exec_clear_log", use_container_width=True):
             st.session_state["run_logs"]          = []
             st.session_state["run_completed"]     = False
             st.session_state["telemetry"]         = {}

@@ -56,7 +56,7 @@ def render() -> None:
     with col_h:
         st.header("Configuration")
     with col_save:
-        if st.button("💾 Save Settings", use_container_width=True,
+        if st.button("💾 Save Settings", key="btn_save_settings", use_container_width=True,
                      help="Save current configuration to ~/.modelscope/settings.json"):
             from core.settings_store import save_settings
             save_settings(st.session_state)
@@ -434,7 +434,7 @@ def _mcp_server_section() -> None:
     # ── Fetch MCP Tools ───────────────────────────────────────────────────────
     col_ft, _ = st.columns([2, 5])
     with col_ft:
-        if st.button("Fetch MCP Tools", use_container_width=True):
+        if st.button("Fetch MCP Tools", key="btn_fetch_mcp_tools", use_container_width=True):
             _url = st.session_state.get("mcp_server_url", MCP_SERVER_BASE_URL)
             tools = discover_tools(st.session_state["mcp_url"], base_url=_url)
             if tools:
@@ -765,7 +765,7 @@ def _gguf_model_selector() -> None:
 def _ollama_model_selector() -> None:
     col_btn, _ = st.columns([3, 4])
     with col_btn:
-        if st.button("Fetch Ollama Models", use_container_width=True):
+        if st.button("Fetch Ollama Models", key="btn_fetch_ollama_models", use_container_width=True):
             found, err = fetch_ollama_models(st.session_state["llm_url"])
             if found:
                 st.session_state["llm_models"] = [

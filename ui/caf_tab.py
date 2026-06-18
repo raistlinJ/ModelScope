@@ -157,14 +157,19 @@ def _pillar_controls() -> None:
                 help="Speed = fast BFS  |  Stealth = quiet DFS  |  Balanced = TDI-adaptive",
             )
 
-        val_cmd = st.text_input(
+        def _sync_val_cmd():
+            st.session_state["validation_command"] = st.session_state.get(
+                "caf_tab_validation_command", ""
+            )
+
+        st.text_input(
             "Validation Command (optional)",
             value=st.session_state.get("validation_command", ""),
             key="caf_tab_validation_command",
             placeholder="e.g. nmap 10.0.0.1 -p 22",
             help="Shell command run on the remote after each CAF run to verify success.",
+            on_change=_sync_val_cmd,
         )
-        st.session_state["validation_command"] = val_cmd
 
 
 # ── Status bar ─────────────────────────────────────────────────────────────────
@@ -232,15 +237,16 @@ def render() -> None:
     with col_run:
         run_btn = st.button(
             "▶  Run CAF Evaluation",
+            key="btn_caf_run",
             type="primary",
             use_container_width=True,
             disabled=not can_run,
         )
     with col_cancel:
-        if st.button("⏹  Cancel", use_container_width=True, disabled=not run_in_progress):
+        if st.button("⏹  Cancel", key="btn_caf_cancel", use_container_width=True, disabled=not run_in_progress):
             st.session_state["_caf_cancel_requested"] = True
     with col_clear:
-        if st.button("Clear Log", use_container_width=True):
+        if st.button("Clear Log", key="btn_caf_clear_log", use_container_width=True):
             st.session_state["caf_run_logs"]          = []
             st.session_state["_caf_run_in_progress"]  = False
             st.session_state["_caf_cancel_requested"] = False
