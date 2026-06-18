@@ -2,14 +2,17 @@
 Dedicated CyberAgentFlow (CAF) evaluation tab.
 
 Provides:
-  - Multi-prompt list so each CAF run can target a different objective
+  - Multi-prompt list with scenario preset loading
   - CAF scope / urgency 4-Pillar controls
   - SSH execution target (pre-filled from config_tab settings)
-  - Run / Cancel / Clear controls with live terminal output
+  - Real-time streaming terminal output (background thread + queue)
+  - Interactive input panel for responding to CAF decision prompts
+    ([approval] dangerous commands, [timeout] actions, [decision] retries)
 """
 from __future__ import annotations
 
-import os
+import queue
+import threading
 import time
 import streamlit as st
 
@@ -31,10 +34,24 @@ _LOG_TAG_MAP = {
     "[ABORTED]":      "warn",
 }
 
+# CAF real-time stream tags (detected inside [STREAM] lines)
+_STREAM_INNER_TAGS = {
+    "[tool]":      "tool",
+    "[result]":    "result",
+    "[decision]":  "decision",
+    "[approval]":  "decision",
+    "[timeout]":   "decision",
+}
+
 
 def _tag(line: str) -> str:
-    # For [CAF OUTPUT] lines, inspect the inner content for [tool]/[result] markers
-    # so tool calls that arrive embedded in stdout blobs get highlighted correctly.
+    if line.startswith("[STREAM]"):
+        inner = line[len("[STREAM]"):].lstrip()
+        for marker, tag in _STREAM_INNER_TAGS.items():
+            if inner.startswith(marker):
+                return tag
+        return "stream"
+    # For legacy [CAF OUTPUT] blobs — detect tool/result inside
     if line.startswith("[CAF OUTPUT]"):
         inner = line[len("[CAF OUTPUT]"):].lstrip()
         if inner.startswith("[tool]"):
@@ -59,12 +76,9 @@ def _render_terminal(placeholder, logs: list[dict]) -> None:
     for entry in logs:
         raw = entry["text"].replace("\\n", "\n")
         raw = re.sub(r"\n{3,}", "\n\n", raw)
-        # Split multi-line entries and tag each line individually so that
-        # [tool]/[result] lines buried inside a [CAF OUTPUT] blob are highlighted.
         sub_lines = raw.split("\n")
         entry_tag = entry.get("tag", "")
         for sub in sub_lines:
-            # Re-run tag detection on each sub-line; fall back to entry-level tag.
             sub_tag = _tag(sub) or entry_tag
             css  = f' class="log-{sub_tag}"' if sub_tag else ""
             text = sub.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -92,6 +106,28 @@ def _prompt_list_editor() -> None:
         "Each prompt becomes a separate CAF run executed in sequence. "
         "Drag to reorder — or add / remove entries below."
     )
+
+    # ── Load presets from active scenario ──────────────────────────────────────
+    _active_sc = st.session_state.get("active_scenario", "")
+    if not _active_sc.startswith("CAF"):
+        _active_sc = _CAF_DEFAULT_SCENARIO
+    from config.scenarios import SCENARIOS
+    _sc_data = SCENARIOS.get(_active_sc, {})
+    _presets = _sc_data.get("default_prompts", [])
+    if _presets:
+        col_preset, col_info = st.columns([3, 7])
+        with col_preset:
+            if st.button(
+                "⟳ Load scenario presets",
+                key="btn_load_caf_presets",
+                use_container_width=True,
+                help=f"Replace the list with the {len(_presets)} default prompt(s) for «{_active_sc}»",
+            ):
+                st.session_state["caf_prompts"] = list(_presets)
+                st.rerun()
+        with col_info:
+            st.caption(f"Scenario **{_active_sc}** has {len(_presets)} preset prompt(s).")
+    # ──────────────────────────────────────────────────────────────────────────
 
     to_remove: int | None = None
     for i, p in enumerate(prompts):
@@ -223,6 +259,54 @@ def _status_bar() -> None:
         st.error("Prompt list is empty — add at least one prompt.")
 
 
+# ── Interactive input panel ────────────────────────────────────────────────────
+
+def _render_input_panel() -> None:
+    """Show stdin-injection UI while a CAF run is in progress.
+
+    CAF pauses at [approval] (dangerous commands), [decision] (retry/cancel),
+    and [timeout] (wait/background/kill) prompts. The quick buttons cover all
+    valid responses; the free-text field handles numeric wait-seconds.
+    """
+    with st.container(border=True):
+        st.markdown(
+            "**Respond to CAF agent** — watch for "
+            "`[approval]`, `[decision]`, or `[timeout]` lines in the terminal."
+        )
+        _q = st.session_state.get("_caf_input_queue")
+
+        # Quick-action buttons covering every valid CAF decision response
+        btn_cols = st.columns(6)
+        _actions = ["approve", "cancel", "retry", "wait", "background", "kill"]
+        for col, action in zip(btn_cols, _actions):
+            with col:
+                if st.button(
+                    action,
+                    key=f"btn_caf_qa_{action}",
+                    use_container_width=True,
+                ):
+                    if _q is not None:
+                        _q.put(action)
+
+        # Free-text input (e.g. for wait-seconds)
+        _key_idx = st.session_state.get("_caf_stdin_counter", 0)
+        col_txt, col_send = st.columns([5, 1])
+        with col_txt:
+            user_text = st.text_input(
+                "Custom response",
+                placeholder="Type response (e.g. a number for wait-seconds) and press Send…",
+                label_visibility="collapsed",
+                key=f"_caf_stdin_text_{_key_idx}",
+            )
+        with col_send:
+            if st.button("Send ↵", key="btn_caf_stdin_send", use_container_width=True):
+                if _q is not None and user_text.strip():
+                    _q.put(user_text.strip())
+                # Bump counter to clear the text input on next rerun
+                st.session_state["_caf_stdin_counter"] = _key_idx + 1
+                st.rerun()
+
+
 # ── Main render ────────────────────────────────────────────────────────────────
 
 def render() -> None:
@@ -234,10 +318,27 @@ def render() -> None:
         "Each prompt drives a separate autonomous pentest run."
     )
 
+    # ── Show completion result from previous run ───────────────────────────────
+    run_result = st.session_state.pop("_caf_run_result", None)
+    if run_result:
+        completed = sum(1 for _, _, t in run_result["all_results"] if not t.get("run_aborted"))
+        total     = run_result["total"]
+        if run_result.get("cancelled"):
+            st.warning(f"⚠️ CAF run cancelled ({completed}/{total} completed).")
+        elif completed == total:
+            st.success(
+                f"✓ {total} CAF run(s) complete. "
+                "Open **📊 Analytical Dashboard** to review results."
+            )
+        else:
+            st.info(f"CAF evaluation finished ({completed}/{total} succeeded).")
+        session_dir = st.session_state.get("_caf_session_dir")
+        if session_dir:
+            st.info(f"Session log saved to: `{session_dir}`")
+
     _status_bar()
 
-    # Warn if a non-CAF scenario is active so the user knows it will be
-    # auto-switched before the run starts.
+    # Warn if a non-CAF scenario is active
     _active_sc = st.session_state.get("active_scenario", "")
     if _active_sc and not _active_sc.startswith("CAF"):
         st.warning(
@@ -280,8 +381,16 @@ def render() -> None:
             disabled=not can_run,
         )
     with col_cancel:
-        if st.button("⏹  Cancel", key="btn_caf_cancel", use_container_width=True, disabled=not run_in_progress):
+        if st.button(
+            "⏹  Cancel",
+            key="btn_caf_cancel",
+            use_container_width=True,
+            disabled=not run_in_progress,
+        ):
             st.session_state["_caf_cancel_requested"] = True
+            cancel_ref = st.session_state.get("_caf_cancel_ref")
+            if cancel_ref is not None:
+                cancel_ref[0] = True
     with col_clear:
         if st.button("Clear Log", key="btn_caf_clear_log", use_container_width=True):
             st.session_state["caf_run_logs"]          = []
@@ -289,11 +398,21 @@ def render() -> None:
             st.session_state["_caf_cancel_requested"] = False
             st.rerun()
 
+    # ── Interactive input panel (visible only while a run is active) ───────────
+    if run_in_progress:
+        _render_input_panel()
+
     log_placeholder = st.empty()
     _render_terminal(log_placeholder, st.session_state.get("caf_run_logs", []))
 
     if run_btn and can_run:
-        _execute_caf_runs(log_placeholder)
+        _start_caf_runs()
+
+    # ── Polling loop — drain queue and trigger rerun while run is active ───────
+    if run_in_progress:
+        _drain_output_queue()
+        time.sleep(0.3)
+        st.rerun()
 
 
 # ── Execution logic ────────────────────────────────────────────────────────────
@@ -302,11 +421,7 @@ _CAF_DEFAULT_SCENARIO = "CAF – Reconnaissance"
 
 
 def _ensure_caf_scenario() -> str:
-    """Auto-sync to the default CAF scenario if the active scenario is not CAF-specific.
-
-    Returns the effective scenario key.
-    """
-    from config.scenarios import SCENARIOS
+    """Auto-sync to the default CAF scenario if the active scenario is not CAF-specific."""
     from core.state import sync_scenario
 
     active = st.session_state.get("active_scenario", "")
@@ -317,66 +432,110 @@ def _ensure_caf_scenario() -> str:
     return active
 
 
-def _execute_caf_runs(log_placeholder) -> None:
-    """Run each CAF prompt sequentially, streaming logs into the terminal widget."""
+def _caf_worker(
+    host: str,
+    port: int,
+    username: str,
+    password,
+    key_path,
+    caf_dir: str,
+    prompts: list,
+    base_config: dict,
+    output_q: queue.Queue,
+    input_q: queue.Queue,
+    cancel_ref: list,
+    session_log: SessionLog,
+) -> None:
+    """Background thread: execute CAF prompts sequentially, stream output to output_q."""
     from core.environment import SSHEnvironment
     from core.evaluator import run_caf_ssh_evaluation
-    from config.defaults import MAX_RUN_HISTORY
 
-    # Guard: silently switch to the default CAF scenario if a non-CAF scenario
-    # (e.g. "Scenario 1 – File Creation") is still active.  This prevents the
-    # wrong validation_command / fail_patterns / sys_prompt from bleeding into
-    # the CAF evaluation.
+    def on_log(msg: str) -> None:
+        output_q.put(("log", msg))
+        session_log.log(msg)
+
+    on_log_wrapped = logged_on_log(inner=on_log)
+
+    all_results: list = []
+    env = None
+
+    try:
+        env = SSHEnvironment(
+            host=host, port=port, username=username,
+            password=password, key_path=key_path, remote_cwd=caf_dir,
+        )
+        on_log_wrapped(f"[INIT] SSH target: {username}@{host}:{port}  caf_dir={caf_dir}")
+
+        for idx, prompt in enumerate(prompts):
+            if cancel_ref[0]:
+                on_log_wrapped("[CANCEL] Evaluation cancelled by user.")
+                break
+
+            on_log_wrapped(f"\n[INIT] ── Prompt {idx + 1}/{len(prompts)} ──")
+            config = {**base_config, "user_prompt": prompt}
+
+            try:
+                telemetry = run_caf_ssh_evaluation(
+                    env, config, on_log_wrapped,
+                    input_queue=input_q,
+                )
+            except Exception as exc:
+                on_log_wrapped(f"[ERROR] Prompt {idx + 1} failed: {exc}")
+                telemetry = {"run_aborted": True, "error": str(exc)}
+
+            tool_count = len(telemetry.get("tool_calls", []))
+            if tool_count:
+                output_q.put(("tool_count", tool_count))
+
+            all_results.append((idx, prompt, telemetry))
+            session_log.save_telemetry(telemetry, index=idx)
+
+    except Exception as exc:
+        on_log_wrapped(f"[ERROR] SSH connection failed: {exc}")
+
+    finally:
+        if env and hasattr(env, "close"):
+            env.close()
+        session_log.save_config(base_config)
+        session_log.close()
+        output_q.put(("done", all_results))
+
+
+def _start_caf_runs() -> None:
+    """Snapshot UI state, initialise queues, and launch the CAF worker thread."""
     _ensure_caf_scenario()
 
     prompts  = list(st.session_state.get("caf_prompts", []))
-    model    = st.session_state.get("selected_model", "")
     host     = st.session_state.get("target_ssh_host", "").strip()
     port     = int(st.session_state.get("target_ssh_port") or 22)
     username = st.session_state.get("target_ssh_user", "root")
     password = st.session_state.get("target_ssh_password") or None
     key_path = st.session_state.get("target_ssh_key_path") or None
     caf_dir  = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
+    model    = st.session_state.get("selected_model", "")
 
-    st.session_state["caf_run_logs"]          = []
-    st.session_state["_caf_run_in_progress"]  = True
-    st.session_state["_caf_cancel_requested"] = False
-
-    logs: list[dict] = []
+    output_q:  queue.Queue = queue.Queue()
+    input_q:   queue.Queue = queue.Queue()
     cancel_ref: list[bool] = [False]
-
-    # One SessionLog spans the entire multi-prompt CAF run.
     session_log = SessionLog()
 
-    def on_log(msg: str) -> None:
-        if st.session_state.get("_caf_cancel_requested"):
-            cancel_ref[0] = True
-        entry = {"text": msg, "tag": _tag(msg)}
-        logs.append(entry)
-        st.session_state["caf_run_logs"] = list(logs)
-        # Persist message to session log.
-        session_log.log(msg)
-        _render_terminal(log_placeholder, logs)
-
-    on_log = logged_on_log(inner=on_log)
-
     base_config = {
-        "backend_type":        st.session_state.get("backend_type", "llama.cpp"),
-        "llm_url":             st.session_state.get("llm_url", ""),
-        "selected_model":      model,
-        "context_size":        st.session_state.get("context_size", 4096),
-        "mcp_url":             st.session_state.get("mcp_url", ""),
-        "mcp_server_url":      st.session_state.get("mcp_server_url", ""),
-        "mcp_tools":           st.session_state.get("mcp_tools", {}),
-        "mcp_running":         st.session_state.get("mcp_running", False),
-        "validation_command":  st.session_state.get("validation_command", ""),
-        "fail_patterns":       st.session_state.get("fail_patterns", []),
-        "active_scenario":     st.session_state.get("active_scenario", ""),
-        "tool_focus":          st.session_state.get("tool_focus", ""),
-        "metrics_matrix":      st.session_state.get("metrics_matrix", []),
-        "expected_stdout":     "",
-        "pre_run_cleanup":     [],
-        "cancel_requested_ref": cancel_ref,
+        "backend_type":           st.session_state.get("backend_type", "llama.cpp"),
+        "llm_url":                st.session_state.get("llm_url", ""),
+        "selected_model":         model,
+        "context_size":           st.session_state.get("context_size", 4096),
+        "mcp_url":                st.session_state.get("mcp_url", ""),
+        "mcp_server_url":         st.session_state.get("mcp_server_url", ""),
+        "mcp_tools":              st.session_state.get("mcp_tools", {}),
+        "mcp_running":            st.session_state.get("mcp_running", False),
+        "validation_command":     st.session_state.get("validation_command", ""),
+        "fail_patterns":          st.session_state.get("fail_patterns", []),
+        "active_scenario":        st.session_state.get("active_scenario", ""),
+        "tool_focus":             st.session_state.get("tool_focus", ""),
+        "metrics_matrix":         st.session_state.get("metrics_matrix", []),
+        "expected_stdout":        "",
+        "pre_run_cleanup":        [],
+        "cancel_requested_ref":   cancel_ref,
         "caf_scope":              st.session_state.get("caf_scope", "Narrow"),
         "caf_urgency":            st.session_state.get("caf_urgency", "Speed"),
         "caf_allowed_subnets":    st.session_state.get("caf_allowed_subnets", []),
@@ -385,66 +544,64 @@ def _execute_caf_runs(log_placeholder) -> None:
         "sys_prompt":             st.session_state.get("sys_prompt", ""),
     }
 
-    history: list = st.session_state.get("run_history", [])
-    total = len(prompts)
+    # Store worker state so poll loop and cancel button can access them
+    st.session_state["caf_run_logs"]           = []
+    st.session_state["_caf_run_in_progress"]   = True
+    st.session_state["_caf_cancel_requested"]  = False
+    st.session_state["_caf_output_queue"]      = output_q
+    st.session_state["_caf_input_queue"]       = input_q
+    st.session_state["_caf_cancel_ref"]        = cancel_ref
+    st.session_state["_caf_run_total"]         = len(prompts)
+    st.session_state["_caf_session_dir"]       = str(session_log.session_dir)
+    st.session_state["_caf_stdin_counter"]     = 0
 
-    with st.spinner(f"CAF evaluation running ({total} prompt(s))…"):
-        env = None
+    threading.Thread(
+        target=_caf_worker,
+        args=(
+            host, port, username, password, key_path, caf_dir,
+            prompts, base_config, output_q, input_q, cancel_ref, session_log,
+        ),
+        daemon=True,
+    ).start()
+
+
+def _drain_output_queue() -> None:
+    """Drain the worker output queue into session_state (Streamlit main thread only)."""
+    from config.defaults import MAX_RUN_HISTORY
+
+    q: queue.Queue | None = st.session_state.get("_caf_output_queue")
+    if q is None:
+        return
+
+    logs = list(st.session_state.get("caf_run_logs", []))
+
+    for _ in range(200):  # cap items consumed per rerun to prevent blocking
         try:
-            env = SSHEnvironment(
-                host=host, port=port, username=username,
-                password=password, key_path=key_path, remote_cwd=caf_dir,
-            )
-            on_log(f"[INIT] SSH target: {username}@{host}:{port}  caf_dir={caf_dir}")
+            item_type, data = q.get_nowait()
+        except Exception:
+            break
 
-            for idx, prompt in enumerate(prompts):
-                if cancel_ref[0]:
-                    on_log("[CANCEL] Evaluation cancelled by user.")
-                    break
+        if item_type == "log":
+            logs.append({"text": data, "tag": _tag(data)})
 
-                on_log(f"\n[INIT] ── Prompt {idx + 1}/{total} ──")
-                config = {**base_config, "user_prompt": prompt}
+        elif item_type == "tool_count":
+            st.session_state["_caf_last_tool_count"] = data
 
-                try:
-                    telemetry = run_caf_ssh_evaluation(env, config, on_log)
-                except Exception as exc:
-                    on_log(f"[ERROR] Prompt {idx + 1} failed: {exc}")
-                    telemetry = {"run_aborted": True, "error": str(exc)}
-
-                # Track the CAF tool call count from the remote run so the status
-                # bar can display it meaningfully (not the local MCP tool count).
-                tool_count = len(telemetry.get("tool_calls", []))
-                if tool_count:
-                    st.session_state["_caf_last_tool_count"] = tool_count
-
+        elif item_type == "done":
+            all_results = data  # list of (idx, prompt, telemetry)
+            history = list(st.session_state.get("run_history", []))
+            for idx, prompt, telemetry in all_results:
                 telemetry["caf_prompt_index"] = idx
                 telemetry["caf_prompt"]       = prompt
                 history.append(telemetry)
-                # Persist per-prompt telemetry.
-                session_log.save_telemetry(telemetry, index=idx)
+            st.session_state["run_history"]          = history[-MAX_RUN_HISTORY:]
+            st.session_state["_caf_run_in_progress"] = False
+            # Store result for display on next rerun
+            st.session_state["_caf_run_result"] = {
+                "all_results": all_results,
+                "total":       st.session_state.get("_caf_run_total", 1),
+                "cancelled":   st.session_state.get("_caf_cancel_requested", False),
+            }
+            break
 
-        except Exception as exc:
-            on_log(f"[ERROR] SSH connection failed: {exc}")
-        finally:
-            if env and hasattr(env, "close"):
-                env.close()
-
-    st.session_state["run_history"] = history[-MAX_RUN_HISTORY:]
-    st.session_state["_caf_run_in_progress"]  = False
-    st.session_state["_caf_cancel_requested"] = False
-
-    # Persist the base config (without per-prompt user_prompt) and close.
-    session_log.save_config(base_config)
-    session_log.close()
-
-    completed = sum(1 for h in history[-total:] if not h.get("run_aborted"))
-    if cancel_ref[0]:
-        st.warning(f"⚠️ CAF run cancelled ({completed}/{total} completed).")
-    elif completed == total:
-        st.success(
-            f"✓ {total} CAF run(s) complete. "
-            "Open **📊 Analytical Dashboard** to review results."
-        )
-    else:
-        st.info(f"CAF evaluation finished ({completed}/{total} succeeded).")
-    st.info(f"Session log saved to: `{session_log.session_dir}`")
+    st.session_state["caf_run_logs"] = logs

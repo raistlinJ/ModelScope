@@ -2,8 +2,9 @@ import shlex
 import subprocess
 import pathlib
 import os
+import time
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 class BaseEnvironment(ABC):
@@ -100,14 +101,15 @@ class SSHEnvironment(BaseEnvironment):
         key_path: Optional[str] = None,
         remote_cwd: str = "~/cyber-agent-flow",
     ) -> None:
-        self._host       = host
-        self._port       = int(port)
-        self._username   = username
-        self._password   = password or None
-        self._key_path   = key_path or None
-        self._remote_cwd = remote_cwd or "~/cyber-agent-flow"
-        self._client: Any = None
-        self._sftp:   Any = None
+        self._host           = host
+        self._port           = int(port)
+        self._username       = username
+        self._password       = password or None
+        self._key_path       = key_path or None
+        self._remote_cwd     = remote_cwd or "~/cyber-agent-flow"
+        self._client: Any    = None
+        self._sftp:   Any    = None
+        self._active_channel: Any = None  # set during execute_streaming; used by cancel()
 
     def connect(self) -> None:
         """Open SSH connection (idempotent)."""
@@ -192,6 +194,97 @@ class SSHEnvironment(BaseEnvironment):
             }
         except Exception as e:
             return {"stdout": "", "stderr": str(e), "exit_code": -1}
+
+    def execute_streaming(
+        self,
+        command: str,
+        timeout: int = 600,
+        on_chunk: Optional[Callable[[str], None]] = None,
+        input_queue: Any = None,
+        cancel_ref: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Execute command with a PTY, streaming output via on_chunk (designed for background threads).
+
+        Uses a paramiko channel with PTY so CAF's interactive prompts ([approval],
+        [decision], [timeout]) appear in the stream. When CAF reaches an input()
+        call, bytes from input_queue are sent as stdin.
+
+        NOTE: PTY output may contain ANSI colour codes and carriage-return-based
+        progress bars. The caller is responsible for ANSI stripping.
+
+        Returns the same dict shape as execute().
+        """
+        try:
+            self.connect()
+            full_cmd = f"cd {self._remote_cwd} && {command}"
+            transport = self._client.get_transport()
+            channel = transport.open_session()
+            channel.get_pty()
+            channel.exec_command(full_cmd)
+            self._active_channel = channel
+
+            stdout_buf = ""
+            deadline = time.time() + timeout
+
+            try:
+                while time.time() < deadline:
+                    if cancel_ref and cancel_ref[0]:
+                        channel.close()
+                        break
+
+                    # Inject stdin from the UI input queue
+                    if input_queue is not None:
+                        try:
+                            user_text = input_queue.get_nowait()
+                            channel.sendall((user_text + "\n").encode("utf-8"))
+                            if on_chunk:
+                                on_chunk(f"\n>>> {user_text}\n")
+                        except Exception:
+                            pass
+
+                    if channel.recv_ready():
+                        data = channel.recv(4096)
+                        if data:
+                            text = data.decode("utf-8", errors="replace")
+                            stdout_buf += text
+                            if on_chunk:
+                                on_chunk(text)
+
+                    if channel.exit_status_ready() and not channel.recv_ready():
+                        # Drain final buffered bytes before exiting
+                        while channel.recv_ready():
+                            data = channel.recv(4096)
+                            if data:
+                                text = data.decode("utf-8", errors="replace")
+                                stdout_buf += text
+                                if on_chunk:
+                                    on_chunk(text)
+                        break
+
+                    time.sleep(0.05)
+            finally:
+                self._active_channel = None
+
+            exit_code = channel.recv_exit_status() if not channel.closed else -1
+            try:
+                channel.close()
+            except Exception:
+                pass
+
+            return {"stdout": stdout_buf, "stderr": "", "exit_code": exit_code}
+
+        except Exception as exc:
+            self._active_channel = None
+            return {"stdout": "", "stderr": str(exc), "exit_code": -1}
+
+    def cancel(self) -> None:
+        """Close the active streaming channel from another thread (cancellation)."""
+        ch = self._active_channel
+        if ch is not None:
+            try:
+                ch.close()
+            except Exception:
+                pass
 
     def read_file(self, path: str) -> str:
         self.connect()

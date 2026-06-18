@@ -279,6 +279,8 @@ h3 {
 .log-tokens   { color: var(--muted); font-size: 0.72rem; }
 .log-sys      { color: #6e7681; font-size: 0.74rem; font-style: italic; }
 .log-usr      { color: #56b6c2; font-size: 0.74rem; font-style: italic; }
+.log-stream   { color: #cdd9e5; }
+.log-decision { color: #e3b341; font-weight: 600; }
 
 /* ─ Inputs ───────────────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,

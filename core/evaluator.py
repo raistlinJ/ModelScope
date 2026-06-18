@@ -554,10 +554,16 @@ def run_caf_ssh_evaluation(
     config: dict,
     on_log,
     local_run_history_dir: str = "/tmp/modelscope_caf_runs",
+    input_queue=None,
 ) -> dict:
     """
     Execute a CAF benchmark on a remote Kali machine via SSH.
     Fires ./start_cli.sh run, pulls artifacts, builds telemetry.
+
+    When env supports execute_streaming(), output is streamed in real-time via
+    on_log("[STREAM] …") calls.  input_queue (queue.Queue) allows the UI to
+    inject stdin for CAF's interactive decision prompts ([approval], [timeout]).
+    Falls back to blocking execute() when streaming is not available.
     """
     start_t = time.time()
 
@@ -584,14 +590,37 @@ def run_caf_ssh_evaluation(
     on_log(f"[CAF] Remote command: {cmd}")
     on_log(f"[CAF] Executing on {env.host} (this may take several minutes)…")
 
-    result = env.execute(cmd, timeout=600)
-    combined_output = _strip_ansi(result["stdout"] + result["stderr"])
+    if hasattr(env, "execute_streaming") and callable(env.execute_streaming):
+        # Stream output line-by-line in real-time.
+        _line_buf: list[str] = [""]
+        def _on_chunk(text: str) -> None:
+            # Normalise CR+LF and bare CR (PTY progress redraws) to newlines.
+            cleaned = _strip_ansi(text).replace("\r\n", "\n").replace("\r", "\n")
+            _line_buf[0] += cleaned
+            while "\n" in _line_buf[0]:
+                line, _line_buf[0] = _line_buf[0].split("\n", 1)
+                line = line.strip()
+                if line:
+                    on_log(f"[STREAM] {line}")
+
+        cancel_ref = config.get("cancel_requested_ref", [False])
+        result = env.execute_streaming(
+            cmd, timeout=600, on_chunk=_on_chunk,
+            input_queue=input_queue, cancel_ref=cancel_ref,
+        )
+        # Flush any partial line left in the buffer
+        if _line_buf[0].strip():
+            on_log(f"[STREAM] {_line_buf[0].strip()}")
+        combined_output = _strip_ansi(result["stdout"] + result.get("stderr", ""))
+    else:
+        result = env.execute(cmd, timeout=600)
+        combined_output = _strip_ansi(result["stdout"] + result["stderr"])
+        if result["stdout"]:
+            on_log(f"[CAF OUTPUT]\n{_strip_ansi(result['stdout'])[:2000]}")
+        if result["stderr"]:
+            on_log(f"[CAF STDERR]\n{_strip_ansi(result['stderr'])[:500]}")
 
     on_log(f"[CAF] Exit code: {result['exit_code']}")
-    if result["stdout"]:
-        on_log(f"[CAF OUTPUT]\n{_strip_ansi(result['stdout'])[:2000]}")
-    if result["stderr"]:
-        on_log(f"[CAF STDERR]\n{_strip_ansi(result['stderr'])[:500]}")
 
     run_id = _parse_caf_run_id(combined_output)
     if not run_id:
