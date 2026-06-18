@@ -786,7 +786,8 @@ def _ollama_model_selector() -> None:
         idx       = raw_names.index(cur) if cur in raw_names else 0
         sel_label = st.selectbox("Select Ollama Model", options=labels, index=idx)
         sel_name  = raw_names[labels.index(sel_label)]
-        st.session_state["selected_model"] = sel_name
+        st.session_state["selected_model"]      = sel_name
+        st.session_state["selected_model_path"] = sel_name  # Ollama: name IS the path
     else:
         st.info("Click **Fetch Ollama Models** to list available models.")
 
