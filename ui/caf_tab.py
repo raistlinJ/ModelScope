@@ -33,6 +33,14 @@ _LOG_TAG_MAP = {
 
 
 def _tag(line: str) -> str:
+    # For [CAF OUTPUT] lines, inspect the inner content for [tool]/[result] markers
+    # so tool calls that arrive embedded in stdout blobs get highlighted correctly.
+    if line.startswith("[CAF OUTPUT]"):
+        inner = line[len("[CAF OUTPUT]"):].lstrip()
+        if inner.startswith("[tool]"):
+            return "tool"
+        if inner.startswith("[result]"):
+            return "result"
     for prefix, tag in _LOG_TAG_MAP.items():
         if line.startswith(prefix):
             return tag
@@ -49,12 +57,18 @@ def _render_terminal(placeholder, logs: list[dict]) -> None:
         return
     lines_html = []
     for entry in logs:
-        tag = entry.get("tag", "")
-        css = f' class="log-{tag}"' if tag else ""
         raw = entry["text"].replace("\\n", "\n")
         raw = re.sub(r"\n{3,}", "\n\n", raw)
-        text = raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        lines_html.append(f"<span{css}>{text}</span>")
+        # Split multi-line entries and tag each line individually so that
+        # [tool]/[result] lines buried inside a [CAF OUTPUT] blob are highlighted.
+        sub_lines = raw.split("\n")
+        entry_tag = entry.get("tag", "")
+        for sub in sub_lines:
+            # Re-run tag detection on each sub-line; fall back to entry-level tag.
+            sub_tag = _tag(sub) or entry_tag
+            css  = f' class="log-{sub_tag}"' if sub_tag else ""
+            text = sub.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            lines_html.append(f"<span{css}>{text}</span>")
     inner = "<br>".join(lines_html)
     placeholder.markdown(
         f'<div class="terminal-window">{inner}</div>',
@@ -129,9 +143,14 @@ def _ssh_status_display() -> None:
         caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
         if host:
             st.success(f"SSH Target: `{user}@{host}` | CAF dir: `{caf_dir}`")
-            st.caption("Change SSH settings in the **🎯 Target** tab.")
+            st.caption("Change SSH settings in the **Target** tab.")
         else:
-            st.warning("SSH target not configured — set it in the **🎯 Target** tab.")
+            st.warning("SSH target not configured — set it in the **Target** tab.")
+        st.info(
+            "**CAF uses its own MCP server** on the remote Kali machine. "
+            "The ModelScope MCP status (shown in other tabs) is for local LLM evaluations and "
+            "does not affect CAF. CAF's tools (nmap, tshark, netdiscover, etc.) are managed by CAF itself."
+        )
 
 
 # ── CAF 4-Pillar controls ──────────────────────────────────────────────────────
@@ -175,27 +194,33 @@ def _pillar_controls() -> None:
 # ── Status bar ─────────────────────────────────────────────────────────────────
 
 def _status_bar() -> None:
-    model_sel = st.session_state.get("selected_model")
-    ssh_host  = (st.session_state.get("target_ssh_host") or "").strip()
-    prompts   = st.session_state.get("caf_prompts", [])
+    model_sel      = st.session_state.get("selected_model")
+    ssh_host       = (st.session_state.get("target_ssh_host") or "").strip()
+    prompts        = st.session_state.get("caf_prompts", [])
+    caf_tool_count = st.session_state.get("_caf_last_tool_count")
 
-    model_state  = "up"   if model_sel else "wait"
-    ssh_state    = "up"   if ssh_host  else "wait"
-    prompt_state = "up"   if prompts   else "down"
+    model_state  = "up"   if model_sel      else "wait"
+    ssh_state    = "up"   if ssh_host       else "wait"
+    prompt_state = "up"   if prompts        else "down"
+    tools_state  = "up"   if caf_tool_count else "wait"
+    tools_label  = (
+        f"CAF tools: {caf_tool_count}" if caf_tool_count else "CAF tools: unknown"
+    )
 
     pills = (
         status_pill(f"Model: {model_sel or 'not chosen'}", model_state)
         + status_pill(f"SSH: {ssh_host or 'not set'}", ssh_state)
         + status_pill(f"Prompts: {len(prompts)}", prompt_state)
+        + status_pill(tools_label, tools_state)
     )
     st.markdown(pills, unsafe_allow_html=True)
 
     if not model_sel:
-        st.warning("⚠️ No model selected — choose one in **Configuration → Model Setup**.")
+        st.warning("No model selected — choose one in **Configuration -> Model Setup**.")
     if not ssh_host:
-        st.warning("⚠️ SSH host not set — configure it in the **🎯 Target** tab.")
+        st.warning("SSH host not set — configure it in the **Target** tab.")
     if not prompts:
-        st.error("⚠️ Prompt list is empty — add at least one prompt.")
+        st.error("Prompt list is empty — add at least one prompt.")
 
 
 # ── Main render ────────────────────────────────────────────────────────────────
@@ -348,6 +373,12 @@ def _execute_caf_runs(log_placeholder) -> None:
                 except Exception as exc:
                     on_log(f"[ERROR] Prompt {idx + 1} failed: {exc}")
                     telemetry = {"run_aborted": True, "error": str(exc)}
+
+                # Track the CAF tool call count from the remote run so the status
+                # bar can display it meaningfully (not the local MCP tool count).
+                tool_count = len(telemetry.get("tool_calls", []))
+                if tool_count:
+                    st.session_state["_caf_last_tool_count"] = tool_count
 
                 telemetry["caf_prompt_index"] = idx
                 telemetry["caf_prompt"]       = prompt
