@@ -19,6 +19,7 @@ import streamlit as st
 from core.logsetup import logged_on_log
 from core.session_log import SessionLog
 from ui.components import status_pill
+from ui.terminal import render_terminal
 
 
 _LOG_TAG_MAP = {
@@ -65,29 +66,7 @@ def _tag(line: str) -> str:
 
 
 def _render_terminal(placeholder, logs: list[dict]) -> None:
-    import re
-    if not logs:
-        placeholder.markdown(
-            '<div class="terminal-window">Awaiting CAF run…</div>',
-            unsafe_allow_html=True,
-        )
-        return
-    lines_html = []
-    for entry in logs:
-        raw = entry["text"].replace("\\n", "\n")
-        raw = re.sub(r"\n{3,}", "\n\n", raw)
-        sub_lines = raw.split("\n")
-        entry_tag = entry.get("tag", "")
-        for sub in sub_lines:
-            sub_tag = _tag(sub) or entry_tag
-            css  = f' class="log-{sub_tag}"' if sub_tag else ""
-            text = sub.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            lines_html.append(f"<span{css}>{text}</span>")
-    inner = "<br>".join(lines_html)
-    placeholder.markdown(
-        f'<div class="terminal-window">{inner}</div>',
-        unsafe_allow_html=True,
-    )
+    render_terminal(placeholder, logs, _tag, empty_msg="Awaiting CAF run…")
 
 
 # ── Prompt list helpers ────────────────────────────────────────────────────────
@@ -407,6 +386,7 @@ def render() -> None:
 
     if run_btn and can_run:
         _start_caf_runs()
+        st.rerun()  # enter the polling loop immediately on the same click
 
     # ── Polling loop — drain queue and trigger rerun while run is active ───────
     if run_in_progress:
@@ -448,7 +428,7 @@ def _caf_worker(
 ) -> None:
     """Background thread: execute CAF prompts sequentially, stream output to output_q."""
     from core.environment import SSHEnvironment
-    from core.evaluator import run_caf_ssh_evaluation
+    from core.caf_runner import run_caf_ssh_evaluation
 
     def on_log(msg: str) -> None:
         output_q.put(("log", msg))

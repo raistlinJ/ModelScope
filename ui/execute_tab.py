@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
@@ -9,6 +8,7 @@ from core.logsetup import logged_on_log
 from core.session_log import SessionLog
 from core import llama_server
 from ui.components import status_pill
+from ui.terminal import render_terminal
 
 
 _LOG_TAG_MAP = {
@@ -41,37 +41,7 @@ def _tag(line: str) -> str:
 
 
 def _render_terminal(placeholder, logs: list[dict]) -> None:
-    if not logs:
-        placeholder.markdown(
-            '<div class="terminal-window">Awaiting run…</div>',
-            unsafe_allow_html=True,
-        )
-        return
-    lines_html = []
-    for entry in logs:
-        tag = entry.get("tag", "")
-        css = f' class="log-{tag}"' if tag else ""
-        raw = entry["text"]
-
-        # Convert Python repr-escaped newlines (backslash-n) to actual newlines
-        # so white-space:pre-wrap renders them correctly.
-        raw = raw.replace('\\n', '\n')
-
-        # Collapse 3+ consecutive newlines to 2 (avoids huge blank gaps in RESPONSE)
-        raw = re.sub(r'\n{3,}', '\n\n', raw)
-
-        text = (
-            raw
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        lines_html.append(f"<span{css}>{text}</span>")
-    inner = "<br>".join(lines_html)
-    placeholder.markdown(
-        f'<div class="terminal-window">{inner}</div>',
-        unsafe_allow_html=True,
-    )
+    render_terminal(placeholder, logs, _tag, empty_msg="Awaiting run…")
 
 
 def render() -> None:

@@ -106,7 +106,8 @@ class SSHEnvironment(BaseEnvironment):
         self._username       = username
         self._password       = password or None
         self._key_path       = key_path or None
-        self._remote_cwd     = remote_cwd or "~/cyber-agent-flow"
+        self._remote_cwd     = remote_cwd or "~/cyber-agent-flow"  # user-supplied, never mutated
+        self._resolved_cwd: Optional[str] = None  # set on first connect after tilde/cwd resolution
         self._client: Any    = None
         self._sftp:   Any    = None
         self._active_channel: Any = None  # set during execute_streaming; used by cancel()
@@ -143,16 +144,18 @@ class SSHEnvironment(BaseEnvironment):
         # Expand ~ — SFTP protocol does not resolve shell home shortcuts, so
         # sftp.chdir("~/foo") raises [Errno 2] No such file.  Ask the remote
         # shell for $HOME once and substitute it before entering the directory.
-        if self._remote_cwd.startswith("~"):
+        resolved = self._remote_cwd
+        if resolved.startswith("~"):
             _stdin, _stdout, _stderr = client.exec_command("echo $HOME")
             _home = _stdout.read().decode().strip()
             if _home:
-                self._remote_cwd = _home + self._remote_cwd[1:]  # ~/foo → /home/user/foo
+                resolved = _home + resolved[1:]  # ~/foo → /home/user/foo
         try:
-            sftp.chdir(self._remote_cwd)
-            self._remote_cwd = sftp.getcwd() or self._remote_cwd
+            sftp.chdir(resolved)
+            resolved = sftp.getcwd() or resolved
         except IOError:
             pass  # Directory may not exist yet; execute() will cd there anyway
+        self._resolved_cwd = resolved
         self._sftp = sftp
 
     def close(self) -> None:
@@ -168,7 +171,7 @@ class SSHEnvironment(BaseEnvironment):
 
     @property
     def remote_cwd(self) -> str:
-        return self._remote_cwd
+        return self._resolved_cwd if self._resolved_cwd is not None else self._remote_cwd
 
     @property
     def host(self) -> str:
@@ -184,7 +187,7 @@ class SSHEnvironment(BaseEnvironment):
             exports = " ".join(
                 f"export {k}={shlex.quote(str(v))};" for k, v in (env_vars or {}).items()
             )
-            full_cmd = f"cd {self._remote_cwd} && {exports + ' ' if exports else ''}{command}"
+            full_cmd = f"cd {self.remote_cwd} && {exports + ' ' if exports else ''}{command}"
             _, stdout, stderr = self._client.exec_command(full_cmd, timeout=timeout)
             exit_code = stdout.channel.recv_exit_status()
             return {
@@ -216,7 +219,7 @@ class SSHEnvironment(BaseEnvironment):
         """
         try:
             self.connect()
-            full_cmd = f"cd {self._remote_cwd} && {command}"
+            full_cmd = f"cd {self.remote_cwd} && {command}"
             transport = self._client.get_transport()
             channel = transport.open_session()
             channel.get_pty()
