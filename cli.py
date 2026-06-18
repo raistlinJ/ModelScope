@@ -33,6 +33,7 @@ from config.defaults import (
 from config.scenarios import SCENARIOS, DEFAULT_SCENARIO
 from core.evaluator import run_evaluation
 from core.logsetup import configure_logging, logged_on_log
+from core.session_log import SessionLog
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -113,6 +114,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--list-scenarios",
         action="store_true",
         help="List available scenario names and exit.",
+    )
+    parser.add_argument(
+        "--session-dir",
+        default=None,
+        help=(
+            "Root directory for session logs "
+            "(default: ~/.modelscope/sessions).  "
+            "Each run creates a timestamped sub-directory containing "
+            "run.log, telemetry.json, and config.json."
+        ),
     )
 
     return parser.parse_args(argv)
@@ -234,9 +245,15 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --model is required (or use --list-scenarios).", file=sys.stderr)
         return 2
 
-    # Route all engine logs through the logger (and to stdout). No browser
-    # terminal in CLI mode, so `inner` is None — logging only.
-    on_log = logged_on_log(inner=None)
+    # Session log — captures run.log, telemetry.json, config.json on disk.
+    session_log = SessionLog(base_dir=args.session_dir)
+
+    # Build a thin on_log that also writes to the session log file, then
+    # route it through logged_on_log so every event reaches stdout/logger too.
+    def _base_on_log(msg: str) -> None:
+        session_log.log(msg)
+
+    on_log = logged_on_log(inner=_base_on_log)
 
     config = _build_config(args)
     env = _make_env(args, on_log)
@@ -246,6 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if env is not None and hasattr(env, "close"):
             env.close()
+
+    session_log.save_telemetry(telemetry)
+    session_log.save_config(config)
+    session_log.close()
 
     _print_summary(telemetry)
 

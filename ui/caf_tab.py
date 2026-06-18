@@ -14,6 +14,7 @@ import time
 import streamlit as st
 
 from core.logsetup import logged_on_log
+from core.session_log import SessionLog
 from ui.components import status_pill
 
 
@@ -334,12 +335,17 @@ def _execute_caf_runs(log_placeholder) -> None:
     logs: list[dict] = []
     cancel_ref: list[bool] = [False]
 
+    # One SessionLog spans the entire multi-prompt CAF run.
+    session_log = SessionLog()
+
     def on_log(msg: str) -> None:
         if st.session_state.get("_caf_cancel_requested"):
             cancel_ref[0] = True
         entry = {"text": msg, "tag": _tag(msg)}
         logs.append(entry)
         st.session_state["caf_run_logs"] = list(logs)
+        # Persist message to session log.
+        session_log.log(msg)
         _render_terminal(log_placeholder, logs)
 
     on_log = logged_on_log(inner=on_log)
@@ -398,6 +404,8 @@ def _execute_caf_runs(log_placeholder) -> None:
                 telemetry["caf_prompt_index"] = idx
                 telemetry["caf_prompt"]       = prompt
                 history.append(telemetry)
+                # Persist per-prompt telemetry.
+                session_log.save_telemetry(telemetry, index=idx)
 
         except Exception as exc:
             on_log(f"[ERROR] SSH connection failed: {exc}")
@@ -409,6 +417,10 @@ def _execute_caf_runs(log_placeholder) -> None:
     st.session_state["_caf_run_in_progress"]  = False
     st.session_state["_caf_cancel_requested"] = False
 
+    # Persist the base config (without per-prompt user_prompt) and close.
+    session_log.save_config(base_config)
+    session_log.close()
+
     completed = sum(1 for h in history[-total:] if not h.get("run_aborted"))
     if cancel_ref[0]:
         st.warning(f"⚠️ CAF run cancelled ({completed}/{total} completed).")
@@ -419,3 +431,4 @@ def _execute_caf_runs(log_placeholder) -> None:
         )
     else:
         st.info(f"CAF evaluation finished ({completed}/{total} succeeded).")
+    st.info(f"Session log saved to: `{session_log.session_dir}`")

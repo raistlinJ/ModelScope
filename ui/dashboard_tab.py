@@ -1,9 +1,72 @@
 import html
 import json
 import streamlit as st
+from pathlib import Path
 from config.metrics import METRIC_TYPES, CATEGORIES, evaluate_metric, format_criterion
 from ui.caf_dashboard import render_attack_tree, render_judge_panel
 from ui.components import badge, type_badge, CAT_COLOUR
+
+
+# ── Sessions viewer ────────────────────────────────────────────────────────────
+
+def _render_sessions_viewer() -> None:
+    """List recent session directories and let users inspect them."""
+    sessions_base = Path.home() / ".modelscope" / "sessions"
+    if not sessions_base.exists():
+        return
+
+    session_dirs = sorted(
+        (d for d in sessions_base.iterdir() if d.is_dir()),
+        reverse=True,
+    )[:20]
+
+    if not session_dirs:
+        return
+
+    with st.expander("Recent Sessions", expanded=False):
+        st.caption(
+            f"Showing the last {len(session_dirs)} session(s) from "
+            f"`{sessions_base}`.  Each directory contains `run.log`, "
+            "`telemetry.json`, and `config.json`."
+        )
+
+        selected = st.selectbox(
+            "Session",
+            options=[d.name for d in session_dirs],
+            key="_sessions_viewer_sel",
+            label_visibility="collapsed",
+        )
+        if not selected:
+            return
+
+        sel_dir = sessions_base / selected
+        st.caption(f"Path: `{sel_dir}`")
+
+        # ── Telemetry summary ──────────────────────────────────────────────
+        tel_path = sel_dir / "telemetry.json"
+        if tel_path.exists():
+            try:
+                tel_data = json.loads(tel_path.read_text(encoding="utf-8"))
+                st.markdown("**Telemetry summary**")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Model", tel_data.get("run_model") or tel_data.get("selected_model") or "?")
+                c2.metric("Latency", f"{tel_data.get('total_latency', 0):.2f} s")
+                c3.metric("Total Tokens", tel_data.get("total_tokens", "?"))
+                _val = tel_data.get("validation_passed")
+                _val_label = "PASS" if _val is True else ("FAIL" if _val is False else "N/A")
+                c4.metric("Validation", _val_label)
+            except Exception:
+                st.warning("Could not parse telemetry.json.")
+
+        # ── run.log viewer ────────────────────────────────────────────────
+        log_path = sel_dir / "run.log"
+        if log_path.exists():
+            st.markdown("**run.log**")
+            try:
+                log_text = log_path.read_text(encoding="utf-8")
+                st.code(log_text, language=None)
+            except Exception:
+                st.warning("Could not read run.log.")
 
 
 def _render_response_comparison(response: str, validation_out: str, tool_focus: str) -> None:
@@ -92,6 +155,10 @@ def _render_response_comparison(response: str, validation_out: str, tool_focus: 
 
 def render() -> None:
     st.header("Analytical Dashboard")
+
+    # Sessions viewer is always rendered — even before any run in the current
+    # session — so past runs from previous sessions are always browsable.
+    _render_sessions_viewer()
 
     if not st.session_state.get("run_completed"):
         st.info("No evaluation run yet — go to **Execute Evaluation** and run a scenario.")

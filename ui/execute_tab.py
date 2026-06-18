@@ -6,6 +6,7 @@ from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from config.scenarios import SCENARIOS
 from core.evaluator import run_evaluation
 from core.logsetup import logged_on_log
+from core.session_log import SessionLog
 from core import llama_server
 from ui.components import status_pill
 
@@ -216,6 +217,10 @@ def render() -> None:
         cancel_ref: list[bool] = [False]
         _last_render: list[float] = [0.0]
 
+        # Create a session log for this run.  The directory is created lazily
+        # on first write so empty/cancelled runs leave no stray directories.
+        session_log = SessionLog()
+
         def on_log(msg: str) -> None:
             # Propagate cancel flag into the evaluator via the shared reference
             if st.session_state.get("cancel_requested"):
@@ -223,6 +228,8 @@ def render() -> None:
             entry = {"text": msg, "tag": _tag(msg)}
             logs.append(entry)
             st.session_state["run_logs"] = list(logs)
+            # Persist the message to the session log file.
+            session_log.log(msg)
             # Throttle terminal redraws to ~2/sec for streaming tokens.
             # Always render immediately for non-streaming events so tool calls,
             # errors, and validation results appear without delay.
@@ -307,6 +314,11 @@ def render() -> None:
         st.session_state["_run_in_progress"] = False
         st.session_state["cancel_requested"] = False
 
+        # Persist session artefacts.
+        session_log.save_telemetry(telemetry)
+        session_log.save_config(config)
+        session_log.close()
+
         # Append to run history (fix #26)
         history: list = st.session_state.get("run_history", [])
         history.append(telemetry)
@@ -324,3 +336,4 @@ def render() -> None:
             st.info(
                 "📊 Evaluation complete — open **Analytical Dashboard** to review results."
             )
+        st.info(f"Session log saved to: `{session_log.session_dir}`")
