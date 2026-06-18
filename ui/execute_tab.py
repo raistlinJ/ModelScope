@@ -5,6 +5,7 @@ import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from config.scenarios import SCENARIOS
 from core.evaluator import run_evaluation
+from core.logsetup import logged_on_log
 from core import llama_server
 from ui.components import status_pill
 
@@ -230,6 +231,10 @@ def render() -> None:
             if not is_stream_token or (now - _last_render[0]) >= 0.5:
                 _render_terminal(log_placeholder, logs)
                 _last_render[0] = now
+
+        # Mirror every event to the terminal logger (issue #3) while keeping the
+        # in-browser terminal behaviour identical.
+        on_log = logged_on_log(inner=on_log)
 
         _backend   = st.session_state.get("backend_type", "llama.cpp")
         _def_url   = LLAMA_CPP_DEFAULT_URL if _backend == "llama.cpp" else OLLAMA_DEFAULT_URL

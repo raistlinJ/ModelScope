@@ -4,6 +4,7 @@ from config.scenarios import DEFAULT_SCENARIO
 from core.state import init_state, sync_scenario
 from core.models import scan_gguf_models
 from core import llama_server
+from core.logsetup import configure_logging
 from ui.components import status_pill
 from ui.styles import inject
 from ui import config_tab, execute_tab, dashboard_tab, batch_tab, comparison_tab
@@ -13,6 +14,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# Configure terminal logging so `streamlit run app.py` surfaces progress and
+# errors on stdout (issue #3). Idempotent — safe to call on every rerun.
+configure_logging()
 
 inject()
 init_state()
