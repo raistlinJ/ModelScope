@@ -566,7 +566,11 @@ def run_caf_ssh_evaluation(
     # including the single quotes the previous hand-rolled escaping covered.
     prompt  = shlex.quote(config.get("user_prompt", ""))
     scope   = shlex.quote(config.get("caf_scope", "Narrow").lower())
-    urgency = shlex.quote(config.get("caf_urgency", "Speed").lower())
+    # Map UI enum → CAF CLI value.  CAF accepts "stealthy" (with y); the UI
+    # shows the cleaner "Stealth" label.  All other values pass through as-is.
+    _urgency_raw = config.get("caf_urgency", "Speed").lower()
+    _URGENCY_CLI = {"stealth": "stealthy"}
+    urgency = shlex.quote(_URGENCY_CLI.get(_urgency_raw, _urgency_raw))
     prov    = _caf_provider_flags(config)
 
     cmd = (
