@@ -24,6 +24,18 @@ init_state()
 st.session_state.setdefault("batch_queue", [])
 st.session_state.setdefault("comparison_models", [])
 
+# ── Load persisted settings on first run only (not on every Streamlit rerun) ──
+if not st.session_state.get("_settings_loaded"):
+    from core.settings_store import load_settings, save_settings  # noqa: F401
+    _saved = load_settings()
+    for _k, _v in _saved.items():
+        st.session_state[_k] = _v
+    # Prevent the scenario-sync block from clobbering scenario-derived keys that
+    # were just restored (e.g. validation_command, fail_patterns, caf_*).
+    if "active_scenario" in _saved:
+        st.session_state["_last_exec_scenario"] = _saved["active_scenario"]
+    st.session_state["_settings_loaded"] = True
+
 # ── Scenario state sync — runs BEFORE any widgets are created ─────────────────
 _active = st.session_state.get("active_scenario", DEFAULT_SCENARIO)
 if st.session_state.get("_last_exec_scenario") != _active:

@@ -52,7 +52,15 @@ _TOOL_LABELS = {
 
 
 def render() -> None:
-    st.header("Configuration")
+    col_h, col_save = st.columns([6, 1])
+    with col_h:
+        st.header("Configuration")
+    with col_save:
+        if st.button("💾 Save Settings", use_container_width=True,
+                     help="Save current configuration to ~/.modelscope/settings.json"):
+            from core.settings_store import save_settings
+            save_settings(st.session_state)
+            st.toast("Settings saved!", icon="✅")
     sub_model, sub_metrics, sub_judge, sub_verify = st.tabs(
         ["⚙  Model Setup", "📐  Metrics Setup", "🤖  AI Judge", "🔬  Platform Verification"]
     )
@@ -220,6 +228,8 @@ def _model_setup() -> None:
 
 def _caf_config_section() -> None:
     """CAF network boundary controls. Scope/Urgency are configured in the CyberAgentFlow tab."""
+    scope   = st.session_state.get("caf_scope", "Narrow")
+    urgency = st.session_state.get("caf_urgency", "Speed")
     st.caption(
         "Configure Cyber-Agent-Flow's network boundary settings. "
         "Scope and Urgency are set in the CyberAgentFlow tab under 'CAF 4-Pillar Configuration'."
