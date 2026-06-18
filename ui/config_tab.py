@@ -219,35 +219,12 @@ def _model_setup() -> None:
 
 
 def _caf_config_section() -> None:
-    """CAF Scope, Urgency, and network boundary controls — mirroring CAF's Prompt Controls UI."""
+    """CAF network boundary controls. Scope/Urgency are configured in the CyberAgentFlow tab."""
     st.caption(
-        "Configure Cyber-Agent-Flow's runtime Scope and Urgency controls. "
-        "These are injected into the evaluation config and drive CAF 4-Pillar metric evaluation."
+        "Configure Cyber-Agent-Flow's network boundary settings. "
+        "Scope and Urgency are set in the CyberAgentFlow tab under 'CAF 4-Pillar Configuration'."
     )
-
-    col_scope, col_urgency = st.columns(2)
-
-    with col_scope:
-        st.markdown("**Scope**")
-        st.caption("Broad → wide discovery  |  Narrow → focused exploitation")
-        scope = st.selectbox(
-            "Scope",
-            options=["Narrow", "Broad"],
-            index=0 if st.session_state.get("caf_scope", "Narrow") == "Narrow" else 1,
-            key="caf_scope",
-            label_visibility="collapsed",
-        )
-
-    with col_urgency:
-        st.markdown("**Urgency**")
-        st.caption("Stealthy → slow/quiet  |  Speed → fast/aggressive")
-        urgency = st.selectbox(
-            "Urgency",
-            options=["Speed", "Stealthy"],
-            index=0 if st.session_state.get("caf_urgency", "Speed") == "Speed" else 1,
-            key="caf_urgency",
-            label_visibility="collapsed",
-        )
+    st.info("Scope and Urgency settings are managed in the CyberAgentFlow tab.", icon="ℹ️")
 
     st.divider()
 
