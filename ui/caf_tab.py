@@ -216,12 +216,14 @@ def _pillar_controls() -> None:
                 help="Speed = fast BFS  |  Stealth = quiet DFS  |  Balanced = TDI-adaptive",
             )
 
-        st.text_input(
+        val_cmd = st.text_input(
             "Validation Command (optional)",
-            key="validation_command",
+            value=st.session_state.get("validation_command", ""),
+            key="caf_tab_validation_command",
             placeholder="e.g. nmap 10.0.0.1 -p 22",
             help="Shell command run on the remote after each CAF run to verify success.",
         )
+        st.session_state["validation_command"] = val_cmd
 
 
 # ── Status bar ─────────────────────────────────────────────────────────────────
