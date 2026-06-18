@@ -3,6 +3,8 @@ from config.defaults import (
     LLAMA_CPP_DEFAULT_URL, GGUF_MODELS_DIR,
     MCP_SCRIPT_PATH, DEFAULT_CONTEXT_SIZE,
     LLAMA_SERVER_BIN, MCP_SERVER_BASE_URL,
+    EXTERNAL_LLAMA_CPP_URL, EXTERNAL_LLAMA_CPP_MODEL,
+    LLAMA_QUANTIZE_BIN, CONVERT_HF_TO_GGUF_PY, GGUF_MODELS_DIR as _GGUF_DIR,
 )
 from config.scenarios import SCENARIOS, DEFAULT_SCENARIO
 
@@ -18,6 +20,21 @@ _DEFAULTS: dict = {
     "selected_model":        None,
     "selected_model_path":   None,
     "context_size":          DEFAULT_CONTEXT_SIZE,
+
+    # Model source mode — "pre_compiled_local", "pre_compiled_remote", or "compile"
+    "model_source_mode":     "pre_compiled_local",
+
+    # External (pre-compiled remote) endpoint
+    "external_llm_url":      EXTERNAL_LLAMA_CPP_URL,
+    "external_llm_models":   [],   # populated by Fetch from remote
+    "external_selected_model": EXTERNAL_LLAMA_CPP_MODEL,
+
+    # GGUF compile pipeline settings
+    "compile_source_path":   "",
+    "compile_output_dir":    GGUF_MODELS_DIR,
+    "compile_quantization":  "Q4_K_M",
+    "compile_convert_script": CONVERT_HF_TO_GGUF_PY,
+    "compile_quantize_bin":  LLAMA_QUANTIZE_BIN,
 
     # Target Environment
     "target_env_type":       "local",

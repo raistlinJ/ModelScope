@@ -6,10 +6,11 @@ from config.defaults import (
     LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL,
     GGUF_MODELS_DIR, MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE, CONTEXT_STEP,
     MCP_SERVER_BASE_URL,
+    EXTERNAL_LLAMA_CPP_URL, EXTERNAL_LLAMA_CPP_MODEL,
 )
 from config.metrics import METRIC_TYPES, CATEGORIES, format_criterion
 from config.scenarios import SCENARIOS
-from core.models import scan_gguf_models, fetch_ollama_models
+from core.models import scan_gguf_models, fetch_ollama_models, fetch_llama_cpp_models, compile_gguf
 from core.mcp_manager import start_mcp, stop_mcp, discover_tools
 from core import llama_server
 from core.state import sync_scenario
@@ -92,6 +93,13 @@ def _model_setup() -> None:
         st.session_state["llm_models"]    = []
         st.session_state["selected_model"] = None
 
+    # ── Model Source ───────────────────────────────────────────────────────────
+    with st.expander("Model Source", expanded=True):
+        _model_source_section()
+
+    # Resolve the effective source mode before the backend section reads it
+    _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
+
     # ── Execution Target ───────────────────────────────────────────────────────
     with st.expander("Execution Target", expanded=False):
         target_env = st.selectbox(
@@ -136,63 +144,70 @@ def _model_setup() -> None:
                     _test_ssh_connection()
 
     # ── Backend & Model ────────────────────────────────────────────────────────
-    with st.expander("Backend & Model", expanded=True):
-        st.subheader("Backend & Connection")
-        c_be, c_url = st.columns([2, 5])
-        with c_be:
-            backend = st.selectbox(
-                "Backend",
-                options=["llama.cpp", "ollama"],
-                index=0 if st.session_state["backend_type"] == "llama.cpp" else 1,
-                key="backend_type",
+    # The "remote pre-compiled" source mode bypasses local backend machinery
+    # entirely — the server is already running at the external URL.
+    _src_mode = st.session_state.get("model_source_mode", "pre_compiled_local")
+
+    if _src_mode == "pre_compiled_remote":
+        _remote_model_section()
+    else:
+        with st.expander("Backend & Model", expanded=True):
+            st.subheader("Backend & Connection")
+            c_be, c_url = st.columns([2, 5])
+            with c_be:
+                backend = st.selectbox(
+                    "Backend",
+                    options=["llama.cpp", "ollama"],
+                    index=0 if st.session_state["backend_type"] == "llama.cpp" else 1,
+                    key="backend_type",
+                )
+            with c_url:
+                if st.session_state.get("_last_backend") != backend:
+                    st.session_state["llm_url"] = (
+                        LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
+                    )
+                    st.session_state["_last_backend"] = backend
+                    st.session_state["llm_models"]    = []
+                    st.session_state["selected_model"] = None
+                elif not (st.session_state.get("llm_url") or "").strip():
+                    st.session_state["llm_url"] = (
+                        LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
+                    )
+                st.text_input("Server URL", key="llm_url")
+
+            st.subheader("Model")
+            if backend == "llama.cpp":
+                _gguf_model_selector()
+            else:
+                _ollama_model_selector()
+
+            st.subheader("Context Window")
+            ctx = st.slider(
+                "Tokens",
+                min_value=MIN_CONTEXT_SIZE,
+                max_value=MAX_CONTEXT_SIZE,
+                step=CONTEXT_STEP,
+                key="context_size",
+                help="Number of tokens in the model context. Restart the server to apply.",
             )
-        with c_url:
-            if st.session_state.get("_last_backend") != backend:
-                st.session_state["llm_url"] = (
-                    LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
-                )
-                st.session_state["_last_backend"] = backend
-                st.session_state["llm_models"]    = []
-                st.session_state["selected_model"] = None
-            elif not (st.session_state.get("llm_url") or "").strip():
-                st.session_state["llm_url"] = (
-                    LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
-                )
-            st.text_input("Server URL", key="llm_url")
+            if backend == "llama.cpp":
+                url  = st.session_state.get("llm_url", "")
+                info = llama_server.get_server_info(url)
+                if info and info["n_ctx"] is not None and info["n_ctx"] != ctx:
+                    st.warning(
+                        f"Running server n_ctx = **{info['n_ctx']}** — "
+                        f"slider is **{ctx}**. Restart server to apply."
+                    )
 
-        st.subheader("Model")
-        if backend == "llama.cpp":
-            _gguf_model_selector()
-        else:
-            _ollama_model_selector()
-
-        st.subheader("Context Window")
-        ctx = st.slider(
-            "Tokens",
-            min_value=MIN_CONTEXT_SIZE,
-            max_value=MAX_CONTEXT_SIZE,
-            step=CONTEXT_STEP,
-            key="context_size",
-            help="Number of tokens in the model context. Restart the server to apply.",
-        )
-        if backend == "llama.cpp":
-            url  = st.session_state.get("llm_url", "")
-            info = llama_server.get_server_info(url)
-            if info and info["n_ctx"] is not None and info["n_ctx"] != ctx:
-                st.warning(
-                    f"Running server n_ctx = **{info['n_ctx']}** — "
-                    f"slider is **{ctx}**. Restart server to apply."
+            if backend == "llama.cpp":
+                st.subheader("llama-server")
+                _llama_server_controls()
+            else:
+                st.subheader("Ollama")
+                st.info(
+                    "Ollama manages model loading automatically. "
+                    "Ensure the Ollama service is running at the configured URL."
                 )
-
-        if backend == "llama.cpp":
-            st.subheader("llama-server")
-            _llama_server_controls()
-        else:
-            st.subheader("Ollama")
-            st.info(
-                "Ollama manages model loading automatically. "
-                "Ensure the Ollama service is running at the configured URL."
-            )
 
     # ── MCP Server ─────────────────────────────────────────────────────────────
     with st.expander("SecOps MCP Server", expanded=True):
@@ -512,6 +527,238 @@ def _mcp_server_section() -> None:
         st.session_state["mcp_tools"] = updated
     else:
         st.info("Click **Fetch MCP Tools** to discover tools from the MCP server.")
+
+
+def _model_source_section() -> None:
+    """
+    Top-level 'Model Source' selector.
+
+    Three modes:
+      pre_compiled_local  — scan a local directory for .gguf files (existing flow)
+      pre_compiled_remote — connect to an external llama.cpp server as-is
+      compile             — build a GGUF from a HuggingFace model directory
+    """
+    st.caption(
+        "Choose how ModelScope obtains the model: scan a local GGUF file, "
+        "connect to a pre-compiled remote server, or compile a new GGUF from source."
+    )
+
+    _MODE_LABELS = {
+        "pre_compiled_local":  "Pre-compiled (local GGUF file)",
+        "pre_compiled_remote": "Pre-compiled (remote server endpoint)",
+        "compile":             "Compile GGUF from source",
+    }
+    mode_options = list(_MODE_LABELS.keys())
+    cur_mode     = st.session_state.get("model_source_mode", "pre_compiled_local")
+    cur_idx      = mode_options.index(cur_mode) if cur_mode in mode_options else 0
+
+    selected = st.selectbox(
+        "Model Source Mode",
+        options=mode_options,
+        format_func=lambda k: _MODE_LABELS[k],
+        index=cur_idx,
+        key="model_source_mode",
+        help="Controls which model loading path is active for evaluations.",
+    )
+
+    if selected == "compile":
+        st.divider()
+        _compile_gguf_section()
+
+
+def _compile_gguf_section() -> None:
+    """UI panel for the GGUF compile pipeline (HF model → GGUF → quantize)."""
+    st.markdown("**Compile GGUF from HuggingFace model**")
+    st.caption(
+        "Converts a local HuggingFace model directory to GGUF format using "
+        "`convert_hf_to_gguf.py`, then quantizes with `llama-quantize`."
+    )
+
+    st.text_input(
+        "Source Model Directory",
+        key="compile_source_path",
+        placeholder="/path/to/hf/model",
+        help="Local directory containing the HuggingFace model files (config.json, tokenizer, etc.).",
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        st.text_input(
+            "Output Directory",
+            key="compile_output_dir",
+            help="Where the compiled .gguf file will be saved.",
+        )
+    with c2:
+        st.selectbox(
+            "Quantization",
+            options=["Q4_K_M", "Q5_K_M", "Q8_0", "F16", "none"],
+            key="compile_quantization",
+            help="GGUF quantization type. 'none' skips quantization (saves F16).",
+        )
+
+    with st.expander("Advanced paths", expanded=False):
+        st.text_input(
+            "convert_hf_to_gguf.py path",
+            key="compile_convert_script",
+            help="Full path to convert_hf_to_gguf.py from the llama.cpp repository.",
+        )
+        st.text_input(
+            "llama-quantize binary path",
+            key="compile_quantize_bin",
+            help="Full path to the llama-quantize binary.",
+        )
+
+    if st.button("Compile GGUF", key="btn_compile_gguf", use_container_width=False):
+        src  = st.session_state.get("compile_source_path", "").strip()
+        if not src:
+            st.error("Source model directory is required.")
+            return
+
+        log_placeholder = st.empty()
+        log_lines: list[str] = []
+
+        def _append_log(msg: str) -> None:
+            log_lines.append(msg)
+            log_placeholder.code("\n".join(log_lines[-20:]), language=None)
+
+        quant = st.session_state.get("compile_quantization", "Q4_K_M")
+        quant_arg = "" if quant == "none" else quant
+
+        ok, result = compile_gguf(
+            source_path    = src,
+            output_dir     = st.session_state.get("compile_output_dir", "").strip(),
+            quantization   = quant_arg,
+            convert_script = st.session_state.get("compile_convert_script", "").strip() or None,
+            quantize_bin   = st.session_state.get("compile_quantize_bin", "").strip() or None,
+            on_log         = _append_log,
+        )
+        if ok:
+            st.success(f"Compiled successfully: `{result}`")
+            # Automatically switch to local pre-compiled mode and scan the output dir
+            st.session_state["model_source_mode"] = "pre_compiled_local"
+            found = scan_gguf_models(st.session_state.get("compile_output_dir", "").strip())
+            st.session_state["llm_models"] = found
+            if found:
+                # Pre-select the freshly compiled model
+                matching = [m for m in found if result.endswith(m["name"])]
+                if matching:
+                    st.session_state["selected_model"]      = matching[0]["name"]
+                    st.session_state["selected_model_path"] = matching[0]["path"]
+            st.rerun()
+        else:
+            st.error(f"Compile failed: {result}")
+
+
+def _remote_model_section() -> None:
+    """
+    UI for the 'Pre-compiled (remote server endpoint)' mode.
+    Connects to an external llama.cpp server and lets the user pick a model.
+    Local server start/stop controls are intentionally absent here.
+    """
+    with st.expander("Remote Endpoint & Model", expanded=True):
+        st.subheader("Remote llama.cpp Server")
+        st.caption(
+            "Connect to an external llama.cpp server. "
+            "Server management (start/stop) is not available for remote endpoints."
+        )
+
+        col_url, col_fetch = st.columns([5, 1])
+        with col_url:
+            if not (st.session_state.get("external_llm_url") or "").strip():
+                st.session_state["external_llm_url"] = EXTERNAL_LLAMA_CPP_URL
+            st.text_input("Server URL", key="external_llm_url")
+        with col_fetch:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("Fetch", use_container_width=True, key="btn_fetch_remote_models"):
+                found, err = fetch_llama_cpp_models(st.session_state["external_llm_url"])
+                if found:
+                    st.session_state["external_llm_models"] = found
+                    st.success(f"{len(found)} model(s) available")
+                elif err:
+                    st.error(err)
+                else:
+                    st.warning("No models returned — is the server running?")
+
+        remote_models = st.session_state.get("external_llm_models", [])
+
+        # If no models fetched yet, seed from the known external model constant
+        if not remote_models:
+            remote_models = [
+                {
+                    "name":         EXTERNAL_LLAMA_CPP_MODEL,
+                    "path":         EXTERNAL_LLAMA_CPP_MODEL,
+                    "size_gb":      22.1,
+                    "context_size": 262144,
+                    "source":       "remote",
+                }
+            ]
+            st.info(
+                f"Known model pre-loaded: `{EXTERNAL_LLAMA_CPP_MODEL}`. "
+                "Click **Fetch** to refresh from the server."
+            )
+
+        labels    = []
+        for m in remote_models:
+            size_str = f"{m.get('size_gb', '?')} GB" if m.get("size_gb") else "?"
+            ctx_str  = f"  ctx: {m['context_size']:,}" if m.get("context_size") else ""
+            labels.append(f"{m['name']}  ({size_str}{ctx_str})")
+
+        raw_names = [m["name"] for m in remote_models]
+        cur       = st.session_state.get("external_selected_model", EXTERNAL_LLAMA_CPP_MODEL)
+        idx       = raw_names.index(cur) if cur in raw_names else 0
+
+        sel_label = st.selectbox(
+            "Select Remote Model",
+            options=labels,
+            index=idx,
+            key="_remote_model_label_sel",
+        )
+        sel_name = raw_names[labels.index(sel_label)]
+
+        # Write the selection into the standard eval keys so the evaluator
+        # doesn't need to know about the source mode.
+        st.session_state["external_selected_model"] = sel_name
+        st.session_state["selected_model"]          = sel_name
+        st.session_state["selected_model_path"]     = sel_name  # remote: name IS the path
+        st.session_state["backend_type"]            = "llama.cpp"
+        st.session_state["llm_url"]                 = st.session_state["external_llm_url"]
+
+        sel_meta = next((m for m in remote_models if m["name"] == sel_name), {})
+        parts = [f"Source: remote  |  URL: `{st.session_state['external_llm_url']}`"]
+        if sel_meta.get("size_gb"):
+            parts.append(f"Size: `{sel_meta['size_gb']} GB`")
+        if sel_meta.get("context_size"):
+            ctx_val = int(sel_meta["context_size"])
+            parts.append(f"Max ctx: `{ctx_val:,}`")
+            # Push the remote server's n_ctx into the context slider when it
+            # would otherwise be capped below the server's capability.
+            if ctx_val > st.session_state.get("context_size", 0):
+                st.session_state["context_size"] = min(ctx_val, MAX_CONTEXT_SIZE)
+        st.caption("  |  ".join(parts))
+
+        # Remote server status (read-only — no start/stop)
+        ext_url = st.session_state.get("external_llm_url", "")
+        if ext_url:
+            col_chk, _ = st.columns([2, 5])
+            with col_chk:
+                if st.button("Check Status", key="btn_check_remote_status", use_container_width=True):
+                    info = llama_server.get_server_info(ext_url)
+                    if info:
+                        st.success(
+                            f"Online  |  model: `{(info.get('model_path') or '').split('/')[-1]}`"
+                            f"  |  n_ctx: `{info.get('n_ctx', '?')}`"
+                        )
+                    else:
+                        st.error("Could not reach server. Check the URL and server status.")
+
+        st.subheader("Context Window")
+        st.slider(
+            "Tokens",
+            min_value=MIN_CONTEXT_SIZE,
+            max_value=MAX_CONTEXT_SIZE,
+            step=CONTEXT_STEP,
+            key="context_size",
+            help="Tokens sent per request. Remote server's actual n_ctx is shown via Check Status.",
+        )
 
 
 def _gguf_model_selector() -> None:

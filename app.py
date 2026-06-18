@@ -41,33 +41,47 @@ st.markdown(
 )
 
 # ── Persistent model status bar ────────────────────────────────────────────────
-_backend  = st.session_state.get("backend_type", "llama.cpp")
-_model    = st.session_state.get("selected_model") or "not chosen"
-_running  = st.session_state.get("llama_server_running", False)
-_ctx      = st.session_state.get("context_size", DEFAULT_CONTEXT_SIZE)
-_mcp_on   = st.session_state.get("mcp_running", False)
-_tool_foc = st.session_state.get("tool_focus", "")
+_backend     = st.session_state.get("backend_type", "llama.cpp")
+_model       = st.session_state.get("selected_model") or "not chosen"
+_running     = st.session_state.get("llama_server_running", False)
+_ctx         = st.session_state.get("context_size", DEFAULT_CONTEXT_SIZE)
+_mcp_on      = st.session_state.get("mcp_running", False)
+_tool_foc    = st.session_state.get("tool_focus", "")
+_src_mode    = st.session_state.get("model_source_mode", "pre_compiled_local")
+_is_remote   = _src_mode == "pre_compiled_remote"
 
 _process  = st.session_state.get("llama_server_process")
 _crashed  = st.session_state.get("llama_server_crashed", False)
-if _running:
+
+if _is_remote:
+    # Remote server — we don't manage it locally; show a static "remote" pill
     _srv_state = "up"
+    _srv_label = f"{_backend}: remote"
+elif _running:
+    _srv_state = "up"
+    _srv_label = f"{_backend}: running"
 elif _backend == "ollama":
     _srv_state = "wait"
+    _srv_label = f"{_backend}: stopped"
 elif _crashed:
     _srv_state = "down"
+    _srv_label = f"{_backend}: crashed"
 else:
-    _srv_state = "wait"   # never started or loading
+    _srv_state = "wait"
+    _srv_label = f"{_backend}: stopped"
 
 _mod_state = "up" if _model != "not chosen" else "wait"
 _ctx_state = "up" if _ctx >= MIN_CONTEXT_SIZE else "wait"
 
+_model_label = _model.split("/")[-1] if "/" in _model else _model
 _pills = (
-    status_pill(f"Model: {_model.split('/')[-1] if '/' in _model else _model}", _mod_state)
-    + status_pill(f"{_backend}: {'running' if _running else 'stopped'}", _srv_state)
+    status_pill(f"Model: {_model_label}", _mod_state)
+    + status_pill(_srv_label, _srv_state)
     + status_pill(f"ctx: {_ctx:,}", _ctx_state)
     + status_pill(f"MCP: {'on' if _mcp_on else 'off'}", "up" if _mcp_on else "wait")
 )
+if _is_remote:
+    _pills += status_pill("source: remote", "up")
 if _tool_foc:
     _pills += status_pill(f"Tool: {_tool_foc}", "up")
 
@@ -75,7 +89,9 @@ _bar_col, _restart_col = st.columns([8, 1])
 with _bar_col:
     st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
 with _restart_col:
-    if _backend == "llama.cpp" and st.button(
+    # Show Restart only for local llama.cpp — remote servers are not managed here.
+    _show_restart = _backend == "llama.cpp" and not _is_remote
+    if _show_restart and st.button(
         "↺ Restart", key="btn_global_restart",
         use_container_width=True,
         help="Stop and restart the llama-server with the current model and context size",
