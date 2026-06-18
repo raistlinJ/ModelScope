@@ -138,6 +138,14 @@ class SSHEnvironment(BaseEnvironment):
         client.connect(**kwargs)
         self._client = client
         sftp = client.open_sftp()
+        # Expand ~ — SFTP protocol does not resolve shell home shortcuts, so
+        # sftp.chdir("~/foo") raises [Errno 2] No such file.  Ask the remote
+        # shell for $HOME once and substitute it before entering the directory.
+        if self._remote_cwd.startswith("~"):
+            _stdin, _stdout, _stderr = client.exec_command("echo $HOME")
+            _home = _stdout.read().decode().strip()
+            if _home:
+                self._remote_cwd = _home + self._remote_cwd[1:]  # ~/foo → /home/user/foo
         try:
             sftp.chdir(self._remote_cwd)
             self._remote_cwd = sftp.getcwd() or self._remote_cwd

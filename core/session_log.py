@@ -2,7 +2,7 @@
 
 Each call to ``run_evaluation()`` (or ``run_caf_ssh_evaluation()``) can be
 wrapped with a ``SessionLog`` instance.  The instance creates a timestamped
-directory under ``base_dir`` (default ``~/.modelscope/sessions``) and writes:
+directory under ``base_dir`` (default ``ModelScope/logs/sessions/``) and writes:
 
 * ``run.log``           — all ``on_log()`` messages, timestamped, one per line
 * ``telemetry.json``    — the dict returned by ``run_evaluation()``
@@ -22,10 +22,15 @@ import datetime
 import json
 import logging
 import os
+import pathlib as _pl
 import threading
 import uuid
 from pathlib import Path
 from typing import Any
+
+# Derive the repo root relative to this file (core/ lives one level below root).
+_REPO_ROOT = _pl.Path(__file__).resolve().parent.parent
+_DEFAULT_BASE: Path = _REPO_ROOT / "logs" / "sessions"
 
 _LOGGER = logging.getLogger("modelscope")
 
@@ -49,7 +54,7 @@ class SessionLog:
 
     def __init__(self, base_dir: str | os.PathLike | None = None) -> None:
         if base_dir is None:
-            base_dir = Path.home() / ".modelscope" / "sessions"
+            base_dir = _DEFAULT_BASE
         self._base_dir = Path(base_dir)
 
         # Generate a human-readable + unique directory name at construction

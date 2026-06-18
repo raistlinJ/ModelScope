@@ -38,3 +38,6 @@ yarn-error.log*
 *.swo
 .DS_Store
 Thumbs.db
+
+# Session logs (written to ModelScope/logs/sessions/ at runtime)
+logs/

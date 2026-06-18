@@ -23,13 +23,13 @@ class TestSessionLogBasics:
         sl = SessionLog(base_dir=tmp_path)
         assert not sl.session_dir.exists()
 
-    def test_default_base_dir_is_home(self):
-        """Check the default base dir resolves to ~/.modelscope/sessions.
+    def test_default_base_dir_is_repo_logs(self):
+        """Check the default base dir resolves to ModelScope/logs/sessions/.
 
         We instantiate but do NOT write, so no actual directory is created.
         """
         sl = SessionLog()
-        assert sl.session_dir.parts[-3] == ".modelscope"
+        assert sl.session_dir.parts[-3] == "logs"
         assert sl.session_dir.parts[-2] == "sessions"
 
     def test_close_is_noop(self, tmp_path):
