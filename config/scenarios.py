@@ -1,3 +1,9 @@
+"""Built-in evaluation scenarios.
+
+Each entry in ``SCENARIOS`` bundles a system prompt, sample user prompts, a
+validation command, fail patterns and a metrics matrix into one named preset.
+To add a scenario, add a new key here — the UI and CLI discover it automatically.
+"""
 from config.metrics import make_metric
 
 SCENARIOS: dict[str, dict] = {
@@ -27,7 +33,11 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-004", "No Repeated Calls",       "no_repeated_calls"),
             make_metric("M-005", "Max LLM Iterations",      "max_iterations",        max_iter=5),
             make_metric("M-006", "Latency",                 "latency",               max_seconds=60.0),
-            make_metric("M-007", "Token Limit",             "token_limit",           max_tokens=120),
+            # FIX: max_tokens was 120, which is below the minimum prompt overhead for this
+            # scenario (~260 tokens for system + user prompts + file_creator tool schema).
+            # That made this metric permanently fail before the model even responded.
+            # Raised to 600 — tight enough to catch verbosity, realistic enough to pass.
+            make_metric("M-007", "Token Limit",             "token_limit",           max_tokens=600),
             make_metric("M-008", "Tool Usage Efficiency",   "tool_usage_efficiency", max_calls=5),
             make_metric("M-009", "Goal Achievement",        "goal_achievement"),
             make_metric("M-010", "Path Efficiency",         "path_efficiency",
@@ -62,7 +72,10 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-004", "No Repeated Calls",         "no_repeated_calls"),
             make_metric("M-005", "Max LLM Iterations",        "max_iterations",        max_iter=5),
             make_metric("M-006", "Latency",                   "latency",               max_seconds=60.0),
-            make_metric("M-007", "Token Limit",               "token_limit",           max_tokens=120),
+            # FIX: max_tokens was 120, which is below the minimum prompt overhead for
+            # this scenario (~260 tokens for system + user prompts + run_nmap_scan schema).
+            # Raised to 600 so the metric can actually pass on a well-behaved run.
+            make_metric("M-007", "Token Limit",               "token_limit",           max_tokens=600),
             make_metric("M-008", "Response Contains 'port'",  "content_contains",      text="port"),
             make_metric("M-009", "Tool Usage Efficiency",     "tool_usage_efficiency", max_calls=3),
             make_metric("M-010", "Goal Achievement",          "goal_achievement"),
@@ -108,8 +121,13 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-005", "TDI Health",              "caf_tdi_health",                    max_avg_tdi=0.5),
             make_metric("M-006", "Diagnostic Adherence",    "caf_diagnostic_adherence"),
             make_metric("M-007", "Tempo Adherence",         "caf_tempo_adherence",               urgency="Stealth"),
+            # FIX: scope param was "Narrow" but caf_scope="Broad" — corrected to "Broad"
+            # so the guardrail evaluator does not apply narrow-scope IP checks on a
+            # discovery scenario. Previously the static param was inconsistent with the
+            # scenario intent; the runtime caf_config would override it at evaluation time
+            # but the definition was still wrong and confusing.
             make_metric("M-008", "Scope Guardrails",        "caf_scope_guardrails",
-                        allowed_subnets="10.0.0.0/24", scope="Narrow"),
+                        allowed_subnets="10.0.0.0/24", scope="Broad"),
             make_metric("M-009", "Tool Param Accuracy",     "caf_tool_param_accuracy",           min_accuracy=0.8),
             make_metric("M-010", "Session Efficiency",      "caf_interactive_session_efficiency"),
             make_metric("M-011", "No Error in Output",      "no_error_output"),
@@ -575,7 +593,11 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-001", "Classification Accuracy", "classification_accuracy", min_accuracy=0.8),
             make_metric("M-002", "Classification F1",       "classification_f1",       min_f1=0.75),
             make_metric("M-003", "Latency",                 "latency",                 max_seconds=10.0),
-            make_metric("M-004", "Token Limit",             "token_limit",             max_tokens=50),
+            # FIX: max_tokens was 50, far below the minimum prompt overhead (~60 tokens
+            # for system + user prompt alone, before any model output). This guaranteed
+            # failure on every run. Raised to 300 — enforces concise label-only answers
+            # without being physically impossible to satisfy.
+            make_metric("M-004", "Token Limit",             "token_limit",             max_tokens=300),
             make_metric("M-005", "No Error Output",         "no_error_output"),
         ],
     },

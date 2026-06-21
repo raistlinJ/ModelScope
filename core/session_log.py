@@ -150,3 +150,93 @@ class SessionLog:
     def close(self) -> None:
         """No-op finaliser — provided for symmetry with resource managers."""
         pass
+
+
+# ── Reading side: SessionRepository ────────────────────────────────────────────
+
+
+def default_sessions_dir() -> Path:
+    """The directory ``SessionLog`` writes to and readers should read from.
+
+    Single source of truth for the sessions root: ``ModelScope/logs/sessions/``.
+    Both the CLI ``sessions`` subcommand and the dashboard's "Recent Sessions"
+    viewer consume this so they can never drift apart again (they previously
+    pointed at two different directories, and the dashboard silently showed
+    nothing because it read ``~/.modelscope/sessions`` which is never written).
+    """
+    return _DEFAULT_BASE
+
+
+class SessionRepository:
+    """Read-only data access over the session log directory.
+
+    Returns plain data (paths, dicts) and contains no presentation logic — the
+    CLI formats it as a table, the dashboard renders it with Streamlit. Keeping
+    directory discovery and telemetry parsing here means there is exactly one
+    implementation of "how a session is stored on disk".
+    """
+
+    #: Telemetry filenames to try, in order. CAF multi-prompt runs write indexed
+    #: files (telemetry_0.json …); single runs write telemetry.json.
+    _TELEMETRY_NAMES = ("telemetry.json", "telemetry_0.json")
+
+    def __init__(self, base_dir: str | os.PathLike | None = None) -> None:
+        self._base_dir = Path(base_dir) if base_dir is not None else default_sessions_dir()
+
+    @property
+    def base_dir(self) -> Path:
+        return self._base_dir
+
+    def list_sessions(self, limit: int | None = None) -> list[Path]:
+        """Return session directories, most recent first.
+
+        Timestamp-prefixed names sort chronologically, so a reverse name sort is
+        equivalent to newest-first without stat-ing every directory.
+        """
+        if not self._base_dir.exists():
+            return []
+        dirs = sorted(
+            (d for d in self._base_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.name,
+            reverse=True,
+        )
+        return dirs[:limit] if limit is not None else dirs
+
+    def find_session(self, session_id: str) -> Path | None:
+        """Resolve a session by full directory name or trailing 8-char run ID."""
+        if not self._base_dir.exists():
+            return None
+        exact = self._base_dir / session_id
+        if exact.is_dir():
+            return exact
+        for entry in sorted(self._base_dir.iterdir()):
+            if entry.is_dir() and entry.name.endswith(session_id):
+                return entry
+        return None
+
+    def read_telemetry(self, session_dir: str | os.PathLike) -> dict[str, Any]:
+        """Read a session's telemetry, trying telemetry.json then telemetry_0.json."""
+        session_dir = Path(session_dir)
+        for name in self._TELEMETRY_NAMES:
+            path = session_dir / name
+            if path.exists():
+                try:
+                    return json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+        return {}
+
+    def telemetry_files(self, session_dir: str | os.PathLike) -> list[Path]:
+        """Return all telemetry artefacts for a session (single or multi-prompt)."""
+        session_dir = Path(session_dir)
+        single = session_dir / "telemetry.json"
+        if single.exists():
+            return [single]
+        return sorted(session_dir.glob("telemetry_*.json"))
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """Return ``{"dir", "telemetry"}`` for a session, or None if not found."""
+        session_dir = self.find_session(session_id)
+        if session_dir is None:
+            return None
+        return {"dir": session_dir, "telemetry": self.read_telemetry(session_dir)}

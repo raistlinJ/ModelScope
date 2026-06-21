@@ -16,12 +16,10 @@ import shlex
 import time
 
 from core.caf_state import StepTelemetry, infer_phase
+from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported; tests import from here
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
-
-def _strip_ansi(text: str) -> str:
-    return re.sub(r'\x1b(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])', '', text)
 
 
 def _caf_provider_flags(config: dict) -> str:
@@ -168,6 +166,13 @@ def _telemetry_from_caf(
 
     telemetry["tool_calls"]     = caf_tool_calls
     telemetry["caf_trajectory"] = caf_trajectory
+
+    # FIX: inefficiencies was never computed for SSH runs, so no_repeated_calls and
+    # goal_achievement always scored PASS vacuously. Import _check_inefficiencies from
+    # evaluator (same import already used for _init_telemetry/_calculate_step_tdi above)
+    # to give SSH runs the same loop-detection guarantees as local runs.
+    from core.evaluator import _check_inefficiencies
+    telemetry["inefficiencies"] = _check_inefficiencies(caf_tool_calls)
 
     transcript_path = pathlib.Path(local_run_dir) / run_id / "transcript.md"
     if transcript_path.exists():

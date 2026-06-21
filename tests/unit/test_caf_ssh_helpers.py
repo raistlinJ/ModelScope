@@ -235,10 +235,16 @@ class TestRunCafSshEvaluation:
         }
         env.read_file.side_effect = lambda path: json.dumps({"status": "completed"}) \
             if "metadata.json" in path else "# transcript"
+        # FIX: MagicMock auto-creates execute_streaming as a truthy callable, causing
+        # run_caf_ssh_evaluation to take the streaming path and return a MagicMock
+        # dict instead of a real {"stdout": str, "stderr": str, "exit_code": int}.
+        # Setting execute_streaming=None forces the non-streaming (blocking execute)
+        # path, which is properly mocked above via env.execute.return_value.
+        env.execute_streaming = None
         return env
 
-    @patch("core.evaluator._pull_caf_artifacts")
-    @patch("core.evaluator._telemetry_from_caf")
+    @patch("core.caf_runner._pull_caf_artifacts")
+    @patch("core.caf_runner._telemetry_from_caf")
     def test_delegates_to_pull_and_telemetry(self, mock_tel, mock_pull, tmp_path):
         mock_pull.return_value = {"status": "completed"}
         mock_tel.return_value = _init_telemetry(_base_config())
@@ -251,7 +257,7 @@ class TestRunCafSshEvaluation:
         mock_pull.assert_called_once()
         mock_tel.assert_called_once()
 
-    @patch("core.evaluator._pull_caf_artifacts")
+    @patch("core.caf_runner._pull_caf_artifacts")
     def test_no_run_id_returns_basic_telemetry(self, mock_pull, tmp_path):
         env = self._make_env(stdout="No transcript line here")
         logs = []
@@ -261,7 +267,7 @@ class TestRunCafSshEvaluation:
         assert any("[WARN]" in l for l in logs)
         mock_pull.assert_not_called()
 
-    @patch("core.evaluator._pull_caf_artifacts")
+    @patch("core.caf_runner._pull_caf_artifacts")
     def test_nonzero_exit_code_marks_aborted(self, mock_pull, tmp_path):
         env = self._make_env(exit_code=1, stdout="")
         tel = run_caf_ssh_evaluation(env, _base_config(), lambda _: None,
@@ -269,9 +275,9 @@ class TestRunCafSshEvaluation:
         assert tel["run_aborted"] is True
         mock_pull.assert_not_called()
 
-    @patch("core.evaluator._pull_caf_artifacts")
+    @patch("core.caf_runner._pull_caf_artifacts")
     @patch("core.evaluator._run_validation")
-    @patch("core.evaluator._telemetry_from_caf")
+    @patch("core.caf_runner._telemetry_from_caf")
     def test_validation_run_when_command_set(self, mock_tel, mock_val, mock_pull, tmp_path):
         mock_pull.return_value = {}
         mock_val.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0, "passed": True}
@@ -286,9 +292,9 @@ class TestRunCafSshEvaluation:
         )
         mock_val.assert_called_once()
 
-    @patch("core.evaluator._pull_caf_artifacts")
+    @patch("core.caf_runner._pull_caf_artifacts")
     @patch("core.evaluator._run_validation")
-    @patch("core.evaluator._telemetry_from_caf")
+    @patch("core.caf_runner._telemetry_from_caf")
     def test_no_validation_when_command_empty(self, mock_tel, mock_val, mock_pull, tmp_path):
         mock_pull.return_value = {}
         mock_tel.return_value = _init_telemetry(_base_config())

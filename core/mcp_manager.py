@@ -1,3 +1,10 @@
+"""MCP (Model Context Protocol) server lifecycle and tool invocation.
+
+Starts/stops the local MCP tool server and proxies tool calls to it over HTTP.
+The evaluator calls ``call_mcp_tool`` to run a tool when an MCP server is up,
+falling back to in-environment execution otherwise. Server state is held in
+Streamlit session state, so this module is UI-coupled.
+"""
 import json
 import os
 import subprocess
@@ -6,14 +13,32 @@ import requests
 from config.defaults import MCP_SERVER_BASE_URL
 
 
+def poll_mcp_process() -> bool:
+    """Synchronise session-state with the tracked MCP child process."""
+    proc = st.session_state.get("mcp_process")
+    if proc is None:
+        st.session_state["mcp_running"] = False
+        return False
+    try:
+        running = proc.poll() is None
+    except Exception:
+        running = False
+    st.session_state["mcp_running"] = running
+    if not running:
+        st.session_state.pop("mcp_process", None)
+    return running
+
+
 def start_mcp(script_path: str) -> tuple[bool, str]:
     if not os.path.exists(script_path):
         return False, f"Script not found: {script_path}"
     try:
         proc = subprocess.Popen(
             ["node", script_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True,
         )
+        if proc.poll() is not None:
+            return False, "MCP server exited immediately"
         st.session_state["mcp_process"] = proc
         st.session_state["mcp_running"] = True
         return True, f"Started (pid {proc.pid})"
@@ -29,6 +54,10 @@ def stop_mcp() -> tuple[bool, str]:
         return False, "No MCP server running"
     try:
         proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            pass
         st.session_state.pop("mcp_process", None)
         st.session_state["mcp_running"] = False
         return True, "Stopped"

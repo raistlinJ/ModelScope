@@ -79,6 +79,7 @@ def render() -> None:
                 "Host",
                 key="target_ssh_host",
                 placeholder="192.168.1.100",
+                help="Hostname or IP address of the remote Kali Linux machine",
             )
         with c_port:
             st.number_input(
@@ -87,6 +88,7 @@ def render() -> None:
                 min_value=1,
                 max_value=65535,
                 step=1,
+                help="SSH port on the remote machine (usually 22)",
             )
 
         c_user, c_pass = st.columns(2)
@@ -95,6 +97,7 @@ def render() -> None:
                 "Username",
                 key="target_ssh_user",
                 placeholder="root",
+                help="SSH username for authentication on the remote machine",
             )
         with c_pass:
             st.text_input(
@@ -102,6 +105,7 @@ def render() -> None:
                 key="target_ssh_password",
                 type="password",
                 placeholder="(leave blank if using key)",
+                help="SSH password (leave blank if using key-based authentication)",
             )
 
         st.text_input(
@@ -123,6 +127,7 @@ def render() -> None:
                 "Test Connection",
                 key="btn_test_ssh_target",
                 use_container_width=True,
+                help="Verify SSH credentials and connectivity to the remote host",
             ):
                 _test_ssh_connection()
 

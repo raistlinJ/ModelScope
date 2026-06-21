@@ -70,11 +70,11 @@ def render_attack_tree(telemetry: dict) -> None:
     phases   = sorted({s.get("phase", "unknown") for s in trajectory} - {"", "unknown"})
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Steps",       total)
-    c2.metric("Avg TDI",           f"{avg_tdi:.3f}", help="Lower is healthier")
-    c3.metric("Failed Steps",      failed)
-    c4.metric("Avg Evidence",      f"{avg_ev:.2f}", help="Evidence confidence 0–1")
-    c5.metric("Peak Ctx Tokens",   f"{peak_ctx:,}")
+    c1.metric("Total Steps (count)",       total)
+    c2.metric("Avg TDI (0–1)",           f"{avg_tdi:.3f}", help="Lower is healthier; TDI decreases as evidence increases")
+    c3.metric("Failed Steps (count)",      failed)
+    c4.metric("Avg Evidence (0–1)",      f"{avg_ev:.2f}", help="Average evidence confidence across all steps")
+    c5.metric("Peak Ctx Tokens (count)",   f"{peak_ctx:,}")
 
     if phases:
         phase_html = " ".join(
@@ -113,10 +113,10 @@ def render_attack_tree(telemetry: dict) -> None:
 
             col1, col2, col3, col4 = st.columns(4)
             ctx = step.get("context_tokens_used", 0)
-            col1.metric("Context Tokens",    f"{ctx:,}")
-            col2.metric("Execution Time",    f"{step.get('execution_time_ms', 0):.1f} ms")
-            col3.metric("Exit Code",         exit_code)
-            col4.metric("Evidence Conf.",    f"{ev_conf:.2f}")
+            col1.metric("Context Tokens (count)",    f"{ctx:,}")
+            col2.metric("Execution Time (ms)",    f"{step.get('execution_time_ms', 0):.1f}")
+            col3.metric("Exit Code (0=success)",         exit_code)
+            col4.metric("Evidence Confidence (0–1)",    f"{ev_conf:.2f}")
 
             # TDI dimension breakdown
             tdi_e = step.get("tdi_e", ev_conf)

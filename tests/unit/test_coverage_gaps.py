@@ -391,12 +391,12 @@ class TestRunTests:
 
 class TestLoadAllToolSchemas:
     def test_returns_empty_when_no_tools_json(self, tmp_path):
-        from core.evaluator import _load_all_tool_schemas
+        from core.evaluator import _load_tool_schemas as _load_all_tool_schemas
         result = _load_all_tool_schemas(str(tmp_path / "index.js"))
         assert result == []
 
     def test_returns_schemas_from_tools_json(self, tmp_path):
-        from core.evaluator import _load_all_tool_schemas
+        from core.evaluator import _load_tool_schemas as _load_all_tool_schemas
         tools_data = [
             {"name": "file_creator", "description": "Creates files",
              "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}
@@ -409,7 +409,7 @@ class TestLoadAllToolSchemas:
         assert result[0]["function"]["name"] == "file_creator"
 
     def test_skips_entries_without_name(self, tmp_path):
-        from core.evaluator import _load_all_tool_schemas
+        from core.evaluator import _load_tool_schemas as _load_all_tool_schemas
         tools_data = [
             {"description": "No name tool"},
             {"name": "valid_tool", "description": "Good"},
@@ -421,7 +421,7 @@ class TestLoadAllToolSchemas:
         assert result[0]["function"]["name"] == "valid_tool"
 
     def test_invalid_json_returns_empty(self, tmp_path):
-        from core.evaluator import _load_all_tool_schemas
+        from core.evaluator import _load_tool_schemas as _load_all_tool_schemas
         tools_file = tmp_path / "tools.json"
         tools_file.write_text("NOT JSON {{{")
         result = _load_all_tool_schemas(str(tmp_path / "index.js"))

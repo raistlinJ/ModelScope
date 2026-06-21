@@ -11,7 +11,7 @@ from config.defaults import (
 from config.metrics import METRIC_TYPES, CATEGORIES, format_criterion
 from config.scenarios import SCENARIOS
 from core.models import scan_gguf_models, fetch_ollama_models, fetch_llama_cpp_models, compile_gguf
-from core.mcp_manager import start_mcp, stop_mcp, discover_tools
+from core.mcp_manager import start_mcp, stop_mcp, discover_tools, poll_mcp_process
 from core import llama_server
 from core.state import sync_scenario
 from ui.components import badge, type_badge, CAT_COLOUR
@@ -161,6 +161,7 @@ def _model_setup() -> None:
                     options=["llama.cpp", "ollama"],
                     index=0 if st.session_state["backend_type"] == "llama.cpp" else 1,
                     key="backend_type",
+                    help="Inference engine: llama.cpp loads local GGUF files; Ollama manages models centrally.",
                 )
             with c_url:
                 if st.session_state.get("_last_backend") != backend:
@@ -174,7 +175,7 @@ def _model_setup() -> None:
                     st.session_state["llm_url"] = (
                         LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
                     )
-                st.text_input("Server URL", key="llm_url")
+                st.text_input("Server URL", key="llm_url", help="HTTP base URL of the inference server (e.g., http://127.0.0.1:8080)")
 
             st.subheader("Model")
             if backend == "llama.cpp":
@@ -403,9 +404,9 @@ def _mcp_server_section() -> None:
         # ── Local MCP ─────────────────────────────────────────────────────────
         col_path, col_url = st.columns([1, 1])
         with col_path:
-            st.text_input("Node.js Script Path", key="mcp_url")
+            st.text_input("MCP Server Script", key="mcp_url", help="Path to the MCP server index.js (Node.js entry point)")
         with col_url:
-            st.text_input("MCP Server URL", key="mcp_server_url")
+            st.text_input("MCP Server URL", key="mcp_server_url", help="HTTP endpoint where the MCP server listens (e.g., http://127.0.0.1:3000)")
 
         col_start, col_stop, _ = st.columns([1, 1, 4])
         with col_start:
@@ -419,7 +420,7 @@ def _mcp_server_section() -> None:
                 st.session_state["_mcp_msg"] = ("success" if ok else "info", msg)
                 st.rerun()
 
-        running = st.session_state.get("mcp_running", False)
+        running = poll_mcp_process()
         pill_state = "up" if running else "wait"
         pill_label = "Running" if running else "Stopped"
         st.markdown(
@@ -657,6 +658,7 @@ def _remote_model_section_inline() -> None:
         options=labels,
         index=idx,
         key="_remote_model_label_sel",
+        help="Choose which pre-compiled model to use on the remote llama.cpp server.",
     )
     sel_name = raw_names[labels.index(sel_label)]
 
@@ -784,7 +786,7 @@ def _ollama_model_selector() -> None:
         raw_names = [m["name"] for m in models]
         cur       = st.session_state.get("selected_model")
         idx       = raw_names.index(cur) if cur in raw_names else 0
-        sel_label = st.selectbox("Select Ollama Model", options=labels, index=idx)
+        sel_label = st.selectbox("Select Ollama Model", options=labels, index=idx, help="Choose an Ollama model from those available on the server.")
         sel_name  = raw_names[labels.index(sel_label)]
         st.session_state["selected_model"]      = sel_name
         st.session_state["selected_model_path"] = sel_name  # Ollama: name IS the path
@@ -931,9 +933,9 @@ def _metrics_setup() -> None:
         )
 
         c1, c2, c3 = st.columns([2, 3, 4])
-        new_id     = c1.text_input("ID",   value=suggested_id, key="_nm_id")
-        new_name   = c2.text_input("Name", placeholder="My Check", key="_nm_name")
-        type_label = c3.selectbox("Type",  options=type_options, key="_nm_type")
+        new_id     = c1.text_input("ID",   value=suggested_id, key="_nm_id", help="Unique metric identifier in M-NNN format (e.g., M-001)")
+        new_name   = c2.text_input("Name", placeholder="My Check", key="_nm_name", help="Human-readable name for this metric")
+        type_label = c3.selectbox("Type",  options=type_options, key="_nm_type", help="Category and type of metric (validation, performance, tool usage, etc.)")
 
         selected_type_key = ""
         for key, info in METRIC_TYPES.items():

@@ -183,13 +183,13 @@ def render() -> None:
                 value=5,
                 step=1,
                 key="_bq_priority",
-                help="Lower numbers run first (1 = highest priority)",
+                help="Job execution priority: lower numbers (1 = highest) run first in the queue",
             )
 
         use_prompt_override = st.checkbox(
             "Override prompts for this job",
             key="_bq_use_override",
-            help="Provide custom system / user prompts instead of the scenario defaults",
+            help="Use custom system/user prompts instead of the scenario defaults for this job",
         )
         sys_prompt_override = ""
         user_prompt_override = ""

@@ -1,3 +1,9 @@
+"""Static configuration constants and machine-specific paths.
+
+Centralises every default URL, filesystem path and tunable limit so they appear
+exactly once. Paths default to this developer's machine but are overridable via
+environment variables for portability.
+"""
 import os
 
 # LLM server defaults

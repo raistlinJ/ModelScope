@@ -1,3 +1,9 @@
+"""Model discovery and inventory.
+
+Finds available models for each backend: GGUF files on disk for llama.cpp and
+the model list served by a running Ollama/llama.cpp HTTP endpoint. Returns plain
+metadata; it does not start servers (that is core.llama_server) or run inference.
+"""
 import os
 import subprocess
 import sys

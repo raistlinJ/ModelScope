@@ -1,3 +1,14 @@
+"""Local LLM evaluation loop: drives the agent turn/tool-call cycle.
+
+This module owns the *local* execution path — it sends prompts to a llama.cpp
+or Ollama backend, executes any tool calls the model emits against the supplied
+``BaseEnvironment``, accumulates telemetry (latency, tokens, per-step CAF Task
+Difficulty Index) and runs the post-run validation command.
+
+Remote CyberAgentFlow runs are delegated to :mod:`core.caf_runner`;
+``run_evaluation`` dispatches there when the environment advertises
+``is_remote_caf`` (or ``config["execution_mode"] == "caf_ssh"``).
+"""
 import json
 import os
 import re
@@ -13,13 +24,7 @@ from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment
 from core.mcp_manager import call_mcp_tool
 from core.streaming import stream_ollama, stream_llama_cpp
-
-
-# ── ANSI helper ────────────────────────────────────────────────────────────────
-
-def _strip_ansi(text: str) -> str:
-    """Remove ANSI escape sequences from text."""
-    return re.sub(r'\x1b(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])', '', text)
+from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported for callers/tests
 
 
 # ── Tool schema loading ────────────────────────────────────────────────────────
@@ -360,10 +365,85 @@ def _finalize_telemetry(telemetry: dict, start_t: float) -> None:
         )
 
 
+def _run_ai_judge(telemetry: dict, config: dict, on_log: Callable[[str], None]) -> None:
+    """Score the final response with the optional frontier-model judge."""
+    if not config.get("judge_enabled"):
+        return
+    if config.get("judge_mode") == "Generate ground truth only":
+        on_log("[JUDGE] Skipped — ground-truth generation mode is selected")
+        return
+    api_key = (config.get("judge_api_key") or "").strip()
+    if not api_key:
+        on_log("[JUDGE] Skipped — no API key configured")
+        telemetry["judge_error"] = "No API key configured"
+        return
+    response = telemetry.get("llm_response", "")
+    if not response.strip():
+        on_log("[JUDGE] Skipped — no LLM response to score")
+        telemetry["judge_error"] = "No LLM response to score"
+        return
+
+    try:
+        from core.judge import FrontierJudge
+        judge = FrontierJudge(
+            provider=config.get("judge_provider", "anthropic"),
+            model=config.get("judge_model", ""),
+            api_key=api_key,
+            temperature=float(config.get("judge_temperature", 0.0)),
+        )
+        on_log(f"[JUDGE] Scoring response with {judge.provider}/{judge.model}")
+        score = judge.score_response(
+            prompt=config.get("user_prompt", ""),
+            response=response,
+            ground_truth=config.get("expected_stdout") or None,
+        )
+    except Exception as exc:
+        on_log(f"[JUDGE] Failed: {exc}")
+        telemetry["judge_error"] = str(exc)
+        return
+
+    if score is None:
+        on_log("[JUDGE] Failed — no score returned")
+        telemetry["judge_error"] = "No score returned"
+        return
+
+    dims = ["correctness", "coherence", "goal_alignment", "safety", "efficiency"]
+    telemetry["judge_scores"] = {
+        dim: {
+            "score": int(getattr(score, dim, 0)),
+            "justification": score.justifications.get(dim, ""),
+        }
+        for dim in dims
+    }
+    telemetry["judge_aggregate_score"] = score.aggregate_score
+    telemetry["judge_raw_response"] = score.raw_response
+    on_log(f"[JUDGE] Aggregate score: {score.aggregate_score:.1f}/100")
+
+
 # ── CAF SSH execution — delegated to core.caf_runner ──────────────────────────
 # run_caf_ssh_evaluation is imported lazily inside run_evaluation() to avoid a
 # module-level circular import: caf_runner imports _init_telemetry and
 # _run_validation from this module at load time.
+#
+# Backward-compatible re-exports: the CAF helpers physically live in
+# core.caf_runner (their correct home), but historically lived here. Existing
+# callers and tests still do ``from core.evaluator import _pull_caf_artifacts``.
+# A module-level __getattr__ (PEP 562) resolves those names lazily, so the old
+# import path keeps working without re-introducing the circular import.
+_CAF_REEXPORTS = frozenset({
+    "run_caf_ssh_evaluation",
+    "_pull_caf_artifacts",
+    "_telemetry_from_caf",
+    "_parse_caf_run_id",
+    "_caf_provider_flags",
+})
+
+
+def __getattr__(name: str):
+    if name in _CAF_REEXPORTS:
+        from core import caf_runner
+        return getattr(caf_runner, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ── Main entry point ───────────────────────────────────────────────────────────
@@ -396,7 +476,9 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
     if mode == "caf_ssh":
         from core.caf_runner import run_caf_ssh_evaluation
         on_log(f"[INIT] SSH target: {env.username}@{env.host}  |  CAF dir: {env.remote_cwd}")
-        return run_caf_ssh_evaluation(env, config, on_log)
+        telemetry = run_caf_ssh_evaluation(env, config, on_log)
+        _run_ai_judge(telemetry, config, on_log)
+        return telemetry
 
     backend    = config.get("backend_type", "llama.cpp")
     base_url   = config.get("llm_url", "").rstrip("/")
@@ -533,6 +615,8 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
         telemetry["validation_passed"] = None
     else:
         on_log("[VALIDATE] No validation command configured")
+
+    _run_ai_judge(telemetry, config, on_log)
 
     if run_aborted:
         on_log(f"[ABORTED] Run aborted  |  {telemetry['total_latency']}s elapsed")

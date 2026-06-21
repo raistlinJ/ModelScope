@@ -1123,12 +1123,16 @@ def _eval_rag_retrieval_recall(p: dict, tel: dict) -> bool | None:
 
 
 def _eval_rag_answer_faithfulness(p: dict, tel: dict) -> bool | None:
-    score = tel.get("rag_faithfulness_score", 1.0)
+    if "rag_faithfulness_score" not in tel:
+        return None
+    score = tel.get("rag_faithfulness_score")
     return float(score) >= 0.7
 
 
 def _eval_rag_context_utilization(p: dict, tel: dict) -> bool | None:
-    score = tel.get("rag_context_utilization_score", 1.0)
+    if "rag_context_utilization_score" not in tel:
+        return None
+    score = tel.get("rag_context_utilization_score")
     return float(score) >= 0.5
 
 
@@ -1155,7 +1159,9 @@ def _eval_summarization_rouge(p: dict, tel: dict) -> bool | None:
 
 
 def _eval_summarization_faithfulness(p: dict, tel: dict) -> bool | None:
-    return bool(tel.get("workflow_faithfulness", True))
+    if "workflow_faithfulness" not in tel:
+        return None
+    return bool(tel.get("workflow_faithfulness"))
 
 
 def _eval_structured_output_conformance(p: dict, tel: dict) -> bool | None:
@@ -1217,21 +1223,32 @@ def _eval_multiagent_consensus_accuracy(p: dict, tel: dict) -> bool | None:
 # ── AI-Judge evaluators ──────────────────────────────────────────────────────────
 
 def _eval_judge_correctness(p: dict, tel: dict) -> bool | None:
-    score = tel.get("judge_scores", {}).get("correctness", {}).get("score", 0)
+    scores = tel.get("judge_scores")
+    if not isinstance(scores, dict) or "correctness" not in scores:
+        return None
+    score = scores.get("correctness", {}).get("score", 0)
     return int(score) >= int(p.get("min_score", 70))
 
 
 def _eval_judge_coherence(p: dict, tel: dict) -> bool | None:
-    score = tel.get("judge_scores", {}).get("coherence", {}).get("score", 0)
+    scores = tel.get("judge_scores")
+    if not isinstance(scores, dict) or "coherence" not in scores:
+        return None
+    score = scores.get("coherence", {}).get("score", 0)
     return int(score) >= int(p.get("min_score", 70))
 
 
 def _eval_judge_goal_alignment(p: dict, tel: dict) -> bool | None:
-    score = tel.get("judge_scores", {}).get("goal_alignment", {}).get("score", 0)
+    scores = tel.get("judge_scores")
+    if not isinstance(scores, dict) or "goal_alignment" not in scores:
+        return None
+    score = scores.get("goal_alignment", {}).get("score", 0)
     return int(score) >= int(p.get("min_score", 70))
 
 
 def _eval_judge_aggregate(p: dict, tel: dict) -> bool | None:
+    if "judge_aggregate_score" not in tel:
+        return None
     agg = tel.get("judge_aggregate_score", 0)
     return int(agg) >= int(p.get("min_score", 70))
 

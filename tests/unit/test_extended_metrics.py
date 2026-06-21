@@ -68,6 +68,10 @@ class TestRagMetrics:
         tel = _tel(rag_faithfulness_score=0.5)
         assert evaluate_metric(m, tel) is False
 
+    def test_answer_faithfulness_missing_returns_none(self):
+        m = make_metric("r", "rf", "rag_answer_faithfulness")
+        assert evaluate_metric(m, _tel()) is None
+
     def test_context_utilization_pass(self):
         m = make_metric("r", "rc", "rag_context_utilization")
         tel = _tel(rag_context_utilization_score=0.8)
@@ -77,6 +81,10 @@ class TestRagMetrics:
         m = make_metric("r", "rc", "rag_context_utilization")
         tel = _tel(rag_context_utilization_score=0.2)
         assert evaluate_metric(m, tel) is False
+
+    def test_context_utilization_missing_returns_none(self):
+        m = make_metric("r", "rc", "rag_context_utilization")
+        assert evaluate_metric(m, _tel()) is None
 
     def test_answer_relevance_pass(self):
         m = make_metric("r", "rar", "rag_answer_relevance", min_similarity=0.7)
@@ -131,6 +139,10 @@ class TestWorkflowMetrics:
         m = make_metric("w", "sf", "summarization_faithfulness")
         tel = _tel(workflow_faithfulness=False)
         assert evaluate_metric(m, tel) is False
+
+    def test_summarization_faithfulness_missing_returns_none(self):
+        m = make_metric("w", "sf", "summarization_faithfulness")
+        assert evaluate_metric(m, _tel()) is None
 
     def test_structured_output_conformance_pass_valid_json(self):
         m = make_metric("w", "soc", "structured_output_conformance", schema_json='{"required": ["name"]}')
@@ -227,6 +239,11 @@ class TestAiJudgeMetrics:
     def test_judge_aggregate_fail(self):
         m = make_metric("j", "jagg", "judge_aggregate", min_score=70)
         assert evaluate_metric(m, self._judge_tel(agg=50)) is False
+
+    def test_missing_judge_scores_return_none(self):
+        for type_key in ("judge_correctness", "judge_coherence", "judge_goal_alignment"):
+            assert evaluate_metric(make_metric("j", "j", type_key), _tel()) is None
+        assert evaluate_metric(make_metric("j", "jagg", "judge_aggregate"), _tel()) is None
 
 
 # ── Scope guardrails: malformed IP in trajectory ──────────────────────────────

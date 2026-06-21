@@ -40,27 +40,32 @@ def render() -> None:
                 "Model Label",
                 placeholder="e.g. Llama-3.1-8B-Q4",
                 key="_cmp_label",
+                help="Human-readable name for this model (shown in results table)",
             )
             backend = st.selectbox(
                 "Backend",
                 options=["llama.cpp", "ollama"],
                 key="_cmp_backend",
+                help="Inference engine for this model",
             )
         with col2:
             server_url = st.text_input(
                 "Server URL",
                 value=LLAMA_CPP_DEFAULT_URL,
                 key="_cmp_url",
+                help="HTTP base URL of the inference server",
             )
             model_name = st.text_input(
                 "Model name / path",
                 placeholder="e.g. llama-3.1-8b-instruct.gguf",
                 key="_cmp_model",
+                help="For llama.cpp: path to .gguf file; for Ollama: model tag (e.g., llama3.1:8b)",
             )
             ctx = st.number_input(
-                "Context size",
+                "Context size (tokens)",
                 min_value=2048, max_value=131072, value=4096,
                 key="_cmp_ctx",
+                help="Context window size in tokens for this model",
             )
 
         if st.button("Add Model", key="btn_cmp_add"):
@@ -174,9 +179,10 @@ def render() -> None:
             cols[2].write(s.get("failed", 0))
             cols[3].write(s.get("na", 0))
             rate = s.get("pass_rate", 0)
+            rate_icon = "✓" if rate >= 0.7 else "✗"
+            rate_colour = "#16a34a" if rate >= 0.7 else "#dc2626"
             cols[4].markdown(
-                f'<span style="color:{"#16a34a" if rate >= 0.7 else "#dc2626"}">'
-                f'{rate:.0%}</span>',
+                f'<span style="color:{rate_colour};font-weight:700">{rate_icon} {rate:.0%}</span>',
                 unsafe_allow_html=True,
             )
 

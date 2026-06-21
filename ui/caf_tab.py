@@ -100,7 +100,7 @@ def _prompt_list_editor() -> None:
                 "⟳ Load scenario presets",
                 key="btn_load_caf_presets",
                 use_container_width=True,
-                help=f"Replace the list with the {len(_presets)} default prompt(s) for «{_active_sc}»",
+                help=f"Replace current prompts with the {len(_presets)} default prompt(s) from the {_active_sc} scenario",
             ):
                 st.session_state["caf_prompts"] = list(_presets)
                 st.rerun()
@@ -181,14 +181,14 @@ def _pillar_controls() -> None:
                 "Scope",
                 options=["Narrow", "Broad"],
                 key="caf_scope",
-                help="Narrow = focused exploitation  |  Broad = comprehensive reconnaissance",
+                help="Scope determines the reconnaissance breadth: Narrow = focused exploitation; Broad = comprehensive network discovery",
             )
         with col_ur:
             st.selectbox(
                 "Urgency",
                 options=["Speed", "Stealth", "Balanced"],
                 key="caf_urgency",
-                help="Speed = fast BFS  |  Stealth = quiet DFS  |  Balanced = TDI-adaptive",
+                help="Urgency guides TDI: Speed = breadth-first exploration; Stealth = depth-first exploitation; Balanced = adaptive",
             )
 
         def _sync_val_cmd():
@@ -427,7 +427,7 @@ def _caf_worker(
     session_log: SessionLog,
 ) -> None:
     """Background thread: execute CAF prompts sequentially, stream output to output_q."""
-    from core.environment import SSHEnvironment
+    from core.environment import create_environment
     from core.caf_runner import run_caf_ssh_evaluation
 
     def on_log(msg: str) -> None:
@@ -440,8 +440,8 @@ def _caf_worker(
     env = None
 
     try:
-        env = SSHEnvironment(
-            host=host, port=port, username=username,
+        env = create_environment(
+            ssh=True, host=host, port=port, username=username,
             password=password, key_path=key_path, remote_cwd=caf_dir,
         )
         on_log_wrapped(f"[INIT] SSH target: {username}@{host}:{port}  caf_dir={caf_dir}")

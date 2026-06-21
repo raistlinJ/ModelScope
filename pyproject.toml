@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modelscope"
+version = "2.0.0"
+description = "ModelScope — LLM cyber-agent evaluation framework"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.35.0",
+    "requests>=2.32.0",
+    "paramiko>=3.0.0",
+]
+
+[project.scripts]
+modelscope = "cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["config*", "core*", "ui*"]

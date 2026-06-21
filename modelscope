@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# ModelScope CLI wrapper — run from the ModelScope/ directory.
+# Usage: ./modelscope <subcommand> [options]
+exec python "$(dirname "$(realpath "$0")")/cli.py" "$@"

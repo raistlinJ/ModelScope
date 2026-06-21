@@ -40,12 +40,13 @@ def render() -> None:
             "Provider",
             options=["anthropic", "openai"],
             key="judge_provider",
+            help="Cloud frontier model provider: Claude (Anthropic) or GPT-4o (OpenAI)",
         )
         default_model = "claude-sonnet-4-6" if provider == "anthropic" else "gpt-4o"
         if st.session_state.get("_last_judge_provider") != provider:
             st.session_state["judge_model"] = default_model
             st.session_state["_last_judge_provider"] = provider
-        model = st.text_input("Model", key="judge_model")
+        model = st.text_input("Model", key="judge_model", help="Model identifier (e.g., claude-sonnet-4-6 or gpt-4o)")
     with col2:
         st.text_input(
             "API Key",
@@ -67,6 +68,7 @@ def render() -> None:
         options=["Score all responses", "Sample mode (N responses)", "Generate ground truth only"],
         key="judge_mode",
         horizontal=True,
+        help="Scoring strategy: all responses, sample N responses, or generate ground truth test cases",
     )
 
     if judge_mode == "Sample mode (N responses)":
@@ -74,6 +76,7 @@ def render() -> None:
             "Sample size (N)",
             min_value=1, max_value=100, value=5,
             key="judge_sample_n",
+            help="Number of responses to sample for scoring (only used in sample mode)",
         )
 
     # Connection test
@@ -111,11 +114,13 @@ def render() -> None:
             placeholder="e.g. An AI agent that creates files using the file_creator tool...",
             height=100,
             key="judge_gt_scenario",
+            help="Describe the evaluation scenario for the judge to generate diverse test cases",
         )
         num_variants = st.number_input(
             "Number of test cases",
             min_value=1, max_value=10, value=3,
             key="judge_gt_variants",
+            help="How many diverse test cases to generate from the scenario description",
         )
 
         if st.button("Generate Test Cases", key="btn_judge_generate"):

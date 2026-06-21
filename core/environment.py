@@ -1,3 +1,18 @@
+"""Execution environments — the abstraction over *where* commands run.
+
+ModelScope drives an evaluation against a ``BaseEnvironment`` so the rest of the
+system (evaluator, preflight, batch runner) never cares whether it is talking to
+the local machine or a remote Kali VM over SSH. Two concretions exist:
+
+* :class:`LocalEnvironment` — runs commands as local subprocesses.
+* :class:`SSHEnvironment`   — runs commands on a remote host via paramiko; it
+  advertises ``is_remote_caf = True`` so the orchestrator delegates the whole
+  run to the remote CyberAgentFlow CLI instead of the local LLM loop.
+
+Use :func:`create_environment` rather than instantiating the classes directly —
+it is the single place that knows how to map "local vs SSH + connection
+details" to the right object (factory pattern).
+"""
 import shlex
 import subprocess
 import pathlib
@@ -181,13 +196,16 @@ class SSHEnvironment(BaseEnvironment):
     def username(self) -> str:
         return self._username
 
+    def _command_in_cwd(self, command: str) -> str:
+        return f"cd {shlex.quote(self.remote_cwd)} && {command}"
+
     def execute(self, command: str, timeout: int = 15, env_vars: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             self.connect()
             exports = " ".join(
                 f"export {k}={shlex.quote(str(v))};" for k, v in (env_vars or {}).items()
             )
-            full_cmd = f"cd {self.remote_cwd} && {exports + ' ' if exports else ''}{command}"
+            full_cmd = self._command_in_cwd(f"{exports + ' ' if exports else ''}{command}")
             _, stdout, stderr = self._client.exec_command(full_cmd, timeout=timeout)
             exit_code = stdout.channel.recv_exit_status()
             return {
@@ -219,7 +237,7 @@ class SSHEnvironment(BaseEnvironment):
         """
         try:
             self.connect()
-            full_cmd = f"cd {self.remote_cwd} && {command}"
+            full_cmd = self._command_in_cwd(command)
             transport = self._client.get_transport()
             channel = transport.open_session()
             channel.get_pty()
@@ -328,3 +346,45 @@ class SSHEnvironment(BaseEnvironment):
             return False
         except Exception:
             return False
+
+
+# ── Factory ──────────────────────────────────────────────────────────────────
+
+# Default install location of CyberAgentFlow on a remote Kali target. Centralised
+# here so the UI, CLI and tests all agree on one fallback value.
+DEFAULT_REMOTE_CWD = "~/cyber-agent-flow"
+
+
+def create_environment(
+    *,
+    ssh: bool = False,
+    host: str = "",
+    port: int = 22,
+    username: str = "root",
+    password: Optional[str] = None,
+    key_path: Optional[str] = None,
+    remote_cwd: str = DEFAULT_REMOTE_CWD,
+) -> BaseEnvironment:
+    """Return the right :class:`BaseEnvironment` for the requested target.
+
+    This is the single construction point for environments. Callers (the CLI,
+    the Execute tab, the CAF tab) each extract connection details from their own
+    source — argparse, ``st.session_state`` keys, thread-local vars — and pass
+    them as keyword arguments, so we never duplicate the ``SSHEnvironment(...)``
+    kwarg block or the local/remote branch across call sites.
+
+    Args:
+        ssh: When True, build an :class:`SSHEnvironment`; otherwise local.
+        host/port/username/password/key_path/remote_cwd: SSH connection details
+            (ignored for the local environment).
+    """
+    if ssh:
+        return SSHEnvironment(
+            host=host,
+            port=int(port or 22),
+            username=username or "root",
+            password=password or None,
+            key_path=key_path or None,
+            remote_cwd=remote_cwd or DEFAULT_REMOTE_CWD,
+        )
+    return LocalEnvironment()

@@ -1,0 +1,17 @@
+{
+  "summary": [
+    {
+      "job_id": "4eca8e5c",
+      "label": "Scenario 1 \u2013 File Cr | qwen2.5",
+      "scenario": "Scenario 1 \u2013 File Creation",
+      "model": "qwen2.5",
+      "status": "done",
+      "latency": 0.02,
+      "total_tokens": 0,
+      "passed_metrics": 7,
+      "failed_metrics": 3,
+      "error": ""
+    }
+  ],
+  "duration_seconds": 0.02
+}

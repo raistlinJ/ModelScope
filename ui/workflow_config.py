@@ -49,20 +49,20 @@ def _rag_config() -> None:
         "Corpus Path",
         placeholder="/path/to/documents or JSONL file",
         key="rag_corpus_path",
-        help="Directory or JSONL file containing the document corpus.",
+        help="Directory of documents or JSONL file containing the document corpus for retrieval",
     )
     col1, col2 = st.columns(2)
     with col1:
-        st.slider("Top-k retrieval", min_value=1, max_value=20, key="rag_retrieval_k")
+        st.slider("Top-k retrieval (count)", min_value=1, max_value=20, key="rag_retrieval_k", help="Number of top-ranked documents to retrieve per query")
     with col2:
         st.text_input(
             "Ground Truth Doc IDs",
             placeholder="doc1, doc2, doc3",
             key="rag_ground_truth_doc_ids",
-            help="Comma-separated document IDs that are relevant to the query.",
+            help="Comma-separated list of document IDs that should be retrieved for this query (for precision/recall scoring)",
         )
-    st.text_area("Query", height=80, key="rag_query")
-    st.text_area("Ground Truth Answer", height=100, key="rag_ground_truth_answer")
+    st.text_area("Query", height=80, key="rag_query", help="The search query the RAG system will process")
+    st.text_area("Ground Truth Answer", height=100, key="rag_ground_truth_answer", help="The expected correct answer (for faithfulness and accuracy scoring)")
     st.caption(
         "RAG metrics (precision, recall, faithfulness) are scored against these ground-truth values."
     )
@@ -86,7 +86,7 @@ def _prompt_eval_config(scenario: dict) -> None:
     for slot in slots:
         slot_vals[slot] = st.text_input(f"Slot: `{slot}`", key=f"_pev_slot_{slot}")
 
-    variant_name = st.text_input("Variant Name", key="_pev_variant_name")
+    variant_name = st.text_input("Variant Name", key="_pev_variant_name", help="Human-readable name for this prompt variant")
     if st.button("Add Variant", key="btn_pev_add_variant"):
         if variant_name:
             variants.append({"name": variant_name, "slot_values": dict(slot_vals)})
@@ -108,9 +108,9 @@ def _prompt_eval_config(scenario: dict) -> None:
 
     col_in, col_out = st.columns(2)
     with col_in:
-        tc_input = st.text_area("Input Text", height=80, key="_pev_tc_input")
+        tc_input = st.text_area("Input Text", height=80, key="_pev_tc_input", help="The input text for this test case")
     with col_out:
-        tc_expected = st.text_input("Expected Output", key="_pev_tc_expected")
+        tc_expected = st.text_input("Expected Output", key="_pev_tc_expected", help="The expected output or label for this test case")
 
     if st.button("Add Test Case", key="btn_pev_add_tc"):
         if tc_input:
@@ -134,14 +134,15 @@ def _classification_config() -> None:
         placeholder="positive, negative, neutral",
         key="classification_labels",
         height=80,
+        help="Comma-separated list of valid classification labels",
     )
     cases: list = st.session_state.get("workflow_test_cases", [])
 
     col_in, col_lbl = st.columns(2)
     with col_in:
-        tc_input = st.text_area("Test Input", height=80, key="_cls_input")
+        tc_input = st.text_area("Test Input", height=80, key="_cls_input", help="Text to classify")
     with col_lbl:
-        tc_label = st.text_input("Expected Label", key="_cls_label")
+        tc_label = st.text_input("Expected Label", key="_cls_label", help="The expected classification label for this input")
 
     if st.button("Add Test Input", key="btn_cls_add"):
         if tc_input:

@@ -7,6 +7,7 @@ from core.evaluator import run_evaluation
 from core.logsetup import logged_on_log
 from core.session_log import SessionLog
 from core import llama_server
+from core.mcp_manager import poll_mcp_process
 from ui.components import status_pill
 from ui.terminal import render_terminal
 
@@ -57,7 +58,7 @@ def render() -> None:
     backend      = st.session_state.get("backend_type", "llama.cpp")
     model_sel    = st.session_state.get("selected_model")
     llm_running  = st.session_state.get("llama_server_running", False)
-    mcp_running  = st.session_state.get("mcp_running", False)
+    mcp_running  = poll_mcp_process()
     tools_loaded = bool(st.session_state.get("mcp_tools"))
 
     llm_state  = "up"   if llm_running  else ("wait" if backend == "ollama" else "down")
@@ -266,41 +267,61 @@ def render() -> None:
             "caf_urgency":            st.session_state.get("caf_urgency", "Speed"),
             "caf_allowed_subnets":    st.session_state.get("caf_allowed_subnets", []),
             "caf_target_credentials": st.session_state.get("caf_target_credentials", []),
+            # Optional AI Judge
+            "judge_enabled":     st.session_state.get("judge_enabled", False),
+            "judge_provider":    st.session_state.get("judge_provider", "anthropic"),
+            "judge_model":       st.session_state.get("judge_model", ""),
+            "judge_api_key":     st.session_state.get("judge_api_key", ""),
+            "judge_temperature": st.session_state.get("judge_temperature", 0.0),
+            "judge_mode":        st.session_state.get("judge_mode", "Score all responses"),
         }
+
+        telemetry: dict | None = None
 
         # Spinner shows during the run (fix #15)
         with st.spinner("Evaluation running…"):
-            from core.environment import LocalEnvironment, SSHEnvironment
+            from core.environment import create_environment
             env_type = st.session_state.get("target_env_type", "local")
+            is_ssh = env_type == "remote (SSH)"
             env = None
             try:
-                if env_type == "remote (SSH)":
-                    env = SSHEnvironment(
-                        host=st.session_state.get("target_ssh_host", ""),
-                        port=int(st.session_state.get("target_ssh_port") or 22),
-                        username=st.session_state.get("target_ssh_user", "root"),
-                        password=st.session_state.get("target_ssh_password") or None,
-                        key_path=st.session_state.get("target_ssh_key_path") or None,
-                        remote_cwd=st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow",
-                    )
+                env = create_environment(
+                    ssh=is_ssh,
+                    host=st.session_state.get("target_ssh_host", ""),
+                    port=st.session_state.get("target_ssh_port") or 22,
+                    username=st.session_state.get("target_ssh_user", "root"),
+                    password=st.session_state.get("target_ssh_password"),
+                    key_path=st.session_state.get("target_ssh_key_path"),
+                    remote_cwd=st.session_state.get("target_ssh_caf_dir") or "",
+                )
+                if is_ssh:
                     on_log(
                         f"[INIT] Target: SSH "
                         f"({st.session_state.get('target_ssh_user', 'root')}@"
                         f"{st.session_state.get('target_ssh_host', '?')})"
                     )
                 else:
-                    env = LocalEnvironment()
                     on_log("[INIT] Target: Local")
 
                 # Make the dispatch mode explicit rather than relying on the
                 # evaluator to sniff the environment type.
-                config["execution_mode"] = (
-                    "caf_ssh" if env_type == "remote (SSH)" else "local"
-                )
+                config["execution_mode"] = "caf_ssh" if is_ssh else "local"
                 telemetry = run_evaluation(env, config, on_log)
+            except Exception as exc:
+                on_log(f"[ERROR] Evaluation failed: {exc}")
+                from core.evaluator import _init_telemetry
+                telemetry = _init_telemetry(config)
+                telemetry["run_aborted"] = True
+                telemetry["error"] = str(exc)
             finally:
                 if env and hasattr(env, "close"):
                     env.close()
+
+        if telemetry is None:
+            from core.evaluator import _init_telemetry
+            telemetry = _init_telemetry(config)
+            telemetry["run_aborted"] = True
+            telemetry["error"] = "Evaluation ended without telemetry"
 
         st.session_state["telemetry"]        = telemetry
         st.session_state["run_completed"]    = True

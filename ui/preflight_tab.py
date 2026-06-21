@@ -122,14 +122,14 @@ def render() -> None:
             "Layer 1 — Platform",
             use_container_width=True,
             key="btn_preflight_platform",
-            help="State machine · config pipeline · backend connectivity · filesystem",
+            help="Verify platform infrastructure: state machine, config pipeline, backend connectivity, filesystem access",
         )
     with col_e:
         eval_btn = st.button(
             "Layer 2 — Evaluation",
             use_container_width=True,
             key="btn_preflight_eval",
-            help="Metric validity · known-good/bad telemetry · validation logic",
+            help="Verify evaluation integrity: metric validity, known telemetry patterns, validation logic",
         )
     with col_all:
         all_btn = st.button(

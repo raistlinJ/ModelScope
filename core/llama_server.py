@@ -1,3 +1,9 @@
+"""Lifecycle management for a local llama.cpp server process.
+
+Starts, stops, polls the health of, and tracks the running llama-server
+subprocess. Process handles and readiness flags are stashed in Streamlit session
+state, so this module is UI-coupled and must not be imported by the CLI path.
+"""
 import os
 import subprocess
 import tempfile

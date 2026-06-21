@@ -26,6 +26,7 @@ def test_start_mcp_success(mock_exists, mock_popen):
     mock_exists.return_value = True
     mock_proc = MagicMock()
     mock_proc.pid = 5678
+    mock_proc.poll.return_value = None
     mock_popen.return_value = mock_proc
 
     ok, msg = mcp_manager.start_mcp("server.js")
@@ -62,6 +63,17 @@ def test_stop_mcp_success():
 
     assert ok is True
     mock_proc.terminate.assert_called_once()
+    assert st.session_state["mcp_running"] is False
+    assert "mcp_process" not in st.session_state
+
+
+def test_poll_mcp_process_marks_exited_process_stopped():
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = 1
+    st.session_state["mcp_process"] = mock_proc
+    st.session_state["mcp_running"] = True
+
+    assert mcp_manager.poll_mcp_process() is False
     assert st.session_state["mcp_running"] is False
     assert "mcp_process" not in st.session_state
 

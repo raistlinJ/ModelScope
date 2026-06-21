@@ -1,3 +1,9 @@
+"""Streamlit session-state initialisation and scenario synchronisation.
+
+Defines the default values for every key the UI stores in ``st.session_state``
+and keeps scenario-derived keys (prompts, validation command, CAF settings) in
+sync when the active scenario changes. UI-only — never imported by the CLI.
+"""
 import streamlit as st
 from config.defaults import (
     LLAMA_CPP_DEFAULT_URL, GGUF_MODELS_DIR,

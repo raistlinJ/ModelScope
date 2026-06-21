@@ -67,6 +67,17 @@ class TestExecuteCommandConstruction:
         env.execute("ls")
         assert fake.last_command.startswith("cd /home/kali/cyber-agent-flow && ")
 
+    def test_quotes_remote_cwd_with_spaces(self, monkeypatch):
+        env = SSHEnvironment(host="10.0.0.9", username="kali",
+                             remote_cwd="/home/kali/caf lab")
+        fake = _FakeClient()
+        env._client = fake
+        monkeypatch.setattr(env, "connect", lambda: None)
+
+        env.execute("ls")
+
+        assert fake.last_command.startswith("cd '/home/kali/caf lab' && ")
+
     def test_appends_command(self, ssh):
         env, fake = ssh
         env.execute("nmap -F 127.0.0.1")

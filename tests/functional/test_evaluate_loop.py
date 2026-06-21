@@ -46,6 +46,10 @@ def _config(**overrides):
         "fail_patterns":       [],
         "mcp_running":         False,
         "cancel_requested_ref":[False],
+        # MagicMock envs return a truthy MagicMock for any attribute lookup
+        # (including is_remote_caf), so we explicitly pin the mode to "local"
+        # to prevent accidental dispatch to the CAF SSH path.
+        "execution_mode":      "local",
     }
     base.update(overrides)
     return base
@@ -86,7 +90,7 @@ def test_early_termination_on_final_answer(mock_stream):
 
 # ── Execution-mode dispatch ───────────────────────────────────────────────────
 
-@patch("core.evaluator.run_caf_ssh_evaluation")
+@patch("core.caf_runner.run_caf_ssh_evaluation")
 @patch("core.evaluator.stream_llama_cpp")
 def test_explicit_caf_ssh_mode_delegates(mock_stream, mock_caf):
     """config execution_mode='caf_ssh' routes to the remote CAF path."""
@@ -101,7 +105,7 @@ def test_explicit_caf_ssh_mode_delegates(mock_stream, mock_caf):
     mock_stream.assert_not_called()
 
 
-@patch("core.evaluator.run_caf_ssh_evaluation")
+@patch("core.caf_runner.run_caf_ssh_evaluation")
 @patch("core.evaluator.stream_llama_cpp")
 def test_capability_flag_drives_dispatch(mock_stream, mock_caf):
     """An env advertising is_remote_caf=True auto-routes to the CAF path."""
@@ -114,7 +118,8 @@ def test_capability_flag_drives_dispatch(mock_stream, mock_caf):
     env.username, env.host, env.remote_cwd = "kali", "10.0.0.1", "/opt/caf"
     _, on_log = _logs()
 
-    evaluator.run_evaluation(env, _config(), on_log)
+    # No execution_mode in config — should auto-detect from env.is_remote_caf
+    evaluator.run_evaluation(env, _config(execution_mode=None), on_log)
 
     mock_caf.assert_called_once()
 
