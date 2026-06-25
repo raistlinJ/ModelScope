@@ -3,6 +3,25 @@ from __future__ import annotations
 
 import re
 
+try:
+    import streamlit.components.v1 as _st_components
+    _COMPONENTS_AVAILABLE = True
+except ImportError:
+    _COMPONENTS_AVAILABLE = False
+
+
+# JavaScript injected after each terminal render to scroll the terminal to the
+# bottom. Uses window.parent to escape the Streamlit iframe boundary and targets
+# the .terminal-window element directly.
+_SCROLL_JS = """
+<script>
+(function() {
+    var el = window.parent.document.querySelector('.terminal-window');
+    if (el) { el.scrollTop = el.scrollHeight; }
+})();
+</script>
+"""
+
 
 def render_terminal(
     placeholder,
@@ -41,3 +60,10 @@ def render_terminal(
         f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log">{inner}</div>',
         unsafe_allow_html=True,
     )
+
+    # Bug 8: scroll the terminal to the bottom after each render
+    if _COMPONENTS_AVAILABLE:
+        try:
+            _st_components.html(_SCROLL_JS, height=0)
+        except Exception:
+            pass

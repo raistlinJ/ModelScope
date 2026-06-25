@@ -99,10 +99,14 @@ def _render_metrics_evaluation(
     # Determine which metric statuses are PASS/FAIL/NA so we can render each
     # section visibly (groups that are entirely one colour otherwise look
     # identical to a passing row).
+    first_cat = True
     for cat in categories:
         items = by_cat.get(cat, [])
         if not items:
             continue
+        if not first_cat:
+            st.divider()
+        first_cat = False
         colour = CAT_COLOUR.get(cat, "#64748b")
         _cat_passed = sum(1 for _, r in items if r is True)
         _cat_failed = sum(1 for _, r in items if r is False)
@@ -176,6 +180,32 @@ def _render_metrics_evaluation(
 
 
 # ── Sessions viewer ────────────────────────────────────────────────────────────
+
+def _summarize_loops(tool_calls: list) -> list[str]:
+    """Group tool calls by (tool_name, args_json) and return human-readable
+    descriptions for any combination called more than twice."""
+    from collections import Counter
+    counts: Counter = Counter()
+    for tc in tool_calls:
+        name     = tc.get("tool", "?")
+        args_key = json.dumps(tc.get("args", {}), sort_keys=True, default=str)
+        counts[(name, args_key)] += 1
+    summaries = []
+    for (name, args_key), n in counts.items():
+        if n > 2:
+            try:
+                args_display = json.dumps(json.loads(args_key))
+            except Exception:
+                args_display = args_key
+            # Truncate very long arg strings for readability
+            if len(args_display) > 120:
+                args_display = args_display[:117] + "…"
+            summaries.append(
+                f"`{name}` called {n}× with identical args `{args_display}`"
+                " — the agent may have been stuck in a loop."
+            )
+    return summaries
+
 
 def _render_session_summary(t_path, t_idx: int = 0, total: int = 1) -> None:
     """Render the top metrics row for a single telemetry JSON file."""
@@ -474,22 +504,41 @@ def _render_bash_dashboard(project: dict) -> None:
 
     st.divider()
 
-    # Validation output
-    st.subheader("Validation Output")
-    val_exit = tel.get("validation_exit_code")
-    if val_exit is None:
-        st.info("No validation command was run.")
-    else:
+    # Validation commands — each is shown as an individual metric check
+    st.subheader("Validation Checks")
+    val_results: list = tel.get("validation_results", [])
+    if val_results:
+        for i, vr in enumerate(val_results):
+            passed   = vr.get("passed")
+            cmd      = vr.get("cmd", "?")
+            exit_cd  = vr.get("exit_code", "?")
+            badge    = "PASS ✓" if passed else "FAIL ✗"
+            label    = f"{badge}  `{cmd[:80]}`"
+            with st.expander(label, expanded=not passed):
+                if passed:
+                    st.success(f"PASS ✓  exit code: {exit_cd}")
+                else:
+                    st.error(f"FAIL ✗  exit code: {exit_cd}")
+                if vr.get("stdout"):
+                    st.text_area("Stdout", value=vr["stdout"], height=120,
+                                 key=f"bash_vr_stdout_{pid}_{i}")
+                if vr.get("stderr"):
+                    st.text_area("Stderr", value=vr["stderr"], height=80,
+                                 key=f"bash_vr_stderr_{pid}_{i}")
+    elif tel.get("validation_exit_code") is not None:
+        # Legacy telemetry (pre-validation_results) — fall back to aggregate display
         if tel.get("validation_passed"):
-            st.success(f"PASS ✓  (exit code: {val_exit})")
+            st.success(f"PASS ✓  (exit code: {tel['validation_exit_code']})")
         else:
-            st.error(f"FAIL ✗  (exit code: {val_exit})")
+            st.error(f"FAIL ✗  (exit code: {tel['validation_exit_code']})")
         if tel.get("validation_stdout"):
             st.text_area("Stdout", value=tel["validation_stdout"], height=160,
                          key=f"bash_val_stdout_{pid}")
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
                          key=f"bash_val_stderr_{pid}")
+    else:
+        st.info("No validation commands were run.")
 
     # Metrics matrix — use run-snapshot or current bash_metrics_matrix
     _run_matrix = tel.get("metrics_matrix", [])
@@ -535,7 +584,10 @@ def _render_llama_cli_dashboard(project: dict) -> None:
         st.caption(f"🕒 {ts}  |  🦙 {project['name']}  |  {backend}  |  {model}")
 
     if tel.get("run_aborted"):
-        st.warning("⚠️  This run was aborted — metrics may be incomplete.")
+        if tel.get("interrupted_by_user"):
+            st.warning("🛑 **Run cancelled by user** — metrics below reflect partial execution.")
+        else:
+            st.warning("⚠️ **This run was interrupted** — the agent did not complete all turns.")
 
     # Top metrics
     prompt_responses: list = tel.get("prompt_responses", [])
@@ -607,6 +659,18 @@ def _render_llama_cli_dashboard(project: dict) -> None:
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
                          key=f"llama_val_stderr_{pid}")
+
+    # Loop / inefficiency detection
+    _inefficiencies = tel.get("inefficiencies", [])
+    _loop_summaries = _summarize_loops(tel.get("tool_calls", []))
+    _all_issues = _inefficiencies + [s for s in _loop_summaries if s not in _inefficiencies]
+    if _all_issues:
+        with st.expander(
+            f"Loop / inefficiency detected ({len(_all_issues)} issue(s))",
+            expanded=True,
+        ):
+            for issue in _all_issues:
+                st.markdown(f"- {issue}")
 
     # Metrics matrix
     _run_matrix = tel.get("metrics_matrix", [])

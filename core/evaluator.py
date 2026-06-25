@@ -150,15 +150,23 @@ def _run_llm_agent_loop(
     env: BaseEnvironment,
     cancel_ref: list,
     on_log: Callable[[str], None],
+    max_turns: int = 8,
+    deadline: float | None = None,
 ) -> tuple:
     """Run agentic loop with tool calls. Returns (tool_calls_log, final_response)."""
     messages: list[dict] = [{"role": "user", "content": prompt}]
     tool_calls_log = []
     final_response = ""
 
-    for round_num in range(8):
+    for round_num in range(max_turns):
         if cancel_ref[0]:
             on_log("[CANCEL] Evaluation cancelled by user")
+            break
+
+        # Bug 2: wall-clock timeout guard
+        if deadline is not None and time.time() >= deadline:
+            on_log(f"[TIMEOUT] Evaluation exceeded time limit — stopping after {round_num} turn(s)")
+            cancel_ref[0] = True
             break
 
         on_log(f"[LLM] Turn {round_num + 1}")
@@ -192,7 +200,11 @@ def _run_llm_agent_loop(
         # Execute tools
         for tc in tool_calls_raw:
             tool_name = tc["function"]["name"]
-            tool_args = tc.get("arguments", {}) or {}
+            # Bug 1 fix: arguments are a JSON string inside tc["function"], not at tc level
+            try:
+                tool_args = json.loads(tc["function"].get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                tool_args = {}
             on_log(f"[TOOL] {tool_name}({json.dumps(tool_args)[:100]})")
             result = _execute_tool(env, tool_name, tool_args, mcp_running, mcp_server_url)
             on_log(f"[RESULT] {json.dumps(result)[:200]}")
@@ -632,6 +644,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
         "validation_stderr":    "",
         "validation_exit_code": None,
         "validation_passed":    None,
+        "validation_results":   [],
         "run_aborted":          False,
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
@@ -708,7 +721,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     # Startup commands
     _run_step_list(startup, label="RUN")
 
-    # Validation commands (flat List[str] — pass/fail semantics)
+    # Validation commands — each command is an independent metric check
     if not telemetry["run_aborted"] and val_cmds:
         all_passed = True
         for cmd in val_cmds:
@@ -716,9 +729,16 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
                 break
             val    = _run_validation(env, cmd, fail_pats)
             status = "PASS ✓" if val["passed"] else "FAIL ✗"
-            on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")
+            on_log(f"[VALIDATE] {cmd!r}  →  {status}  (exit_code={val['exit_code']})")
             if not val["passed"]:
                 all_passed = False
+            telemetry["validation_results"].append({
+                "cmd":       cmd,
+                "passed":    val["passed"],
+                "exit_code": val["exit_code"],
+                "stdout":    val.get("stdout", ""),
+                "stderr":    val.get("stderr", ""),
+            })
             telemetry["validation_stdout"] += val.get("stdout", "")
             telemetry["validation_stderr"] += val.get("stderr", "")
             telemetry["validation_exit_code"] = val["exit_code"]
@@ -744,6 +764,16 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     start_t    = time.time()
     timeout    = config.get("timeout", 120)
     cancel_ref = config.get("cancel_requested_ref", [False])
+
+    # Bug 2: compute a wall-clock deadline for the entire evaluation
+    eval_deadline = start_t + timeout
+
+    # Bug 3: read max_iter from metrics_matrix (defaults to 8 if not configured)
+    max_iter = 8
+    for m in config.get("metrics_matrix", []):
+        if m.get("type") == "max_iterations":
+            max_iter = int(m.get("params", {}).get("max_iter", 8))
+            break
     backend    = config.get("backend", "llama.cpp")
     binary     = config.get("binary_path", "") or "llama-cli"
     model_dir  = config.get("model_dir", "")
@@ -767,6 +797,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         "validation_exit_code": None,
         "validation_passed":    None,
         "run_aborted":          False,
+        "interrupted_by_user":  False,
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
 
@@ -822,7 +853,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
                     tool_calls, response = _run_llm_agent_loop(
                         base_url, model_name, prompt, tools, tokens,
-                        mcp_running, mcp_server_url, env, cancel_ref, on_log
+                        mcp_running, mcp_server_url, env, cancel_ref, on_log,
+                        max_turns=max_iter, deadline=eval_deadline,
                     )
                     telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
                     telemetry["tool_calls"].extend(tool_calls)
@@ -856,7 +888,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 try:
                     tool_calls, response = _run_llm_agent_loop(
                         base_url, model_name, prompt, tools, tokens,
-                        mcp_running, mcp_server_url, env, cancel_ref, on_log
+                        mcp_running, mcp_server_url, env, cancel_ref, on_log,
+                        max_turns=max_iter, deadline=eval_deadline,
                     )
                     on_log(f"[RESPONSE] {response[:400]}")
                     telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
@@ -986,12 +1019,12 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             "exit_code": res.get("exit_code", -1),
         })
 
-    # Validation
-    if not telemetry["run_aborted"] and val_cmds:
+    # Validation — runs even if the run was cancelled/timed-out (Bug 6)
+    if val_cmds:
+        if telemetry["run_aborted"]:
+            on_log("[WARN] Run was cancelled or timed out — metrics evaluation still proceeding")
         all_passed = True
         for cmd in val_cmds:
-            if cancel_ref[0]:
-                break
             val = _run_validation(env, cmd, fail_pats)
             status = "PASS ✓" if val["passed"] else "FAIL ✗"
             on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")

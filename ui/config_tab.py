@@ -1704,8 +1704,8 @@ def _render_bash_runtime(project: dict) -> None:
                 _test_bash_ssh_connection()
 
     with st.expander("Commands", expanded=True):
-        tab_startup, tab_validation, tab_completion = st.tabs(
-            ["▶  Startup", "✓  Validation", "⏹  Completion"]
+        tab_startup, tab_completion = st.tabs(
+            ["▶  Startup", "⏹  Completion"]
         )
         with tab_startup:
             st.caption(
@@ -1716,18 +1716,6 @@ def _render_bash_runtime(project: dict) -> None:
                 state_key="bash_startup_commands",
                 pfx="startup",
                 placeholder="e.g. /bin/bash setup.sh",
-            )
-        with tab_validation:
-            st.caption(
-                "Commands that verify success after startup. "
-                "All must exit 0 (and produce no fail-pattern output) to count as PASS."
-            )
-            _addable_list(
-                state_key="bash_validation_commands",
-                placeholder="e.g. cat /tmp/output.txt",
-                input_key="_bash_new_val_cmd",
-                add_key="btn_bash_add_val_cmd",
-                del_key_prefix="bash_del_val",
             )
         with tab_completion:
             st.caption(
@@ -1784,9 +1772,24 @@ def _test_bash_ssh_connection() -> None:
 
 
 def _render_bash_metrics(project: dict) -> None:
-    """Metrics sub-tab for Bash-Bot: fail patterns, metrics matrix."""
+    """Metrics sub-tab for Bash-Bot: validation commands, fail patterns, metrics matrix."""
 
-    # Validation Commands are managed in the Runtime tab → Commands → Validation.
+    # ── Validation Commands ────────────────────────────────────────────────────
+    st.subheader("Validation Commands")
+    st.caption(
+        "Shell commands run after startup to verify the bot completed its task. "
+        "Each command must exit 0 (and produce no fail-pattern output) to count as PASS. "
+        "Results appear as individual metric checks in the dashboard."
+    )
+    _addable_list(
+        state_key="bash_validation_commands",
+        placeholder="e.g. cat /tmp/output.txt",
+        input_key="_bash_new_val_cmd",
+        add_key="btn_bash_add_val_cmd",
+        del_key_prefix="bash_del_val",
+    )
+
+    st.divider()
 
     # ── Fail Patterns ──────────────────────────────────────────────────────────
     st.subheader("Fail Patterns")
@@ -2188,9 +2191,9 @@ def _render_llama_cli_runtime(project: dict) -> None:
     with st.expander("Model Setup", expanded=True):
         backend = st.selectbox(
             "Provider",
-            options=["llama.cpp", "llama-server (managed)", "OpenAI-compatible HTTP"],
+            options=["llama.cpp", "OpenAI-compatible HTTP"],
             key="llama_cli_backend",
-            help="llama.cpp uses llama-cli binary with --prompt; llama-server (managed) starts server and uses tools; OpenAI-compatible HTTP connects to any /v1/chat/completions endpoint.",
+            help="llama.cpp uses llama-cli binary with --prompt; OpenAI-compatible HTTP connects to any /v1/chat/completions endpoint.",
         )
 
         if backend == "llama.cpp":
@@ -2229,60 +2232,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
                         "(click Scan to refresh list)")
             else:
                 st.caption("Set Model Directory and click **Scan** to discover models.")
-        elif backend == "llama-server (managed)":
-            st.text_input(
-                "Binary Path",
-                key="llama_cli_binary_path",
-                placeholder="/usr/local/bin/llama-server",
-                help="Full path to the llama-server executable. Will be started as a subprocess with managed port.",
-            )
-            col_dir, col_scan = st.columns([4, 1])
-            with col_dir:
-                st.text_input(
-                    "Model Directory",
-                    key="llama_cli_model_dir",
-                    placeholder="/home/user/models",
-                    help="Directory to scan for .gguf model files.",
-                )
-            with col_scan:
-                st.write("")
-                st.write("")
-                if st.button("Scan", key="btn_llama_scan_models_managed", use_container_width=True):
-                    _scan_models(project)
-
-            discovered: list = st.session_state.get("llama_cli_discovered_models", [])
-            if discovered:
-                model_names = [m["name"] for m in discovered]
-                current     = st.session_state.get("llama_cli_model_name", "")
-                default_idx = model_names.index(current) if current in model_names else 0
-                chosen = st.selectbox(
-                    "Model", options=model_names, index=default_idx,
-                    key="_llama_model_sel_managed_widget",
-                )
-                st.session_state["llama_cli_model_name"] = chosen
-            elif st.session_state.get("llama_cli_model_name"):
-                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` "
-                        "(click Scan to refresh list)")
-            else:
-                st.caption("Set Model Directory and click **Scan** to discover models.")
-
-            col_port, col_ctx = st.columns(2)
-            with col_port:
-                st.number_input(
-                    "Server Port",
-                    min_value=1024, max_value=65535, step=1,
-                    key="llama_cli_server_port",
-                    value=st.session_state.get("llama_cli_server_port", 18080),
-                    help="Port for the managed llama-server instance (default 18080).",
-                )
-            with col_ctx:
-                st.number_input(
-                    "Context Size",
-                    min_value=256, max_value=131072, step=256,
-                    key="llama_cli_tokens",
-                    value=st.session_state.get("llama_cli_tokens", 2048),
-                    help="Maximum context window.",
-                )
         else:
             col_url, col_fetch = st.columns([5, 1])
             with col_url:
@@ -2333,10 +2282,18 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 _idx = _model_names.index(_cur) if _cur in _model_names else 0
                 _chosen = st.selectbox("Model", options=_model_names, index=_idx, key="_llama_openai_model_sel")
                 st.session_state["llama_cli_model_name"] = _chosen
-            elif st.session_state.get("llama_cli_model_name"):
-                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` (click Fetch to refresh)")
             else:
-                st.caption("Enter Instance URL and click **Fetch** to discover models.")
+                # No models fetched yet — allow manual entry so users can always
+                # specify a model name (e.g. "llama3.2", "phi3") without needing
+                # a live Fetch response.
+                _manual_model = st.text_input(
+                    "Model Name (optional)",
+                    key="_llama_openai_model_manual",
+                    value=st.session_state.get("llama_cli_model_name", ""),
+                    placeholder="e.g. llama3.2, phi3, gpt-4o — leave blank to use server default",
+                    help="Specify the model to request from the server. Leave blank to use whatever model the server has loaded.",
+                )
+                st.session_state["llama_cli_model_name"] = _manual_model
 
             if st.button("Check Status", key="btn_llama_check_openai_status", use_container_width=True):
                 _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()

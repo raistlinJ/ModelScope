@@ -313,6 +313,14 @@ def _run_llama_cli_bot(project: dict) -> None:
         if hasattr(env, "close"):
             env.close()
 
+    # Mark whether an explicit user cancellation caused the abort (vs timeout).
+    # cancel_requested is set only by the Cancel button — the timeout path never
+    # touches it — so it cleanly discriminates the two early-exit cases.
+    if isinstance(telemetry, dict) and telemetry.get("run_aborted"):
+        telemetry["interrupted_by_user"] = bool(
+            st.session_state.get("cancel_requested")
+        )
+
     session_log.save_telemetry(telemetry or {})
     session_log.save_config(llama_config)
     session_log.close()
@@ -350,6 +358,11 @@ def _render_llama_cli_execute(project: dict) -> None:
             model = cfg.get("model_name", "") or "not selected"
             st.write(f"**Model:** `{model}`")
             st.write(f"**Binary:** `{cfg.get('binary_path', 'llama-cli')}`")
+        elif backend.lower().startswith("openai"):
+            base_url    = cfg.get("openai_base_url", "") or "not configured"
+            model_label = cfg.get("model_name", "") or "server default"
+            st.write(f"**Base URL:** `{base_url}`")
+            st.write(f"**Model:** `{model_label}` *(server will use its default if blank)*")
 
         enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
         if enabled_mcps:
@@ -367,6 +380,21 @@ def _render_llama_cli_execute(project: dict) -> None:
                 st.code(cmd, language="bash")
 
         st.write(f"**Timeout:** {cfg.get('timeout', 60)}s")
+
+    # Bug 7: Scenario system prompt display (read-only, auto-populated from selected scenario)
+    active_sc = st.session_state.get("active_scenario", "")
+    sc_data = SCENARIOS.get(active_sc, {})
+    sc_sys_prompt = sc_data.get("system_prompt", "") or sc_data.get("sys_prompt", "")
+    if active_sc or sc_sys_prompt:
+        st.markdown("**Scenario System Prompt**")
+        displayed = sc_sys_prompt or f"No system prompt defined for scenario: {active_sc or 'none'}"
+        st.text_area(
+            "Scenario System Prompt",
+            value=displayed,
+            height=100,
+            key="llama_exec_sys_prompt_display",
+            disabled=True,
+        )
 
     run_in_progress = st.session_state.get("_run_in_progress", False)
     col_run, col_cancel, col_clear = st.columns([3, 1, 1])
@@ -398,7 +426,10 @@ def _render_llama_cli_execute(project: dict) -> None:
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
         tel = st.session_state["telemetry"]
         if tel.get("run_aborted"):
-            st.warning("⚠️ Run was cancelled or aborted.")
+            if tel.get("interrupted_by_user"):
+                st.warning("⚠️ Execution was interrupted by the user — metrics may be incomplete.")
+            else:
+                st.warning("⚠️ Execution timed out — metrics may be incomplete.")
         elif tel.get("validation_passed") is True:
             st.success("✓ Execution complete — all validation commands passed.")
         elif tel.get("validation_passed") is False:
