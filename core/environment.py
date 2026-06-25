@@ -202,8 +202,11 @@ class SSHEnvironment(BaseEnvironment):
     def execute(self, command: str, timeout: int = 15, env_vars: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             self.connect()
+            # Always export TERM so ncurses/apt/dpkg don't emit "TERM not set" stderr noise.
+            # Caller-supplied env_vars take precedence if they override TERM.
+            _effective_env = {"TERM": "xterm", **(env_vars or {})}
             exports = " ".join(
-                f"export {k}={shlex.quote(str(v))};" for k, v in (env_vars or {}).items()
+                f"export {k}={shlex.quote(str(v))};" for k, v in _effective_env.items()
             )
             full_cmd = self._command_in_cwd(f"{exports + ' ' if exports else ''}{command}")
             _, stdout, stderr = self._client.exec_command(full_cmd, timeout=timeout)

@@ -1,6 +1,6 @@
 import streamlit as st
 
-_CSS = """
+_CSS = r"""
 <style>
 /* ══════════════════════════════════════════════════════════════════
    ModelScope  ·  Security Research Tool
@@ -24,34 +24,51 @@ _CSS = """
     --accent:    #2dd4bf;
     --accent-hi: #5eead4;
     --accent-dim: rgba(45,212,191,0.15);
+    --accent-glow: rgba(45,212,191,0.08);
 
     /* Status semantics */
     --success:   #3fb950;
-    --warn:      #f0883e;   /* orange — kept distinct from yellow log-val */
+    --warn:      #f0883e;
     --error:     #f85149;
+    --cmd-color: #f0883e;
+    --prompt-color: #2dd4bf;
 
     /* Fonts — system stacks only (no CDN import) */
     --font-mono: "JetBrains Mono", Menlo, Monaco, Consolas, "Liberation Mono",
                  "Courier New", monospace;
     --font-sans: "Segoe UI", system-ui, -apple-system, Roboto,
                  "Helvetica Neue", Arial, sans-serif;
+
+    /* Transitions */
+    --transition: 0.13s ease;
 }
 
-/* ─ App shell ────────────────────────────────────────────────────── */
-html, body, [class*="css"] {
+/* ─ Native Layout Colorization ──────────────────────────────────── */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"] {
+    background-color: var(--bg) !important;
+}
+
+[data-testid="stSidebar"] {
+    background-color: var(--surface) !important;
+    border-right: 1px solid var(--border) !important;
+}
+
+[data-testid="stMainBlockContainer"],
+.block-container {
+    background-color: var(--bg) !important;
+    padding-top: 1.25rem !important;
+    padding-bottom: 6rem !important;
+    height: auto !important;
+    min-height: 100vh !important;
+}
+
+/* ─ Typography ──────────────────────────────────────────────────── */
+.stApp {
     font-family: var(--font-sans) !important;
 }
-.stApp,
-[data-testid="stApp"] {
-    background-color: var(--bg) !important;
-}
-.main .block-container {
-    background-color: var(--bg) !important;
-    padding-top: 1.25rem;
-    /* layout="wide" — let Streamlit manage the width for full dashboard density */
-}
 
-/* ─ Text — force contrast ─────────────────────────────────────────── */
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] li,
 [data-testid="stMarkdownContainer"] a,
@@ -59,7 +76,6 @@ html, body, [class*="css"] {
     color: var(--text) !important;
 }
 
-/* Caption */
 [data-testid="stCaptionContainer"],
 [data-testid="stCaptionContainer"] p {
     color: var(--muted) !important;
@@ -68,7 +84,6 @@ html, body, [class*="css"] {
     line-height: 1.45 !important;
 }
 
-/* Widget labels — concise uppercase system */
 [data-testid="stWidgetLabel"] p {
     color: var(--text) !important;
     font-weight: 600 !important;
@@ -80,11 +95,10 @@ html, body, [class*="css"] {
 /* ─ Brand header ─────────────────────────────────────────────────── */
 .brand-block {
     border-top: 2px solid var(--accent);
-    padding-top: 1rem;
-    margin: 0 0 1.5rem;
+    padding-top: 0.9rem;
+    margin: 0 0 1.25rem;
 }
 
-/* Compact inline title — NOT a giant hero */
 .spark-title {
     font-family: var(--font-sans) !important;
     font-weight: 800 !important;
@@ -100,12 +114,6 @@ html, body, [class*="css"] {
     margin: 0 0 0.3rem !important;
     border: none !important;
     display: inline-block;
-}
-
-/* Accent dot after title — purely visual */
-.spark-title::after {
-    content: ".";
-    color: var(--accent);
 }
 
 .app-subtitle {
@@ -125,13 +133,17 @@ h1, h2, h3, h4 {
 }
 h2 {
     color: var(--text) !important;
-    font-size: 0.95rem !important;
+    font-size: 0.97rem !important;
     font-weight: 700 !important;
-    border-left: 2px solid var(--accent) !important;
-    padding-left: 10px !important;
-    margin-top: 1rem !important;
-    margin-bottom: 0.5rem !important;
+    border-left: 3px solid var(--accent) !important;
+    padding-left: 12px !important;
+    margin-top: 1.25rem !important;
+    margin-bottom: 0.6rem !important;
     letter-spacing: 0.1px;
+    background: linear-gradient(to right, rgba(45,212,191,0.06), transparent 60%) !important;
+    border-radius: 0 4px 4px 0 !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
 }
 h3 {
     color: var(--muted) !important;
@@ -143,7 +155,7 @@ h3 {
 
 /* ─ Tabs — underline style ──────────────────────────────────────── */
 [data-testid="stTabs"] [role="tablist"] {
-    border-bottom: 1px solid var(--border) !important;
+    border-bottom: 1px solid rgba(48,54,61,0.8) !important;
     padding-bottom: 0;
     gap: 0;
     background: transparent;
@@ -161,7 +173,7 @@ h3 {
     letter-spacing: 0.3px;
     padding: 7px 16px !important;
     text-transform: uppercase;
-    transition: color 0.12s, border-color 0.12s;
+    transition: color var(--transition), border-color var(--transition), background var(--transition);
 }
 [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
     background: transparent !important;
@@ -170,18 +182,22 @@ h3 {
 }
 [data-testid="stTabs"] button[role="tab"]:hover:not([aria-selected="true"]) {
     color: var(--text) !important;
-    background: var(--surface) !important;
+    background: var(--accent-glow) !important;
 }
 
 /* ─ Expanders ────────────────────────────────────────────────────── */
 [data-testid="stExpander"] {
     background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
-    box-shadow: none !important;
-    backdrop-filter: none !important;
+    border: 1px solid rgba(48,54,61,0.7) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 1px 2px rgba(0,0,0,0.18) !important;
     overflow: hidden;
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.75rem;
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+[data-testid="stExpander"]:focus-within {
+    border-color: rgba(45,212,191,0.35) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 0 0 1px rgba(45,212,191,0.12) !important;
 }
 [data-testid="stExpander"] summary {
     background: var(--surface2) !important;
@@ -190,27 +206,32 @@ h3 {
     font-size: 0.78rem !important;
     text-transform: uppercase;
     letter-spacing: 0.35px;
-    padding: 10px 14px !important;
+    padding: 10px 16px !important;
+    border-radius: 10px 10px 0 0;
+    transition: color var(--transition), background var(--transition);
 }
 [data-testid="stExpander"] details[open] summary {
     background: var(--surface) !important;
-    border-bottom: 1px solid var(--border) !important;
+    border-bottom: 1px solid rgba(48,54,61,0.5) !important;
+    border-radius: 10px 10px 0 0;
 }
 [data-testid="stExpander"] summary:hover {
     color: var(--accent) !important;
+    background: var(--accent-glow) !important;
 }
 
 /* ─ Metrics ──────────────────────────────────────────────────────── */
 [data-testid="stMetric"] {
     background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
-    padding: 10px 14px !important;
-    box-shadow: none !important;
-    transition: border-color 0.12s;
+    border: 1px solid rgba(48,54,61,0.7) !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 1px 2px rgba(0,0,0,0.14) !important;
+    transition: border-color var(--transition), box-shadow var(--transition);
 }
 [data-testid="stMetric"]:hover {
-    border-color: var(--accent) !important;
+    border-color: rgba(45,212,191,0.55) !important;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.32), 0 0 0 1px rgba(45,212,191,0.2) !important;
 }
 [data-testid="stMetricLabel"] {
     color: var(--muted) !important;
@@ -227,60 +248,44 @@ h3 {
 }
 
 /* ─ Terminal log ─────────────────────────────────────────────────── */
-/* Terminal is always dark — intentionally not themed to light mode */
 .terminal-window {
-    background: #0d1117;
-    color: #c9d1d9;
+    background: var(--bg);
+    color: var(--text);
     padding: 14px 18px;
-    border-radius: 3px;
+    border-radius: 8px;
     min-height: 260px;
-    max-height: 520px;
+    max-height: 650px;
     overflow-y: auto;
     font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.75;
-    border: 1px solid var(--border);
+    border: 1px solid rgba(48,54,61,0.8);
     border-left: 3px solid var(--accent);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     white-space: pre-wrap;
     word-break: break-word;
     letter-spacing: 0.02em;
 }
 .terminal-window::-webkit-scrollbar { width: 4px; }
-.terminal-window::-webkit-scrollbar-track { background: #0d1117; }
-.terminal-window::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.terminal-window::-webkit-scrollbar-track { background: var(--bg); }
+.terminal-window::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .terminal-window::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-/* Log-line colour coding
-   Tag mapping (from execute_tab.py / caf_tab.py):
-   init     → [INIT][CLEANUP][CAF]        — system startup, dim cyan
-   tools    → [TOOLS]                     — tool list, accent
-   llm      → [LLM][RESPONSE][CAF OUTPUT] — model output, white
-   thinking → [THINKING]                  — italicised muted
-   tool     → [TOOL CALL]                 — bright cyan (active call)
-   result   → [TOOL RESULT]               — success green
-   val      → [VALIDATE]                  — blue-violet (validation phase)
-   warn     → [WARN][ERROR][ABORTED]      — amber warning
-   done     → [DONE][COMPLETE]            — accent green, bold
-   cancel   → [CANCEL]                    — red alert, caps
-   tokens   → [TOKENS]                    — muted stats line
-   sys      → [SYS]                       — dim system message
-   usr      → [USR]                       — dim user turn
-*/
 .log-init     { color: #56b6c2; }
 .log-tools    { color: var(--accent); font-weight: 500; }
-.log-llm      { color: #e6edf3; }
-.log-thinking { color: #8b949e; font-style: italic; }
+.log-llm      { color: var(--text); }
+.log-thinking { color: var(--muted); font-style: italic; }
 .log-tool     { color: var(--accent); font-weight: 600; }
 .log-result   { color: var(--success); }
-.log-val      { color: #e3b341; }   /* yellow — per spec; warn is orange so these stay apart */
+.log-val      { color: var(--warn); }
 .log-warn     { color: var(--warn); }
 .log-done     { color: var(--success); font-weight: 700; }
 .log-cancel   { color: var(--error); font-weight: 700; text-transform: uppercase; }
 .log-tokens   { color: var(--muted); font-size: 0.72rem; }
-.log-sys      { color: #6e7681; font-size: 0.74rem; font-style: italic; }
+.log-sys      { color: var(--muted); font-size: 0.74rem; font-style: italic; }
 .log-usr      { color: #56b6c2; font-size: 0.74rem; font-style: italic; }
-.log-stream   { color: #cdd9e5; }
-.log-decision { color: #e3b341; font-weight: 600; }
+.log-stream   { color: var(--text); }
+.log-decision { color: var(--warn); font-weight: 600; }
 
 /* ─ Inputs ───────────────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,
@@ -288,17 +293,17 @@ h3 {
 [data-testid="stNumberInput"] input {
     background: var(--surface2) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
+    border-radius: 6px !important;
     color: var(--text) !important;
     font-family: var(--font-mono) !important;
     font-size: 0.82rem !important;
-    transition: border-color 0.12s, box-shadow 0.12s;
+    transition: border-color var(--transition), box-shadow var(--transition);
 }
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus,
 [data-testid="stNumberInput"] input:focus {
     border-color: var(--accent) !important;
-    box-shadow: 0 0 0 2px var(--accent-dim) !important;
+    box-shadow: 0 0 0 3px var(--accent-dim) !important;
     outline: none !important;
 }
 [data-testid="stTextArea"] textarea {
@@ -309,48 +314,59 @@ h3 {
 [data-testid="stSelectbox"] > div > div {
     background: var(--surface2) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
+    border-radius: 6px !important;
     color: var(--text) !important;
+    transition: border-color var(--transition);
+}
+[data-testid="stSelectbox"] > div > div:focus-within {
+    border-color: var(--accent) !important;
 }
 
 /* ─ Buttons ──────────────────────────────────────────────────────── */
 div.stButton > button {
-    background: var(--surface) !important;
+    background: var(--surface2) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
+    border-radius: 6px !important;
     color: var(--text) !important;
     font-family: var(--font-sans) !important;
     font-weight: 600 !important;
     font-size: 0.75rem !important;
     letter-spacing: 0.35px;
     text-transform: uppercase;
-    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    transition: background var(--transition), border-color var(--transition),
+                color var(--transition), box-shadow var(--transition);
     padding: 6px 14px !important;
 }
 div.stButton > button:hover {
-    background: var(--surface2) !important;
+    background: var(--surface) !important;
     border-color: var(--accent) !important;
     color: var(--accent) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
 }
 div.stButton > button:disabled {
     opacity: 0.3 !important;
 }
+div.stButton > button:active:not(:disabled) {
+    transform: translateY(1px);
+}
 
-/* Primary — cyan fill, stands out clearly */
+/* Primary — cyan fill */
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
     background: var(--accent) !important;
     border-color: var(--accent) !important;
-    color: #0d1117 !important;
+    color: var(--bg) !important;
+    box-shadow: 0 2px 8px rgba(45,212,191,0.25) !important;
 }
 div.stButton > button[kind="primary"]:hover,
 div.stButton > button[data-testid="baseButton-primary"]:hover {
     background: var(--accent-hi) !important;
     border-color: var(--accent-hi) !important;
-    color: #0d1117 !important;
+    color: var(--bg) !important;
+    box-shadow: 0 4px 14px rgba(45,212,191,0.35) !important;
 }
 
-/* Secondary — visible muted border */
+/* Secondary */
 div.stButton > button[kind="secondary"] {
     border-color: var(--border) !important;
     color: var(--muted) !important;
@@ -360,7 +376,7 @@ div.stButton > button[kind="secondary"]:hover {
     color: var(--text) !important;
 }
 
-/* Cancel / destructive — red-bordered */
+/* Cancel / destructive */
 .cancel-btn > div.stButton > button,
 .cancel-btn div.stButton > button[kind="secondary"] {
     background: transparent !important;
@@ -368,75 +384,221 @@ div.stButton > button[kind="secondary"]:hover {
     color: var(--error) !important;
 }
 
+/* ─ Radio buttons — segmented-control look ──────────────────────── */
+[data-testid="stRadio"] > div {
+    gap: 4px !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] {
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 6px !important;
+}
+[data-testid="stRadio"] label {
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: 5px 12px !important;
+    border-radius: 6px !important;
+    border: 1px solid var(--border) !important;
+    background: var(--surface2) !important;
+    cursor: pointer;
+    transition: border-color var(--transition), background var(--transition), color var(--transition);
+    font-size: 0.78rem !important;
+}
+[data-testid="stRadio"] label:hover {
+    border-color: var(--accent) !important;
+    background: var(--accent-glow) !important;
+    color: var(--accent) !important;
+}
+[data-testid="stRadio"] label:has(input:checked) {
+    border-color: var(--accent) !important;
+    background: var(--accent-dim) !important;
+    color: var(--accent) !important;
+    font-weight: 600 !important;
+}
+[data-testid="stRadio"] input[type="radio"] {
+    accent-color: var(--accent) !important;
+}
+
+/* ─ Checkbox ─────────────────────────────────────────────────────── */
+[data-testid="stCheckbox"] label {
+    color: var(--text) !important;
+    font-size: 0.83rem !important;
+    transition: color var(--transition);
+}
+[data-testid="stCheckbox"] input[type="checkbox"] {
+    accent-color: var(--accent) !important;
+}
+
 /* ─ Badges ───────────────────────────────────────────────────────── */
 .badge-pass {
-    background: rgba(63,185,80,0.12);
+    background: var(--surface2);
     color: var(--success);
-    padding: 2px 10px;
-    border-radius: 3px;
-    font-size: 0.7rem;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.5px;
-    border: 1px solid rgba(63,185,80,0.3);
+    border: 1px solid var(--success);
+    display: inline-block;
 }
 .badge-fail {
-    background: rgba(248,81,73,0.12);
+    background: var(--surface2);
     color: var(--error);
-    padding: 2px 10px;
-    border-radius: 3px;
-    font-size: 0.7rem;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.5px;
-    border: 1px solid rgba(248,81,73,0.3);
+    border: 1px solid var(--error);
+    display: inline-block;
 }
 .badge-na {
     background: var(--surface2);
     color: var(--muted);
-    padding: 2px 10px;
-    border-radius: 3px;
-    font-size: 0.7rem;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     border: 1px solid var(--border);
+    display: inline-block;
 }
 
 /* ─ Status pills ─────────────────────────────────────────────────── */
 .status-pill {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 0.68rem;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.67rem;
     font-weight: 700;
-    margin-right: 4px;
+    margin-right: 5px;
     letter-spacing: 0.25px;
     font-family: var(--font-mono);
     text-transform: uppercase;
     border: 1px solid;
     vertical-align: middle;
 }
-/* up = green, reserved for "running/connected" states only */
 .status-pill-up {
-    background: rgba(63,185,80,0.10);
+    background: var(--surface2);
     color: var(--success);
-    border-color: rgba(63,185,80,0.35);
+    border-color: var(--success);
 }
-/* Pulse only on actively running services, not every "up" pill */
 .status-pill-up.running {
     animation: pulse-service 2.5s ease-in-out infinite;
 }
 @keyframes pulse-service {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.65; }
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+    50%       { opacity: 0.75; box-shadow: 0 0 0 4px rgba(63,185,80,0.12); }
 }
 .status-pill-down {
-    background: rgba(248,81,73,0.10);
+    background: var(--surface2);
     color: var(--error);
-    border-color: rgba(248,81,73,0.35);
+    border-color: var(--error);
 }
 .status-pill-wait {
-    background: rgba(210,153,34,0.10);
+    background: var(--surface2);
     color: var(--warn);
-    border-color: rgba(210,153,34,0.35);
+    border-color: var(--warn);
+}
+
+/* ─ Step cards (unified prompt/command step editor) ──────────────── */
+.step-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.step-card:hover {
+    border-color: rgba(48,54,61,1);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+}
+.step-card-prompt {
+    border-left: 3px solid var(--prompt-color) !important;
+}
+.step-card-command {
+    border-left: 3px solid var(--cmd-color) !important;
+}
+
+/* Step type badges */
+.step-badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    border: 1px solid;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.step-badge-prompt {
+    color: var(--prompt-color);
+    background: rgba(45,212,191,0.1);
+    border-color: rgba(45,212,191,0.4);
+}
+.step-badge-command {
+    color: var(--cmd-color);
+    background: rgba(240,136,62,0.1);
+    border-color: rgba(240,136,62,0.4);
+}
+
+/* ─ Service active display box ───────────────────────────────────── */
+.service-active-box {
+    background: var(--surface);
+    border: 1px solid rgba(63,185,80,0.4);
+    border-left: 3px solid var(--success);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 6px 0;
+    animation: service-glow 3s ease-in-out infinite;
+}
+@keyframes service-glow {
+    0%, 100% { border-left-color: var(--success); }
+    50%       { border-left-color: rgba(63,185,80,0.5); }
+}
+.service-active-box .service-label {
+    color: var(--success);
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 5px;
+}
+.service-active-box .service-cmd {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    word-break: break-all;
+    line-height: 1.5;
+}
+
+/* Starting / loading state */
+.service-loading-box {
+    background: var(--surface);
+    border: 1px solid rgba(240,136,62,0.35);
+    border-left: 3px solid var(--warn);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 6px 0;
+    animation: service-loading-pulse 1.8s ease-in-out infinite;
+}
+@keyframes service-loading-pulse {
+    0%, 100% { border-left-color: var(--warn); opacity: 1; }
+    50%       { border-left-color: rgba(240,136,62,0.4); opacity: 0.75; }
+}
+.service-loading-box .service-label {
+    color: var(--warn);
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 /* ─ Category chips ───────────────────────────────────────────────── */
@@ -446,8 +608,8 @@ div.stButton > button[kind="secondary"]:hover {
     font-weight: 700;
     letter-spacing: 1.4px;
     text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 3px;
+    padding: 3px 10px;
+    border-radius: 999px;
     margin: 10px 0 4px;
     display: inline-block;
 }
@@ -472,20 +634,20 @@ hr {
 /* ─ Code ─────────────────────────────────────────────────────────── */
 code {
     background: var(--surface2) !important;
-    color: #79c0ff !important;
-    border-radius: 3px !important;
+    color: var(--accent) !important;
+    border-radius: 4px !important;
     font-size: 0.82em !important;
     padding: 2px 5px !important;
     font-family: var(--font-mono) !important;
     border: 1px solid var(--border) !important;
 }
-/* st.code() — pre > code */
 [data-testid="stCode"] pre {
     background: var(--surface2) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
+    border: 1px solid rgba(48,54,61,0.7) !important;
+    border-radius: 8px !important;
     font-size: 0.78rem !important;
     padding: 12px 16px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.18) !important;
 }
 [data-testid="stCode"] pre code {
     background: transparent !important;
@@ -495,42 +657,27 @@ code {
 
 /* ─ Alerts ───────────────────────────────────────────────────────── */
 [data-testid="stAlert"] {
-    border-radius: 3px !important;
+    border-radius: 8px !important;
     border-left-width: 3px !important;
     background: var(--surface2) !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.18) !important;
 }
 [data-testid="stAlert"] p,
 [data-testid="stAlert"] span,
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
     color: var(--text) !important;
 }
-/* Warning → amber border */
 [data-testid="stAlert"][data-baseweb="notification"] {
     border-color: var(--warn) !important;
 }
-/* Info → accent border */
 [data-testid="stAlert"]:has([data-testid="stNotificationContentInfo"]) {
     border-color: var(--accent) !important;
 }
-/* Error → error border */
 [data-testid="stAlert"]:has([data-testid="stNotificationContentError"]) {
     border-color: var(--error) !important;
 }
-/* Success → success border */
 [data-testid="stAlert"]:has([data-testid="stNotificationContentSuccess"]) {
     border-color: var(--success) !important;
-}
-
-/* ─ Checkbox ─────────────────────────────────────────────────────── */
-[data-testid="stCheckbox"] label {
-    color: var(--text) !important;
-    font-size: 0.83rem !important;
-}
-
-/* ─ Radio buttons ────────────────────────────────────────────────── */
-[data-testid="stRadio"] label {
-    color: var(--text) !important;
-    font-size: 0.83rem !important;
 }
 
 /* ─ Slider ───────────────────────────────────────────────────────── */
@@ -555,16 +702,19 @@ code {
     background: var(--surface) !important;
     border: 1px solid var(--border) !important;
     color: var(--muted) !important;
-    border-radius: 3px !important;
+    border-radius: 6px !important;
     font-size: 0.74rem !important;
     font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    transition: background var(--transition), border-color var(--transition),
+                color var(--transition) !important;
 }
 [data-testid="stDownloadButton"] button:hover {
     border-color: var(--accent) !important;
     color: var(--accent) !important;
     background: var(--surface2) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
 }
 
 /* ─ Spinner ──────────────────────────────────────────────────────── */
@@ -576,11 +726,14 @@ code {
 .model-status-bar {
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 6px 0 8px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
+    gap: 6px;
+    padding: 7px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
     flex-wrap: wrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.18);
 }
 .model-status-bar .status-label {
     font-family: var(--font-mono);
@@ -590,6 +743,47 @@ code {
     text-transform: uppercase;
     color: var(--muted);
     margin-right: 2px;
+}
+
+/* ─ Validation steps section ─────────────────────────────────────── */
+.validation-section-header {
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    padding: 4px 0 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+}
+
+/* ─ System prompt labeled box ────────────────────────────────────── */
+.sys-prompt-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.sys-prompt-label .label-text {
+    font-family: var(--font-sans);
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.45px;
+    color: var(--text);
+}
+.sys-prompt-label .label-badge {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid rgba(45,212,191,0.3);
+    border-radius: 4px;
+    padding: 1px 6px;
 }
 
 /* ─ Hide deploy button and main menu ────────────────────────────── */
@@ -603,10 +797,7 @@ button[data-testid="baseButton-header"] { display: none !important; }
 
 /* ══════════════════════════════════════════════════════════════════
    Test Suite Visualization
-   Inspired by Cypress Cloud, mabl, FitNesse, GitHub CI
    ══════════════════════════════════════════════════════════════════ */
-
-/* ─ Progress bar ─────────────────────────────────────────────────── */
 .ts-progress-wrap {
     background: var(--border);
     border-radius: 3px;
@@ -619,34 +810,20 @@ button[data-testid="baseButton-header"] { display: none !important; }
     transition: width 0.4s ease;
 }
 
-/* ─ Count pills ──────────────────────────────────────────────────── */
 .ts-count-pill {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 3px;
+    padding: 3px 10px;
+    border-radius: 999px;
     font-size: 0.67rem;
     font-weight: 700;
     letter-spacing: 0.35px;
     font-family: var(--font-mono);
     border: 1px solid;
 }
-.ts-count-pass {
-    background: rgba(63,185,80,0.10);
-    color: var(--success);
-    border-color: rgba(63,185,80,0.28);
-}
-.ts-count-fail {
-    background: rgba(248,81,73,0.10);
-    color: var(--error);
-    border-color: rgba(248,81,73,0.28);
-}
-.ts-count-skip {
-    background: var(--surface2);
-    color: var(--muted);
-    border-color: var(--border);
-}
+.ts-count-pass { background: var(--surface2); color: var(--success); border-color: var(--success); }
+.ts-count-fail { background: var(--surface2); color: var(--error); border-color: var(--error); }
+.ts-count-skip { background: var(--surface2); color: var(--muted); border-color: var(--border); }
 
-/* ─ Test rows ────────────────────────────────────────────────────── */
 .ts-test-row {
     display: flex;
     align-items: flex-start;
@@ -657,42 +834,22 @@ button[data-testid="baseButton-header"] { display: none !important; }
     font-size: 0.76rem;
     line-height: 1.5;
     border-radius: 0 2px 2px 0;
-    transition: background 0.08s;
+    transition: background var(--transition);
 }
-.ts-test-row:hover {
-    background: var(--surface);
-}
-.ts-test-row-pass  { border-left-color: rgba(63,185,80,0.45); }
-.ts-test-row-fail  { border-left-color: var(--error); background: rgba(248,81,73,0.04); }
+.ts-test-row:hover { background: var(--surface); }
+.ts-test-row-pass  { border-left-color: var(--success); }
+.ts-test-row-fail  { border-left-color: var(--error); background: var(--surface2); }
 .ts-test-row-skip  { border-left-color: var(--border); opacity: 0.6; }
 
-.ts-dot {
-    flex-shrink: 0;
-    font-weight: 700;
-    width: 14px;
-    text-align: center;
-    padding-top: 1px;
-}
+.ts-dot { flex-shrink: 0; font-weight: 700; width: 14px; text-align: center; padding-top: 1px; }
 .ts-dot-pass { color: var(--success); }
 .ts-dot-fail { color: var(--error);   }
 .ts-dot-skip { color: var(--muted);   }
 
 .ts-test-name { color: var(--text); word-break: break-all; }
-.ts-test-err  {
-    color: var(--error);
-    font-size: 0.7rem;
-    opacity: 0.88;
-    margin-top: 1px;
-    word-break: break-word;
-}
-.ts-test-dur {
-    color: var(--muted);
-    font-size: 0.67rem;
-    flex-shrink: 0;
-    padding-top: 2px;
-}
+.ts-test-err  { color: var(--error); font-size: 0.7rem; opacity: 0.88; margin-top: 1px; word-break: break-word; }
+.ts-test-dur  { color: var(--muted); font-size: 0.67rem; flex-shrink: 0; padding-top: 2px; }
 
-/* ─ File header ──────────────────────────────────────────────────── */
 .ts-file-header {
     font-family: var(--font-mono);
     font-size: 0.72rem;
@@ -704,7 +861,6 @@ button[data-testid="baseButton-header"] { display: none !important; }
     margin-bottom: 2px;
 }
 
-/* ─ Coverage map ─────────────────────────────────────────────────── */
 .ts-cov-row {
     display: flex;
     align-items: flex-start;
@@ -718,15 +874,43 @@ button[data-testid="baseButton-header"] { display: none !important; }
 .ts-cov-feature { color: var(--text); font-weight: 600; font-size: 0.77rem; }
 .ts-cov-count   { color: var(--muted); font-size: 0.68rem; }
 
-/* ─ Run stamp ────────────────────────────────────────────────────── */
-.ts-run-stamp {
-    font-family: var(--font-mono);
-    font-size: 0.69rem;
-    color: var(--muted);
-}
+.ts-run-stamp { font-family: var(--font-mono); font-size: 0.69rem; color: var(--muted); }
 </style>
+"""
+
+_SCROLL_JS = """
+<script>
+    function performAutoScroll() {
+        const terminals = document.querySelectorAll('.terminal-window');
+        terminals.forEach(el => {
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+                el.scrollTop = el.scrollHeight;
+            }
+        });
+
+        const mainViewport = window.parent.document.querySelector('[data-testid="stAppViewContainer"]');
+        if (mainViewport) {
+            mainViewport.scrollTo({
+                top: mainViewport.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+    }
+
+    const observer = new MutationObserver(() => {
+        performAutoScroll();
+    });
+
+    setTimeout(() => {
+        const targetNode = window.parent.document.querySelector('.main') || window.parent.document.body;
+        if (targetNode) {
+            observer.observe(targetNode, { childList: true, subtree: true });
+        }
+    }, 1000);
+</script>
 """
 
 
 def inject() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+    st.html(_SCROLL_JS, unsafe_allow_javascript=True)

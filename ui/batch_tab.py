@@ -27,18 +27,27 @@ def _get_runner() -> BatchRunner:
 
 def _status_colour(status: str) -> str:
     return {
-        "queued":  "#64748b",
-        "running": "#d97706",
-        "done":    "#16a34a",
-        "failed":  "#dc2626",
-    }.get(status, "#64748b")
+        "queued":  "#8b949e",
+        "running": "#f0883e",
+        "done":    "#3fb950",
+        "failed":  "#f85149",
+    }.get(status, "#8b949e")
 
 
 def _status_pill(text: str, status: str) -> str:
     colour = _status_colour(status)
+    # Pill-style with transparent fill matching the semantic palette
+    _bg_map = {
+        "#3fb950": "rgba(63,185,80,0.18)",
+        "#f85149": "rgba(248,81,73,0.18)",
+        "#f0883e": "rgba(240,136,62,0.18)",
+        "#8b949e": "rgba(139,148,158,0.14)",
+    }
+    bg = _bg_map.get(colour, "rgba(139,148,158,0.14)")
     return (
-        f'<span style="background:{colour};color:#fff;padding:2px 10px;'
-        f'border-radius:12px;font-size:0.72rem;font-weight:700">{text}</span>'
+        f'<span style="background:{bg};color:{colour};padding:3px 11px;'
+        f'border-radius:999px;font-size:0.70rem;font-weight:700;'
+        f'border:1px solid {colour}40;display:inline-block">{text}</span>'
     )
 
 

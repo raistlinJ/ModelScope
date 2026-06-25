@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import time
 from datetime import datetime
 from typing import Callable
@@ -22,9 +23,33 @@ import requests
 from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment
-from core.mcp_manager import call_mcp_tool
+from core.mcp_manager import call_mcp_tool, probe_mcp_server
 from core.streaming import stream_ollama, stream_llama_cpp
 from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported for callers/tests
+
+
+# ── Fail pattern evaluation ────────────────────────────────────────────────────
+
+def _check_fail_patterns(patterns: list, output: str, env) -> tuple:
+    """Returns (failed: bool, reason: str). Handles legacy str and typed dict patterns."""
+    for fp in patterns:
+        if isinstance(fp, str):
+            fp = {"type": "string", "value": fp}
+        t, v = fp.get("type", "string"), fp.get("value", "")
+        if t == "string":
+            if v.lower() in output.lower():
+                return True, f"fail pattern matched: {v!r}"
+        elif t == "command":
+            try:
+                res = env.execute(v, timeout=10)
+                if res["exit_code"] != 0:
+                    return True, f"fail command exited {res['exit_code']}: {v!r}"
+            except Exception as exc:
+                return True, f"fail command error: {exc}"
+        elif t == "prompt":
+            if v.lower() in output.lower():
+                return True, f"prompt pattern matched: {v!r}"
+    return False, ""
 
 
 # ── Tool schema loading ────────────────────────────────────────────────────────
@@ -70,6 +95,125 @@ def _load_tool_schemas(
         return []
 
 
+# ── Managed llama-server startup ───────────────────────────────────────────────
+
+def _start_managed_llama_server(
+    binary: str,
+    model_path: str,
+    context_size: int,
+    port: int,
+    on_log: Callable[[str], None],
+) -> subprocess.Popen:
+    """Start llama-server binary and wait for readiness.
+
+    Raises RuntimeError if server doesn't become ready within 30s.
+    Returns the Popen object; caller must manage teardown.
+    """
+    cmd = [
+        binary,
+        "-m", model_path,
+        "-c", str(context_size),
+        "--port", str(port),
+        "--host", "127.0.0.1",
+    ]
+    on_log(f"[SERVER] Starting: {' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to start server: {exc}")
+
+    # Poll for readiness
+    for attempt in range(30):
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=1.0)
+            if resp.status_code == 200:
+                on_log(f"[SERVER] Ready on port {port}")
+                return proc
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(1)
+
+    proc.terminate()
+    raise RuntimeError(f"Server did not become ready after 30s on port {port}")
+
+
+# ── Agent loop for tool-aware evaluation ───────────────────────────────────────
+
+def _run_llm_agent_loop(
+    base_url: str,
+    model: str,
+    prompt: str,
+    tools: list,
+    context_size: int,
+    mcp_running: bool,
+    mcp_server_url: str,
+    env: BaseEnvironment,
+    cancel_ref: list,
+    on_log: Callable[[str], None],
+) -> tuple:
+    """Run agentic loop with tool calls. Returns (tool_calls_log, final_response)."""
+    messages: list[dict] = [{"role": "user", "content": prompt}]
+    tool_calls_log = []
+    final_response = ""
+
+    for round_num in range(8):
+        if cancel_ref[0]:
+            on_log("[CANCEL] Evaluation cancelled by user")
+            break
+
+        on_log(f"[LLM] Turn {round_num + 1}")
+        resp = stream_llama_cpp(
+            base_url=base_url,
+            model=model,
+            messages=messages,
+            tools=tools,
+            context_size=context_size,
+            on_log=on_log,
+        )
+
+        msg = resp.get("message", {})
+        content: str = msg.get("content") or ""
+        tool_calls_raw = msg.get("tool_calls") or []
+
+        # Fallback: parse inline tool calls (Qwen, SmolLM, etc.)
+        if not tool_calls_raw and content and "<tool_call>" in content:
+            tool_calls_raw = _parse_inline_tool_calls(content)
+            if tool_calls_raw:
+                names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
+                on_log(f"[TOOLS] Parsed {len(tool_calls_raw)} inline: {names}")
+
+        if content:
+            on_log(f"[RESPONSE] {content[:400]}")
+            final_response = content
+
+        if not tool_calls_raw:
+            break
+
+        # Execute tools
+        for tc in tool_calls_raw:
+            tool_name = tc["function"]["name"]
+            tool_args = tc.get("arguments", {}) or {}
+            on_log(f"[TOOL] {tool_name}({json.dumps(tool_args)[:100]})")
+            result = _execute_tool(env, tool_name, tool_args, mcp_running, mcp_server_url)
+            on_log(f"[RESULT] {json.dumps(result)[:200]}")
+
+            tool_calls_log.append({
+                "tool": tool_name,
+                "args": tool_args,
+                "result": result,
+                "exit_code": result.get("exit_code", 0),
+            })
+
+            # Add to conversation
+            messages.append({"role": "assistant", "content": content})
+            messages.append({
+                "role": "user",
+                "content": f"Tool {tool_name} returned: {json.dumps(result)[:500]}"
+            })
+
+    return tool_calls_log, final_response
+
+
 # ── Tool execution ─────────────────────────────────────────────────────────────
 
 # Legal characters in a scan target: hostnames, IPv4/IPv6 literals, CIDR masks.
@@ -100,6 +244,21 @@ def _execute_tool_in_env(env: BaseEnvironment, tool_name: str, tool_args: dict) 
         safe_target = shlex.quote(target)
         return env.execute(f"nmap {safe_args} {safe_target}".strip(), timeout=30)
 
+    # filesystem/write_file — mirrors the MCP filesystem server's write_file tool
+    if tool_name == "write_file":
+        path    = tool_args.get("path", "")
+        content = tool_args.get("content", "")
+        return env.write_file(path, content)
+
+    # filesystem/read_file — mirrors the MCP filesystem server's read_file tool
+    if tool_name == "read_file":
+        path = tool_args.get("path", "")
+        try:
+            content = env.read_file(path)
+            return {"content": content}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     return {"error": f"Unknown tool: {tool_name}"}
 
 
@@ -122,15 +281,15 @@ def _execute_tool(
 def _run_validation(
     env: BaseEnvironment,
     command: str,
-    fail_patterns: list[str],
+    fail_patterns: list,
     expected_stdout: str = "",
 ) -> dict:
     if not command.strip():
         return {"stdout": "", "stderr": "", "exit_code": None, "passed": None}
     res         = env.execute(command, timeout=15)
-    combined    = (res["stdout"] + res["stderr"]).lower()
-    pattern_hit = any(p.lower() in combined for p in fail_patterns if p)
-    passed      = res["exit_code"] == 0 and not pattern_hit
+    combined    = res["stdout"] + res["stderr"]
+    failed, _   = _check_fail_patterns(fail_patterns, combined, env)
+    passed      = res["exit_code"] == 0 and not failed
     if passed and expected_stdout.strip():
         passed = res["stdout"].strip() == expected_stdout.strip()
     return {
@@ -446,6 +605,408 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+# ── Bash-Bot execution ────────────────────────────────────────────────────────
+
+def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
+    """Run startup → validation → completion commands in sequence (no LLM involved).
+
+    startup and completion accept either a legacy List[str] or the step format:
+        [{"delay_seconds": float, "commands": [{"command": str, "enabled": bool,
+          "long_running": bool, "timeout_seconds": int}]}]
+
+    validation_commands remains a flat List[str] (pass/fail semantics differ).
+    """
+    start_t    = time.time()
+    timeout    = config.get("bash_timeout", 60)
+    cancel_ref = config.get("cancel_requested_ref", [False])
+    startup    = config.get("startup_commands", [])
+    completion = config.get("completion_commands", [])
+    val_cmds   = config.get("validation_commands", [])
+    fail_pats  = config.get("fail_patterns", [])
+
+    telemetry: dict = {
+        "run_timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "run_bot_type":         "bash_bot",
+        "tool_calls":           [],
+        "validation_stdout":    "",
+        "validation_stderr":    "",
+        "validation_exit_code": None,
+        "validation_passed":    None,
+        "run_aborted":          False,
+        "metrics_matrix":       config.get("metrics_matrix", []),
+    }
+
+    sudo_prefix = "sudo " if config.get("bash_sudo") else ""
+    if sudo_prefix:
+        on_log("[BASH] sudo access enabled — commands will be prefixed with sudo")
+    on_log("[BASH] Starting bash evaluation")
+
+    def _exec_cmd(cmd: str, label: str = "RUN", timeout_override: int | None = None) -> dict:
+        t          = timeout_override if timeout_override is not None else timeout
+        actual_cmd = f"{sudo_prefix}{cmd}"
+        on_log(f"[{label}] {actual_cmd}")
+        res = env.execute(actual_cmd, timeout=t)
+        if res.get("stdout"):
+            on_log(f"[STDOUT] {res['stdout'][:800]}")
+        if res.get("stderr"):
+            on_log(f"[STDERR] {res['stderr'][:400]}")
+        return res
+
+    def _run_step_list(steps: list, label: str = "RUN") -> bool:
+        """
+        Execute a step-format or legacy string list.
+        Returns True on normal completion, False if cancelled/aborted.
+        Commands within each step run sequentially after the step's delay.
+        """
+        for step_idx, step in enumerate(steps):
+            if cancel_ref[0]:
+                on_log("[CANCEL] Cancelled by user")
+                telemetry["run_aborted"] = True
+                return False
+
+            if isinstance(step, str):
+                # Legacy format: bare string command
+                cmd_text = step.strip()
+                if not cmd_text:
+                    continue
+                res = _exec_cmd(cmd_text, label=label)
+                telemetry["tool_calls"].append({
+                    "tool":      "bash",
+                    "args":      {"command": cmd_text},
+                    "result":    res,
+                    "exit_code": res.get("exit_code", -1),
+                })
+                continue
+
+            # Step-format dict
+            delay = float(step.get("delay_seconds", 0))
+            if delay > 0:
+                on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s")
+                time.sleep(delay)
+
+            for cmd_obj in step.get("commands", []):
+                if cancel_ref[0]:
+                    on_log("[CANCEL] Cancelled by user")
+                    telemetry["run_aborted"] = True
+                    return False
+                if not cmd_obj.get("enabled", True):
+                    continue
+                cmd_text = cmd_obj.get("command", "").strip()
+                if not cmd_text:
+                    continue
+                t = (3600 if cmd_obj.get("long_running")
+                     else int(cmd_obj.get("timeout_seconds", timeout)))
+                res = _exec_cmd(cmd_text, label=label, timeout_override=t)
+                telemetry["tool_calls"].append({
+                    "tool":      "bash",
+                    "args":      {"command": cmd_text},
+                    "result":    res,
+                    "exit_code": res.get("exit_code", -1),
+                })
+        return True
+
+    # Startup commands
+    _run_step_list(startup, label="RUN")
+
+    # Validation commands (flat List[str] — pass/fail semantics)
+    if not telemetry["run_aborted"] and val_cmds:
+        all_passed = True
+        for cmd in val_cmds:
+            if cancel_ref[0]:
+                break
+            val    = _run_validation(env, cmd, fail_pats)
+            status = "PASS ✓" if val["passed"] else "FAIL ✗"
+            on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")
+            if not val["passed"]:
+                all_passed = False
+            telemetry["validation_stdout"] += val.get("stdout", "")
+            telemetry["validation_stderr"] += val.get("stderr", "")
+            telemetry["validation_exit_code"] = val["exit_code"]
+        telemetry["validation_passed"] = all_passed
+    elif not val_cmds:
+        on_log("[VALIDATE] No validation commands configured")
+
+    # Completion / cleanup commands
+    if not cancel_ref[0]:
+        _run_step_list(completion, label="CLEANUP")
+
+    telemetry["total_latency"] = round(time.time() - start_t, 3)
+    on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")
+    return telemetry
+
+
+# ── Llama-CLI-Bot execution ────────────────────────────────────────────────────
+
+def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
+    """Run prompts via llama-cli binary and/or shell commands, then validate."""
+    import os
+    import shlex
+    start_t    = time.time()
+    timeout    = config.get("timeout", 120)
+    cancel_ref = config.get("cancel_requested_ref", [False])
+    backend    = config.get("backend", "llama.cpp")
+    binary     = config.get("binary_path", "") or "llama-cli"
+    model_dir  = config.get("model_dir", "")
+    model_name = config.get("model_name", "")
+    tokens     = config.get("tokens", 2048)
+    sudo_pfx   = "sudo " if config.get("sudo") else ""
+    prompts    = config.get("prompts", [])
+    commands   = config.get("commands", [])
+    val_cmds   = config.get("validation_commands", [])
+    fail_pats  = config.get("fail_patterns", [])
+
+    telemetry: dict = {
+        "run_timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "run_bot_type":         "llama_cli_bot",
+        "run_backend":          backend,
+        "run_model":            model_name,
+        "tool_calls":           [],
+        "prompt_responses":     [],
+        "validation_stdout":    "",
+        "validation_stderr":    "",
+        "validation_exit_code": None,
+        "validation_passed":    None,
+        "run_aborted":          False,
+        "metrics_matrix":       config.get("metrics_matrix", []),
+    }
+
+    # If binary_path is a directory, assume llama-cli lives inside it
+    if binary and os.path.isdir(binary):
+        binary = os.path.join(binary, "llama-cli")
+
+    mcp_servers    = config.get("mcp_servers", [])
+    mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
+    tools          = []
+    mcp_running    = False
+
+    # Load tool schemas for all backends
+    if mcp_servers:
+        try:
+            tools = _load_tool_schemas("./mcp-server/index.js", on_log=on_log)
+            if tools:
+                names = [t["function"]["name"] for t in tools]
+                on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}")
+        except Exception as exc:
+            on_log(f"[WARN] Could not load tool schemas: {exc}")
+
+    # Probe for MCP broker using the session handshake — not a dummy tool call.
+    # call_mcp_tool("dummy", {}) always returns {"error": ...} (unknown tool),
+    # so the old probe could never set mcp_running = True. probe_mcp_server()
+    # only checks whether the JSON-RPC initialize exchange succeeds.
+    if tools:
+        if probe_mcp_server(mcp_server_url):
+            mcp_running = True
+            on_log(f"[MCP] Broker detected at {mcp_server_url}")
+        else:
+            on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks")
+
+    on_log(f"[LLAMA-CLI] Starting — backend={backend}, model={model_name or '(none)'}")
+
+    if backend == "llama-server (managed)":
+        model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+        if not model_path:
+            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
+            telemetry["run_aborted"] = True
+        else:
+            port = config.get("server_port", 18080)
+            proc = None
+            try:
+                proc = _start_managed_llama_server(binary, model_path, tokens, port, on_log)
+                base_url = f"http://127.0.0.1:{port}/v1"
+
+                for i, prompt in enumerate(prompts):
+                    if cancel_ref[0]:
+                        on_log("[CANCEL] Cancelled by user")
+                        telemetry["run_aborted"] = True
+                        break
+                    on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
+                    tool_calls, response = _run_llm_agent_loop(
+                        base_url, model_name, prompt, tools, tokens,
+                        mcp_running, mcp_server_url, env, cancel_ref, on_log
+                    )
+                    telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
+                    telemetry["tool_calls"].extend(tool_calls)
+            except RuntimeError as exc:
+                on_log(f"[ERROR] {exc}")
+                telemetry["run_aborted"] = True
+            finally:
+                if proc:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                    except Exception as exc:
+                        on_log(f"[WARN] Server termination failed: {exc}")
+
+    elif backend.lower().startswith("openai"):
+        base_url   = (config.get("openai_base_url") or "").strip()
+        api_key    = (config.get("openai_api_key") or "").strip()
+        verify_ssl = config.get("openai_verify_ssl", True)
+        if not base_url:
+            on_log("[ERROR] No Base URL configured for OpenAI backend. Set it in the Runtime → Model Setup tab.")
+            telemetry["run_aborted"] = True
+        else:
+            if not model_name:
+                on_log("[WARN] No model selected — server will use its default model.")
+            for i, prompt in enumerate(prompts):
+                if cancel_ref[0]:
+                    on_log("[CANCEL] Cancelled by user")
+                    telemetry["run_aborted"] = True
+                    break
+                on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
+                try:
+                    tool_calls, response = _run_llm_agent_loop(
+                        base_url, model_name, prompt, tools, tokens,
+                        mcp_running, mcp_server_url, env, cancel_ref, on_log
+                    )
+                    on_log(f"[RESPONSE] {response[:400]}")
+                    telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
+                    telemetry["tool_calls"].extend(tool_calls)
+                except Exception as exc:
+                    on_log(f"[ERROR] HTTP request failed: {exc}")
+                    telemetry["prompt_responses"].append({"prompt": prompt, "response": ""})
+                    telemetry["tool_calls"].append({
+                        "tool":      "openai-http",
+                        "args":      {"prompt": prompt, "base_url": base_url, "model": model_name},
+                        "result":    {"stdout": "", "stderr": str(exc), "exit_code": 1},
+                        "exit_code": 1,
+                    })
+    else:
+        # Auto-correct: user may have pointed binary_path at llama-server (the
+        # HTTP server binary) instead of llama-cli (the batch-inference CLI).
+        # llama-server rejects --prompt with "invalid argument: --prompt" — swap
+        # to llama-cli automatically so the run does not fail before any inference.
+        if os.path.basename(binary) in ("llama-server", "llama-server.exe"):
+            corrected = os.path.join(os.path.dirname(binary), "llama-cli")
+            on_log(
+                f"[WARN] binary_path points at llama-server — the llama.cpp backend "
+                f"needs llama-cli.  Auto-correcting to: {corrected}"
+            )
+            binary = corrected
+
+        model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+        if not model_path:
+            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
+            telemetry["run_aborted"] = True
+        else:
+            # Build tool-aware system prompt for llama-cli backend
+            sys_prompt_parts = [
+                "You are an autonomous AI agent. You MUST call the appropriate tool rather than describing steps.",
+                "When you need to perform an action, respond ONLY with a tool call in this exact format (no other text):",
+                '<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>',
+                "",
+                "Available tools:",
+            ]
+            for t in tools:
+                fn = t["function"]
+                # Include tool name, argument names (required so the model
+                # can construct valid calls), and one-line description.
+                # Full per-argument descriptions are intentionally omitted —
+                # they are not needed for argument construction and add bulk
+                # with 37 tools loaded (measured: ~1500 tokens total with
+                # descriptions vs ~1100 without).
+                props = fn.get("parameters", {}).get("properties", {})
+                arg_names = ", ".join(props.keys())
+                if arg_names:
+                    sys_prompt_parts.append(
+                        f'  {fn["name"]}({arg_names}): {fn["description"]}'
+                    )
+                else:
+                    sys_prompt_parts.append(f'  {fn["name"]}: {fn["description"]}')
+            tool_sys_prompt = "\n".join(sys_prompt_parts) if tools else ""
+
+            for i, prompt in enumerate(prompts):
+                if cancel_ref[0]:
+                    on_log("[CANCEL] Cancelled by user")
+                    telemetry["run_aborted"] = True
+                    break
+                safe_prompt = shlex.quote(prompt)
+                sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
+                cmd = (
+                    f"{sudo_pfx}{binary}"
+                    f" -m {shlex.quote(model_path)}"
+                    f" -c {tokens}"
+                    f"{sys_flag}"
+                    f" --prompt {safe_prompt}"
+                    f" -n 512 --simple-io --no-display-prompt --single-turn"
+                )
+                on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
+                res = env.execute(cmd, timeout=timeout)
+                stderr_out = res.get("stderr", "").strip()
+                if stderr_out:
+                    on_log(f"[BACKEND] {stderr_out[:600]}")
+                if res.get("exit_code", 0) != 0 and not res.get("stdout", "").strip():
+                    on_log(f"[ERROR] llama-cli exited with code {res['exit_code']} — check binary path and model path")
+                response = res.get("stdout", "").strip()
+                on_log(f"[RESPONSE] {response[:400]}")
+                telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
+
+                # Record the raw llama-cli invocation
+                telemetry["tool_calls"].append({
+                    "tool":      "llama-cli",
+                    "args":      {"prompt": prompt},
+                    "result":    res,
+                    "exit_code": res.get("exit_code", -1),
+                })
+
+                # Parse and execute any tool calls in the response
+                inline_calls = _parse_inline_tool_calls(response)
+                for tc in inline_calls:
+                    fn   = tc.get("function", {})
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    on_log(f"[TOOL] Executing {name}({args})")
+                    result = _execute_tool(env, name, args, mcp_running, mcp_server_url)
+                    on_log(f"[TOOL RESULT] {str(result)[:300]}")
+                    telemetry["tool_calls"].append({
+                        "tool":      name,
+                        "args":      args,
+                        "result":    result,
+                        "exit_code": result.get("exit_code", 0),
+                    })
+
+    # Shell commands (same as bash bot)
+    for cmd in commands:
+        if cancel_ref[0]:
+            telemetry["run_aborted"] = True
+            break
+        full_cmd = f"{sudo_pfx}{cmd}"
+        on_log(f"[CMD] {full_cmd}")
+        res = env.execute(full_cmd, timeout=timeout)
+        if res.get("stdout"):
+            on_log(f"[STDOUT] {res['stdout'][:800]}")
+        if res.get("stderr"):
+            on_log(f"[STDERR] {res['stderr'][:400]}")
+        telemetry["tool_calls"].append({
+            "tool":      "bash",
+            "args":      {"command": cmd},
+            "result":    res,
+            "exit_code": res.get("exit_code", -1),
+        })
+
+    # Validation
+    if not telemetry["run_aborted"] and val_cmds:
+        all_passed = True
+        for cmd in val_cmds:
+            if cancel_ref[0]:
+                break
+            val = _run_validation(env, cmd, fail_pats)
+            status = "PASS ✓" if val["passed"] else "FAIL ✗"
+            on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")
+            if not val["passed"]:
+                all_passed = False
+            telemetry["validation_stdout"] += val.get("stdout", "")
+            telemetry["validation_stderr"] += val.get("stderr", "")
+            telemetry["validation_exit_code"] = val["exit_code"]
+        telemetry["validation_passed"] = all_passed
+
+    telemetry["total_latency"] = round(time.time() - start_t, 3)
+    on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")
+    return telemetry
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
@@ -471,6 +1032,10 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
     mode = config.get("execution_mode") or (
         "caf_ssh" if getattr(env, "is_remote_caf", False) else "local"
     )
+
+    # Bash-Bot mode: run shell commands directly, no LLM
+    if mode == "bash":
+        return run_bash_evaluation(env, config, on_log)
 
     # CAF SSH mode: delegate entire execution to the remote CAF CLI
     if mode == "caf_ssh":

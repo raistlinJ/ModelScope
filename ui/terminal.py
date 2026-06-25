@@ -20,7 +20,7 @@ def render_terminal(
     """
     if not logs:
         placeholder.markdown(
-            f'<div class="terminal-window">{empty_msg}</div>',
+            f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log">{empty_msg}</div>',
             unsafe_allow_html=True,
         )
         return
@@ -38,6 +38,6 @@ def render_terminal(
 
     inner = "<br>".join(lines_html)
     placeholder.markdown(
-        f'<div class="terminal-window">{inner}</div>',
+        f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log">{inner}</div>',
         unsafe_allow_html=True,
     )

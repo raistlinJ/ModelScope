@@ -7,7 +7,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from core.streaming import stream_ollama, stream_llama_cpp
+from core.streaming import stream_ollama, stream_llama_cpp, _normalize_openai_url
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -281,3 +281,90 @@ class TestStreamLlamaCpp:
         stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 4096, on_log)
         payload = mock_post.call_args[1]["json"]
         assert payload.get("model") == "m.gguf"
+
+    @patch("core.streaming.requests.post")
+    def test_n_ctx_not_in_payload(self, mock_post):
+        """n_ctx is a llama.cpp-specific param; real OpenAI endpoints reject it."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 4096, on_log)
+        payload = mock_post.call_args[1]["json"]
+        assert "n_ctx" not in payload
+
+    @patch("core.streaming.requests.post")
+    def test_tool_choice_auto_added_when_tools_present(self, mock_post):
+        """tool_choice='auto' must be sent when tools list is non-empty."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        tools = [{"type": "function", "function": {"name": "file_creator"}}]
+        _, on_log = _on_log()
+
+        stream_llama_cpp("http://localhost:8080", "m.gguf", [], tools, 4096, on_log)
+        payload = mock_post.call_args[1]["json"]
+        assert payload.get("tool_choice") == "auto"
+
+    @patch("core.streaming.requests.post")
+    def test_tool_choice_absent_when_no_tools(self, mock_post):
+        """tool_choice must NOT appear in payload when tools list is empty."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 4096, on_log)
+        payload = mock_post.call_args[1]["json"]
+        assert "tool_choice" not in payload
+
+    @patch("core.streaming.requests.post")
+    def test_strips_v1_suffix_from_url(self, mock_post):
+        """URL ending in /v1 must not produce /v1/v1/chat/completions."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        stream_llama_cpp("https://api.openai.com/v1", "gpt-4", [], [], 4096, on_log)
+        called_url = mock_post.call_args[0][0]
+        assert called_url == "https://api.openai.com/v1/chat/completions"
+
+    @patch("core.streaming.requests.post")
+    def test_strips_v1_trailing_slash_from_url(self, mock_post):
+        """URL ending in /v1/ (trailing slash) is also normalised."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        stream_llama_cpp("https://api.openai.com/v1/", "gpt-4", [], [], 4096, on_log)
+        called_url = mock_post.call_args[0][0]
+        assert called_url == "https://api.openai.com/v1/chat/completions"
+
+    @patch("core.streaming.requests.post")
+    def test_plain_base_url_appends_v1_path(self, mock_post):
+        """URL without /v1 suffix gets /v1/chat/completions appended correctly."""
+        lines = [self._sse_line(done=True)]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 4096, on_log)
+        called_url = mock_post.call_args[0][0]
+        assert called_url == "http://localhost:8080/v1/chat/completions"
+
+
+# ── _normalize_openai_url unit tests ─────────────────────────────────────────
+
+class TestNormalizeOpenAIUrl:
+    def test_strips_v1_suffix(self):
+        assert _normalize_openai_url("https://api.openai.com/v1") == "https://api.openai.com"
+
+    def test_strips_v1_trailing_slash(self):
+        assert _normalize_openai_url("https://api.openai.com/v1/") == "https://api.openai.com"
+
+    def test_plain_url_unchanged(self):
+        assert _normalize_openai_url("http://localhost:8080") == "http://localhost:8080"
+
+    def test_trailing_slash_stripped(self):
+        assert _normalize_openai_url("http://localhost:8080/") == "http://localhost:8080"
+
+    def test_strips_any_trailing_v1(self):
+        # /api/v1 at the end is also stripped — function removes any trailing /v1 segment
+        assert _normalize_openai_url("http://localhost:8080/api/v1") == "http://localhost:8080/api"

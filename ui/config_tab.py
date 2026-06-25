@@ -1,6 +1,9 @@
+import copy
 import html
+import json
 import re
 import time
+import uuid
 import streamlit as st
 from config.defaults import (
     LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL,
@@ -10,102 +13,210 @@ from config.defaults import (
 )
 from config.metrics import METRIC_TYPES, CATEGORIES, format_criterion
 from config.scenarios import SCENARIOS
-from core.models import scan_gguf_models, fetch_ollama_models, fetch_llama_cpp_models, compile_gguf
+from core.models import scan_gguf_models, fetch_ollama_models, fetch_llama_cpp_models, compile_gguf, get_ollama_status, get_ollama_running_models, pull_ollama_model, delete_ollama_model
 from core.mcp_manager import start_mcp, stop_mcp, discover_tools, poll_mcp_process
 from core import llama_server
 from core.state import sync_scenario
 from ui.components import badge, type_badge, CAT_COLOUR
 from ui.workflow_config import render_workflow_config
 
-# Tool focus → scenario mapping
+import pathlib as _pathlib
+import json as _json_mod
+
+
+def _load_llama_cli_presets() -> dict:
+    """Load all *.json presets from config/presets/ and return {name: preset_dict}."""
+    preset_dir = _pathlib.Path(__file__).parent.parent / "config" / "presets"
+    presets = {}
+    if preset_dir.exists():
+        for f in sorted(preset_dir.glob("*.json")):
+            try:
+                data = _json_mod.loads(f.read_text())
+                presets[data.get("name", f.stem)] = data
+            except Exception:
+                pass
+    return presets
+
+
+# Tool focus → scenario mapping (CAF-specific entries commented out — re-enable with CAF bot type)
 _TOOL_SCENARIOS = {
     # Local tools
     "file_creator":               "Scenario 1 – File Creation",
     "run_nmap_scan":              "Scenario 2 – Network Scan",
-    # CAF general scenarios
-    "mcp_kali_run_command":       "CAF – Reconnaissance",
-    "msf_run":                    "CAF – Exploitation",
-    "caf_guardrail_test":         "CAF – Guardrail Test",
-    # CAF per-tool scenarios
-    "shell":                      "CAF – Shell Command Execution",
-    "shell_extended":             "CAF – Extended Shell Execution",
-    "shell_dangerous":            "CAF – Dangerous Command Audit",
-    "shell_sequence":             "CAF – Command Sequence",
-    "interactive_session_write":  "CAF – Interactive Session",
-    "ospf_sniff":                 "CAF – OSPF Sniffing",
-    "RIPv2":                      "CAF – RIPv2 Analysis",
+    # CAF general scenarios — hidden until CyberAgentFlow bot type is implemented
+    # "mcp_kali_run_command":       "CAF – Reconnaissance",
+    # "msf_run":                    "CAF – Exploitation",
+    # "caf_guardrail_test":         "CAF – Guardrail Test",
+    # CAF per-tool scenarios — hidden until CyberAgentFlow bot type is implemented
+    # "shell":                      "CAF – Shell Command Execution",
+    # "shell_extended":             "CAF – Extended Shell Execution",
+    # "shell_dangerous":            "CAF – Dangerous Command Audit",
+    # "shell_sequence":             "CAF – Command Sequence",
+    # "interactive_session_write":  "CAF – Interactive Session",
+    # "ospf_sniff":                 "CAF – OSPF Sniffing",
+    # "RIPv2":                      "CAF – RIPv2 Analysis",
 }
 _TOOL_LABELS = {
     "file_creator":               "file_creator — File Creation",
     "run_nmap_scan":              "run_nmap_scan — Network Scanner",
-    "mcp_kali_run_command":       "mcp_kali_run_command — CAF Reconnaissance",
-    "msf_run":                    "msf_run — CAF Exploitation (Metasploit)",
-    "caf_guardrail_test":         "caf_guardrail_test — CAF Guardrail Test",
-    "shell":                      "shell — CAF Shell Command Execution",
-    "shell_extended":             "shell_extended — CAF Extended Shell (long-running)",
-    "shell_dangerous":            "shell_dangerous — CAF Dangerous Command Audit",
-    "shell_sequence":             "shell_sequence — CAF Command Sequence Chain",
-    "interactive_session_write":  "interactive_session_write — CAF Interactive Session",
-    "ospf_sniff":                 "ospf_sniff — CAF OSPF Protocol Analysis",
-    "RIPv2":                      "RIPv2 — CAF RIPv2 Protocol Analysis",
+    # CAF tools — hidden until CyberAgentFlow bot type is implemented
+    # "mcp_kali_run_command":       "mcp_kali_run_command — CAF Reconnaissance",
+    # "msf_run":                    "msf_run — CAF Exploitation (Metasploit)",
+    # "caf_guardrail_test":         "caf_guardrail_test — CAF Guardrail Test",
+    # "shell":                      "shell — CAF Shell Command Execution",
+    # "shell_extended":             "shell_extended — CAF Extended Shell (long-running)",
+    # "shell_dangerous":            "shell_dangerous — CAF Dangerous Command Audit",
+    # "shell_sequence":             "shell_sequence — CAF Command Sequence Chain",
+    # "interactive_session_write":  "interactive_session_write — CAF Interactive Session",
+    # "ospf_sniff":                 "ospf_sniff — CAF OSPF Protocol Analysis",
+    # "RIPv2":                      "RIPv2 — CAF RIPv2 Protocol Analysis",
 }
 
 
+def _push_undo(snapshot: dict) -> None:
+    stack = st.session_state.setdefault("_undo_stack", [])
+    stack.append(snapshot)
+    if len(stack) > 20:
+        st.session_state["_undo_stack"] = stack[-20:]
+
+
+def _export_project_json(project: dict) -> str:
+    SENSITIVE = {"ssh_password", "openai_api_key"}
+    proj_copy = copy.deepcopy(project)
+    for k in SENSITIVE:
+        proj_copy.get("config", {}).pop(k, None)
+    return json.dumps(proj_copy, indent=2)
+
+
+def _strip_step_ids(config: dict) -> None:
+    """Remove _id fields from all steps/commands in a project config so that
+    the duplicate receives fresh IDs and never shares them with the original."""
+    for list_key in ("startup_commands", "completion_commands"):
+        for step in config.get(list_key, []):
+            step.pop("_id", None)
+            for cmd in step.get("commands", []):
+                cmd.pop("_id", None)
+
+
+def _duplicate_project(project_id: str) -> None:
+    projects = st.session_state.get("projects", [])
+    proj = next((p for p in projects if p["id"] == project_id), None)
+    if not proj:
+        return
+    new_proj = copy.deepcopy(proj)
+    new_proj["id"] = str(uuid.uuid4())[:8]
+    new_proj["name"] = f"{proj['name']} (copy)"
+    _strip_step_ids(new_proj.get("config", {}))
+    _push_undo({"desc": "duplicate project", "type": "project",
+                "projects": copy.deepcopy(projects),
+                "active_project_id": st.session_state.get("active_project_id")})
+    projects.append(new_proj)
+    st.session_state["projects"] = projects
+    st.session_state["active_project_id"] = new_proj["id"]
+    st.rerun()
+
+
+@st.dialog("Delete Project")
+def _show_delete_project_dialog(project_id: str) -> None:
+    proj = next((p for p in st.session_state.get("projects", []) if p["id"] == project_id), None)
+    if not proj:
+        st.rerun()
+        return
+    st.warning(f"Permanently delete **{proj['name']}**? You can undo this with the ↩ Undo button in the sidebar.")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Delete", type="primary", use_container_width=True):
+            projects = st.session_state.get("projects", [])
+            _push_undo({"desc": f"delete '{proj['name']}'", "type": "project",
+                        "projects": copy.deepcopy(projects),
+                        "active_project_id": st.session_state.get("active_project_id")})
+            remaining = [p for p in projects if p["id"] != project_id]
+            st.session_state["projects"] = remaining
+            if remaining:
+                st.session_state["active_project_id"] = remaining[0]["id"]
+            else:
+                st.session_state["active_project_id"] = None
+                st.session_state["_show_new_project_dialog"] = True
+            st.rerun()
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+
+
+@st.dialog("Rename Project")
+def _show_rename_project_dialog(project_id: str) -> None:
+    proj = next((p for p in st.session_state.get("projects", []) if p["id"] == project_id), None)
+    if not proj:
+        st.rerun()
+        return
+    new_name = st.text_input("New name", value=proj["name"], key="_rename_proj_input")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Rename", type="primary", use_container_width=True):
+            name_stripped = new_name.strip()
+            if not name_stripped:
+                st.error("Name cannot be empty.")
+                return
+            projects = st.session_state.get("projects", [])
+            _push_undo({"desc": f"rename '{proj['name']}'", "type": "project",
+                        "projects": copy.deepcopy(projects),
+                        "active_project_id": st.session_state.get("active_project_id")})
+            for p in projects:
+                if p["id"] == project_id:
+                    p["name"] = name_stripped
+                    break
+            st.session_state["projects"] = projects
+            st.rerun()
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+
+
+def _get_active_project() -> dict | None:
+    """Return the active project dict from session state, or None."""
+    pid = st.session_state.get("active_project_id")
+    for p in st.session_state.get("projects", []):
+        if p["id"] == pid:
+            return p
+    return None
+
+
 def render() -> None:
-    col_h, col_save = st.columns([6, 1])
-    with col_h:
-        st.header("Configuration")
-    with col_save:
-        if st.button("💾 Save Settings", key="btn_save_settings", use_container_width=True,
-                     help="Save current configuration to ~/.modelscope/settings.json"):
-            from core.settings_store import save_settings
-            save_settings(st.session_state)
-            st.toast("Settings saved!", icon="✅")
-
-    # ── Active Project selector ────────────────────────────────────────────────
-    st.subheader("Active Project")
-    _PROJECT_OPTIONS = {
-        "file_creator":   "📁  File Creator  — local file creation benchmark",
-        "nmap_scanner":   "🔍  Network Scanner  — nmap reconnaissance benchmark",
-        "cyberagentflow": "🤖  CyberAgentFlow  — remote autonomous pentest (CAF)",
-    }
-    project = st.radio(
-        "Project",
-        options=list(_PROJECT_OPTIONS.keys()),
-        format_func=lambda k: _PROJECT_OPTIONS[k],
-        key="active_project",
-        horizontal=True,
-        label_visibility="collapsed",
+    st.header("Configuration")
+    # Danger styling for Delete buttons — scoped to project action headers.
+    # Uses the .st-key-{key} container class emitted by Streamlit ≥1.38.
+    st.markdown(
+        """
+        <style>
+        [class*="st-key-btn_del_"] button {
+            border-color: #c0392b !important;
+            color: #c0392b !important;
+        }
+        [class*="st-key-btn_del_"] button:hover {
+            background-color: #c0392b !important;
+            color: #ffffff !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    # Sync project selection to tool_focus and active_scenario
-    _PROJECT_TOOL_MAP = {
-        "file_creator":   "file_creator",
-        "nmap_scanner":   "run_nmap_scan",
-        "cyberagentflow": "mcp_kali_run_command",
-    }
-    if st.session_state.get("_last_project") != project:
-        st.session_state["tool_focus"]    = _PROJECT_TOOL_MAP[project]
-        st.session_state["_last_project"] = project
-        _sc = {
-            "file_creator":   "Scenario 1 – File Creation",
-            "nmap_scanner":   "Scenario 2 – Network Scan",
-            "cyberagentflow": "CAF – Reconnaissance",
-        }.get(project, "")
-        if _sc:
-            st.session_state["active_scenario"] = _sc
-            sync_scenario(_sc)
-    st.divider()
 
-    sub_model, sub_metrics, sub_judge = st.tabs(
-        ["⚙  Model Setup", "📐  Metrics Setup", "🤖  AI Judge"]
-    )
-    with sub_model:
-        _model_setup()
-    with sub_metrics:
-        _metrics_setup()
-    with sub_judge:
-        from ui.judge_config import render as _render_judge
-        _render_judge()
+    proj = _get_active_project()
+    if proj is None:
+        st.info("No project selected. Use the sidebar to add or select a project.")
+        return
+
+    bot_type = proj.get("type", "bash_bot")
+    if bot_type == "bash_bot":
+        _render_bash_bot_config(proj)
+    elif bot_type == "llama_cli_bot":
+        _render_llama_cli_bot_config(proj)
+    elif bot_type == "ai_agent":
+        _render_ai_agent_config(proj)
+    else:
+        st.info(
+            f"**{proj['name']}** ({bot_type}) — configuration coming soon."
+        )
 
 
 def _platform_verification() -> None:
@@ -121,6 +232,28 @@ def _platform_verification() -> None:
         st.caption("Visual regression dashboard for the ModelScope test suite.")
         from ui.test_suite_tab import render as _render_tests
         _render_tests()
+
+
+# ── AI-Agent config ────────────────────────────────────────────────────────────
+
+def _render_ai_agent_config(proj: dict) -> None:
+    """Full configuration panel for AI-Agent type projects."""
+    st.markdown(f"### {proj['name']}")
+    st.caption(
+        "AI-Agent mode runs evaluations using a local llama.cpp / Ollama server "
+        "and the ModelScope MCP tool bridge. Configure the model, scenario, and metrics below."
+    )
+
+    sub_model, sub_metrics, sub_judge = st.tabs(
+        ["⚙  Model Setup", "📐  Metrics & Scenario", "🤖  AI Judge"]
+    )
+    with sub_model:
+        _model_setup()
+    with sub_metrics:
+        _metrics_setup()
+    with sub_judge:
+        from ui.judge_config import render as _render_judge
+        _render_judge()
 
 
 # ── Model Setup ────────────────────────────────────────────────────────────────
@@ -206,85 +339,79 @@ def _model_setup() -> None:
                 _llama_server_controls()
             else:
                 st.subheader("Ollama")
-                st.info(
-                    "Ollama manages model loading automatically. "
-                    "Ensure the Ollama service is running at the configured URL."
-                )
+                _ollama_server_controls()
 
     # ── MCP Server ─────────────────────────────────────────────────────────────
     with st.expander("SecOps MCP Server", expanded=True):
         _mcp_server_section()
 
-    # ── CAF Runtime Configuration ──────────────────────────────────────────────
-    with st.expander("CAF Runtime Configuration", expanded=False):
-        _caf_config_section()
+    # ── CAF Runtime Configuration — hidden until CAF bot type is implemented ───
+    # with st.expander("CAF Runtime Configuration", expanded=False):
+    #     _caf_config_section()
 
 
 def _caf_config_section() -> None:
-    """CAF network boundary controls. Scope/Urgency are configured in the CyberAgentFlow tab."""
-    scope   = st.session_state.get("caf_scope", "Narrow")
-    urgency = st.session_state.get("caf_urgency", "Speed")
-    st.caption(
-        "Configure Cyber-Agent-Flow's network boundary settings. "
-        "Scope and Urgency are set in the CyberAgentFlow tab under 'CAF 4-Pillar Configuration'."
-    )
-    st.info("Scope and Urgency settings are managed in the CyberAgentFlow tab.", icon="ℹ️")
-
-    st.divider()
-
-    st.markdown("**Allowed Subnets** (Scope = Narrow guardrail)")
-    st.caption("IP ranges the agent is authorized to interact with. Leave empty to skip scope validation.")
-    subnets: list = st.session_state.get("caf_allowed_subnets", [])
-    col_sub_in, col_sub_add = st.columns([5, 1])
-    with col_sub_in:
-        new_sub = st.text_input(
-            "Subnet", placeholder="e.g. 192.168.1.0/24",
-            label_visibility="collapsed", key="_new_caf_subnet",
-        )
-    with col_sub_add:
-        if st.button("Add", key="btn_add_caf_subnet", use_container_width=True):
-            s = new_sub.strip()
-            if s and s not in subnets:
-                st.session_state["caf_allowed_subnets"] = subnets + [s]
-                st.rerun()
-    for i, sub in enumerate(subnets):
-        sc, sd = st.columns([8, 1])
-        sc.code(sub)
-        if sd.button("✕", key=f"del_caf_sub_{i}"):
-            subnets.pop(i)
-            st.session_state["caf_allowed_subnets"] = subnets
-            st.rerun()
-
-    st.divider()
-
-    st.markdown("**Target Credentials** (Memory Recall metric)")
-    st.caption("Known credential strings to track across the trajectory for Memory Recall F1 scoring.")
-    creds: list = st.session_state.get("caf_target_credentials", [])
-    col_cred_in, col_cred_add = st.columns([5, 1])
-    with col_cred_in:
-        new_cred = st.text_input(
-            "Credential", placeholder="e.g. admin:password123",
-            label_visibility="collapsed", key="_new_caf_cred",
-        )
-    with col_cred_add:
-        if st.button("Add", key="btn_add_caf_cred", use_container_width=True):
-            c = new_cred.strip()
-            if c and c not in creds:
-                st.session_state["caf_target_credentials"] = creds + [c]
-                st.rerun()
-    for i, cred in enumerate(creds):
-        cc, cd = st.columns([8, 1])
-        cc.code(cred)
-        if cd.button("✕", key=f"del_caf_cred_{i}"):
-            creds.pop(i)
-            st.session_state["caf_target_credentials"] = creds
-            st.rerun()
-
-    st.divider()
-    st.caption(
-        f"Active config: Scope=**{scope}** | Urgency=**{urgency}** | "
-        f"Subnets: {len(subnets)} | Credentials: {len(creds)}"
-    )
+    """CAF network boundary controls. Hidden until CyberAgentFlow bot type is implemented."""
+    # ── CAF config section body — commented out, re-enable with CAF bot type ────
+    # scope   = st.session_state.get("caf_scope", "Narrow")
+    # urgency = st.session_state.get("caf_urgency", "Speed")
+    # st.caption(
+    #     "Configure Cyber-Agent-Flow's network boundary settings. "
+    #     "Scope and Urgency are set in the CyberAgentFlow tab under 'CAF 4-Pillar Configuration'."
+    # )
+    # st.info("Scope and Urgency settings are managed in the CyberAgentFlow tab.", icon="ℹ️")
+    # st.divider()
+    # st.markdown("**Allowed Subnets** (Scope = Narrow guardrail)")
+    # st.caption("IP ranges the agent is authorized to interact with. Leave empty to skip scope validation.")
+    # subnets: list = st.session_state.get("caf_allowed_subnets", [])
+    # col_sub_in, col_sub_add = st.columns([5, 1])
+    # with col_sub_in:
+    #     new_sub = st.text_input(
+    #         "Subnet", placeholder="e.g. 192.168.1.0/24",
+    #         label_visibility="collapsed", key="_new_caf_subnet",
+    #     )
+    # with col_sub_add:
+    #     if st.button("Add", key="btn_add_caf_subnet", use_container_width=True):
+    #         s = new_sub.strip()
+    #         if s and s not in subnets:
+    #             st.session_state["caf_allowed_subnets"] = subnets + [s]
+    #             st.rerun()
+    # for i, sub in enumerate(subnets):
+    #     sc, sd = st.columns([8, 1])
+    #     sc.code(sub)
+    #     if sd.button("✕", key=f"del_caf_sub_{i}"):
+    #         subnets.pop(i)
+    #         st.session_state["caf_allowed_subnets"] = subnets
+    #         st.rerun()
+    # st.divider()
+    # st.markdown("**Target Credentials** (Memory Recall metric)")
+    # st.caption("Known credential strings to track across the trajectory for Memory Recall F1 scoring.")
+    # creds: list = st.session_state.get("caf_target_credentials", [])
+    # col_cred_in, col_cred_add = st.columns([5, 1])
+    # with col_cred_in:
+    #     new_cred = st.text_input(
+    #         "Credential", placeholder="e.g. admin:password123",
+    #         label_visibility="collapsed", key="_new_caf_cred",
+    #     )
+    # with col_cred_add:
+    #     if st.button("Add", key="btn_add_caf_cred", use_container_width=True):
+    #         c = new_cred.strip()
+    #         if c and c not in creds:
+    #             st.session_state["caf_target_credentials"] = creds + [c]
+    #             st.rerun()
+    # for i, cred in enumerate(creds):
+    #     cc, cd = st.columns([8, 1])
+    #     cc.code(cred)
+    #     if cd.button("✕", key=f"del_caf_cred_{i}"):
+    #         creds.pop(i)
+    #         st.session_state["caf_target_credentials"] = creds
+    #         st.rerun()
+    # st.divider()
+    # st.caption(
+    #     f"Active config: Scope=**{scope}** | Urgency=**{urgency}** | "
+    #     f"Subnets: {len(subnets)} | Credentials: {len(creds)}"
+    # )
+    st.info("CAF configuration is hidden. Re-enable _caf_config_section() when CyberAgentFlow bot type is implemented.")
 
 
 
@@ -318,11 +445,19 @@ def _llama_server_controls() -> None:
                 st.error(msg)
 
     if ready:
-        st.success("Running & ready")
         info = llama_server.get_server_info(url)
-        if info:
-            model_name = (info.get("model_path") or "").split("/")[-1] or "?"
-            st.caption(f"Model: `{model_name}`  |  n_ctx: `{info.get('n_ctx', '?')}`")
+        model_name = (info.get("model_path") or "").split("/")[-1] if info else "?"
+        n_ctx      = info.get("n_ctx", "?") if info else "?"
+        st.markdown(
+            f'<div class="service-active-box">'
+            f'<div class="service-label">Running &amp; ready</div>'
+            f'<div class="service-cmd">model: {model_name}  |  n_ctx: {n_ctx}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        _srv_cmd = st.session_state.get("_llama_server_cmd", "")
+        if _srv_cmd:
+            st.code(_srv_cmd, language="bash")
     elif crashed:
         exit_code = st.session_state.get("llama_server_exit_code", "?")
         st.error(f"Process exited (code {exit_code})")
@@ -353,16 +488,22 @@ def _llama_server_controls() -> None:
     st.text_input(
         "Binary path",
         key="llama_server_bin",
-        help="Path to the llama-server executable.",
+        placeholder="/usr/local/bin/llama-server",
+        help="Path to the llama-server executable (e.g., /usr/local/bin/llama-server).",
     )
 
     col_start, col_stop, col_restart = st.columns(3)
     with col_start:
         if st.button("Start", use_container_width=True, key="btn_ls_start",
-                     disabled=not model_chosen):
+                     type="primary", disabled=not model_chosen):
+            _bin_path  = st.session_state.get("llama_server_bin", "").strip() or "/usr/local/bin/llama-server"
+            _mdl_path  = st.session_state["selected_model_path"]
+            _ctx       = st.session_state.get("context_size", 4096)
+            _cmd_str   = f"{_bin_path} --model {_mdl_path} --ctx-size {_ctx} --host 127.0.0.1 --port 8080 --jinja --parallel 1"
+            st.session_state["_llama_server_cmd"] = _cmd_str
             ok, msg = llama_server.start(
-                st.session_state["selected_model_path"],
-                context_size=st.session_state.get("context_size", 4096),
+                _mdl_path,
+                context_size=_ctx,
             )
             st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
             st.rerun()
@@ -384,6 +525,144 @@ def _llama_server_controls() -> None:
             )
             st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
             st.rerun()
+
+
+def _ollama_server_controls() -> None:
+    """Status indicator, running-model list, pull, and delete controls for Ollama."""
+    url = st.session_state.get("llm_url", "")
+
+    # ── Deferred messages (from previous rerun) ───────────────────────────────
+    if msg_pair := st.session_state.pop("_ollama_msg", None):
+        level, msg = msg_pair
+        if level == "success":
+            st.success(msg)
+        elif level == "info":
+            st.info(msg)
+        else:
+            st.error(msg)
+
+    # ── Status row ────────────────────────────────────────────────────────────
+    col_btn, col_pill = st.columns([2, 5])
+    with col_btn:
+        if st.button("Check Status", key="btn_ollama_check_status", use_container_width=True):
+            status = get_ollama_status(url)
+            st.session_state["_ollama_status"] = status
+            if status["running"]:
+                running_models, _ = get_ollama_running_models(url)
+                st.session_state["_ollama_running_models"] = running_models
+            else:
+                st.session_state["_ollama_running_models"] = []
+            st.rerun()
+
+    with col_pill:
+        ollama_status = st.session_state.get("_ollama_status")
+        if ollama_status is None:
+            st.caption("Press **Check Status** to probe the Ollama service.")
+        elif ollama_status.get("running"):
+            version_str = ollama_status.get("version", "")
+            label = f"Running v{version_str}" if version_str else "Running"
+            st.markdown(
+                f'<p style="margin:4px 0 8px">'
+                f'<span class="status-pill status-pill-up">{label}</span>'
+                f'</p>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<p style="margin:4px 0 8px">'
+                '<span class="status-pill status-pill-down">Offline</span>'
+                '</p>',
+                unsafe_allow_html=True,
+            )
+            if ollama_status.get("error"):
+                st.caption(ollama_status["error"])
+
+    # Running models list
+    running_models: list = st.session_state.get("_ollama_running_models", [])
+    if running_models:
+        st.caption("**Currently loaded in memory:**")
+        for m in running_models:
+            expires = m.get("expires_at", "")
+            size_str = f"  {m['size_gb']} GB" if m.get("size_gb") else ""
+            exp_str = f"  expires: {expires[:19]}" if expires else ""
+            st.caption(f"  `{m['name']}`{size_str}{exp_str}")
+
+    st.divider()
+
+    # ── Pull Model ────────────────────────────────────────────────────────────
+    st.markdown("**Pull Model**")
+    st.text_input(
+        "Model name",
+        key="ollama_pull_model_name",
+        placeholder="e.g. llama3, mistral:7b",
+    )
+    if st.button("Pull", key="btn_ollama_pull", use_container_width=False):
+        model_to_pull = st.session_state.get("ollama_pull_model_name", "").strip()
+        if not model_to_pull:
+            st.error("Enter a model name before pulling.")
+        else:
+            log_placeholder = st.empty()
+            log_lines: list[str] = []
+
+            def _append_log(msg: str) -> None:
+                log_lines.append(msg)
+                log_placeholder.code("\n".join(log_lines[-30:]), language=None)
+
+            ok, result_msg = pull_ollama_model(url, model_to_pull, on_log=_append_log)
+            if ok:
+                # Refresh model list in the shape the selector expects
+                found, _err = fetch_ollama_models(url)
+                st.session_state["llm_models"] = [
+                    {"name": m["name"], "path": m["name"], "size_gb": m["size_gb"]}
+                    for m in found
+                ]
+                st.session_state["_ollama_msg"] = ("success", result_msg)
+            else:
+                st.session_state["_ollama_msg"] = ("error", result_msg)
+            st.rerun()
+
+    st.divider()
+
+    # ── Delete Model ──────────────────────────────────────────────────────────
+    models_list: list = st.session_state.get("llm_models", [])
+    if models_list:
+        st.markdown("**Delete Model**")
+        model_names = [m["name"] for m in models_list]
+        selected_for_delete = st.selectbox(
+            "Model to delete",
+            options=model_names,
+            key="ollama_delete_model_select",
+        )
+
+        if st.session_state.get("_confirm_ollama_delete"):
+            st.warning(f"Permanently delete **{selected_for_delete}** from Ollama? This cannot be undone.")
+            cd1, cd2 = st.columns(2)
+            with cd1:
+                if st.button("Yes, delete", key="btn_ollama_confirm_delete", use_container_width=True):
+                    ok, msg = delete_ollama_model(url, selected_for_delete)
+                    st.session_state["_confirm_ollama_delete"] = False
+                    if ok:
+                        # Refresh model list
+                        found, _err = fetch_ollama_models(url)
+                        st.session_state["llm_models"] = [
+                            {"name": m["name"], "path": m["name"], "size_gb": m["size_gb"]}
+                            for m in found
+                        ]
+                        # Clear selected model if it was deleted
+                        if st.session_state.get("selected_model") == selected_for_delete:
+                            st.session_state["selected_model"] = None
+                        st.session_state["_ollama_msg"] = ("success", msg)
+                    else:
+                        st.session_state["_ollama_msg"] = ("error", msg)
+                    st.rerun()
+            with cd2:
+                if st.button("Cancel", key="btn_ollama_cancel_delete", use_container_width=True):
+                    st.session_state["_confirm_ollama_delete"] = False
+                    st.rerun()
+        else:
+            if st.button("Delete", key="btn_ollama_delete", use_container_width=False):
+                st.session_state["_confirm_ollama_delete"] = True
+                st.rerun()
 
 
 def _mcp_server_section() -> None:
@@ -437,42 +716,68 @@ def _mcp_server_section() -> None:
     with col_ft:
         if st.button("Fetch MCP Tools", key="btn_fetch_mcp_tools", use_container_width=True):
             _url = st.session_state.get("mcp_server_url", MCP_SERVER_BASE_URL)
-            tools = discover_tools(st.session_state["mcp_url"], base_url=_url)
-            if tools:
-                prev    = st.session_state.get("mcp_tools", {})
-                old_keys = set(prev.keys()) - {t["name"] for t in tools}
+            from core.mcp_manager import load_tools_from_json
+            import os as _os
+            live_tools = discover_tools(st.session_state["mcp_url"], base_url=_url)
+            _mcp_dir = _os.path.dirname(st.session_state.get("mcp_url", ""))
+            catalog = load_tools_from_json(_mcp_dir)
+            seen = {t["name"] for t in live_tools}
+            all_t = live_tools + [t for t in catalog if t["name"] not in seen]
+            if all_t:
+                prev = st.session_state.get("mcp_tools", {})
+                old_keys = set(prev.keys()) - {t["name"] for t in all_t}
                 for old in old_keys:
                     st.session_state.pop(f"tool_chk_{old}", None)
                 st.session_state["mcp_tools"] = {
                     t["name"]: prev.get(t["name"], True)
-                    for t in tools
+                    for t in all_t
                 }
-                st.success(f"Found: {', '.join(t['name'] for t in tools)}")
+                st.success(f"Found {len(live_tools)} live + {len(all_t) - len(live_tools)} catalog tools")
             else:
                 st.warning("No tools found — is the MCP server running?")
 
     tools_dict = st.session_state.get("mcp_tools", {})
     if tools_dict:
-        st.write("**Available MCP Tools**")
         from core.mcp_manager import load_tools_from_json
-        import os
-        mcp_dir     = os.path.dirname(st.session_state.get("mcp_url", ""))
-        desc_lookup = {
-            t["name"]: t.get("description", "")
-            for t in load_tools_from_json(mcp_dir)
+        from collections import defaultdict
+        import os as _os2
+        _mcp_dir2 = _os2.path.dirname(st.session_state.get("mcp_url", ""))
+        _all_tool_info = {
+            t["name"]: {"desc": t.get("description", ""), "server": t.get("server", "custom")}
+            for t in load_tools_from_json(_mcp_dir2)
         }
-        ncols   = min(4, len(tools_dict))
-        cols    = st.columns(ncols)
-        updated = {}
-        for idx, (name, enabled) in enumerate(tools_dict.items()):
-            with cols[idx % ncols]:
-                updated[name] = st.checkbox(
-                    name,
-                    value=enabled,
-                    key=f"tool_chk_{name}",
-                    help=desc_lookup.get(name) or None,
-                )
-        st.session_state["mcp_tools"] = updated
+        _SERVER_LABELS = {
+            "custom":             "Custom Tools",
+            "fetch":              "Fetch",
+            "filesystem":         "Filesystem",
+            "git":                "Git",
+            "memory":             "Memory",
+            "time":               "Time",
+            "sequentialthinking": "Sequential Thinking",
+        }
+        _SERVER_ORDER = ["custom", "fetch", "filesystem", "git", "memory", "time", "sequentialthinking"]
+        _by_server = defaultdict(list)
+        for _tn in tools_dict:
+            _srv = _all_tool_info.get(_tn, {}).get("server", "custom")
+            _by_server[_srv].append(_tn)
+        _updated = dict(tools_dict)
+        for _srv in _SERVER_ORDER:
+            _names = _by_server.get(_srv, [])
+            if not _names:
+                continue
+            _label = _SERVER_LABELS.get(_srv, _srv)
+            with st.expander(f"**{_label}** ({len(_names)} tools)", expanded=(_srv == "custom")):
+                _ncols = min(3, len(_names))
+                _cols = st.columns(_ncols)
+                for _idx, _name in enumerate(sorted(_names)):
+                    with _cols[_idx % _ncols]:
+                        _updated[_name] = st.checkbox(
+                            _name,
+                            value=tools_dict.get(_name, True),
+                            key=f"tool_chk_{_name}",
+                            help=_all_tool_info.get(_name, {}).get("desc") or None,
+                        )
+        st.session_state["mcp_tools"] = _updated
     else:
         st.info("Click **Fetch MCP Tools** to discover tools from the MCP server.")
 
@@ -1038,3 +1343,1493 @@ def _metrics_setup() -> None:
         st.session_state["metrics_matrix"] = matrix
     else:
         st.info("No metrics configured. Click **Reset to scenario defaults** or add one above.")
+
+
+# ── Bash-Bot configuration ─────────────────────────────────────────────────────
+
+def _flush_bash_config(project: dict) -> None:
+    """Write flat bash_* working keys back into the project's config bundle."""
+    project["config"].update({
+        "execution_target":  st.session_state.get("bash_execution_target", "local"),
+        "ssh_host":          st.session_state.get("bash_ssh_host", ""),
+        "ssh_port":          st.session_state.get("bash_ssh_port", 22),
+        "ssh_user":          st.session_state.get("bash_ssh_user", "root"),
+        "ssh_password":      st.session_state.get("bash_ssh_password", ""),
+        "ssh_key_path":      st.session_state.get("bash_ssh_key_path", ""),
+        "startup_commands":  st.session_state.get("bash_startup_commands", []),
+        "bash_timeout":      st.session_state.get("bash_timeout", 60),
+        "completion_commands": st.session_state.get("bash_completion_commands", []),
+        "validation_commands": st.session_state.get("bash_validation_commands", []),
+        "fail_patterns":     st.session_state.get("bash_fail_patterns", []),
+        "metrics_matrix":    st.session_state.get("bash_metrics_matrix", []),
+        "sudo":              st.session_state.get("bash_sudo", False),
+    })
+    from core.settings_store import save_settings
+    save_settings(st.session_state)
+
+
+def _addable_list(
+    state_key: str,
+    placeholder: str,
+    input_key: str,
+    add_key: str,
+    del_key_prefix: str,
+) -> None:
+    """Reusable addable/removable list widget (same pattern as fail_patterns)."""
+    items: list = st.session_state.get(state_key, [])
+    col_inp, col_add = st.columns([5, 1])
+    with col_inp:
+        new_val = st.text_input(
+            "Command", placeholder=placeholder,
+            label_visibility="collapsed", key=input_key,
+        )
+    with col_add:
+        if st.button("Add", use_container_width=True, key=add_key):
+            v = new_val.strip()
+            if v:
+                st.session_state[state_key] = items + [v]
+                st.rerun()
+    if items:
+        to_remove = None
+        for i, item in enumerate(items):
+            ic, id_ = st.columns([8, 1])
+            ic.code(item)
+            if id_.button("✕", key=f"{del_key_prefix}_{i}"):
+                to_remove = i
+        if to_remove is not None:
+            items.pop(to_remove)
+            st.session_state[state_key] = items
+            st.rerun()
+
+
+def _next_step_id() -> int:
+    """Return a monotonically increasing ID stored in session state (used as stable widget key)."""
+    st.session_state["_step_id_counter"] = st.session_state.get("_step_id_counter", 0) + 1
+    return st.session_state["_step_id_counter"]
+
+
+def _coerce_steps(raw: list) -> list:
+    """
+    Normalise a startup/completion command list to the step format.
+    Handles legacy List[str] entries and dicts with missing/malformed fields.
+    """
+    if not raw:
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                continue
+            result.append({
+                "delay_seconds": 0.0,
+                "commands": [{
+                    "command":        text,
+                    "enabled":        True,
+                    "long_running":   False,
+                    "timeout_seconds": 60,
+                }],
+            })
+        elif isinstance(item, dict):
+            cmds = []
+            for c in item.get("commands", []):
+                if isinstance(c, str):
+                    cmds.append({
+                        "command":        c,
+                        "enabled":        True,
+                        "long_running":   False,
+                        "timeout_seconds": 60,
+                    })
+                elif isinstance(c, dict):
+                    entry = {
+                        "command":        str(c.get("command", "")),
+                        "enabled":        bool(c.get("enabled", True)),
+                        "long_running":   bool(c.get("long_running", False)),
+                        "timeout_seconds": int(c.get("timeout_seconds", 60)),
+                    }
+                    if "_id" in c:
+                        entry["_id"] = c["_id"]
+                    cmds.append(entry)
+            step = {
+                "delay_seconds": float(item.get("delay_seconds", 0.0)),
+                "commands":      cmds,
+            }
+            if "_id" in item:
+                step["_id"] = item["_id"]
+            result.append(step)
+    return result
+
+
+def _ensure_step_ids(steps: list) -> list:
+    """Assign a stable _id to any step or command that does not yet have one.
+
+    Also deduplicates IDs within each list level so that data corruption
+    (e.g. from an app-restart counter reset) never produces duplicate widget keys.
+    """
+    seen_step_ids: set = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if "_id" not in step or step["_id"] in seen_step_ids:
+            step["_id"] = _next_step_id()
+        seen_step_ids.add(step["_id"])
+        seen_cmd_ids: set = set()
+        for cmd in step.get("commands", []):
+            if isinstance(cmd, dict):
+                if "_id" not in cmd or cmd["_id"] in seen_cmd_ids:
+                    cmd["_id"] = _next_step_id()
+                seen_cmd_ids.add(cmd["_id"])
+    return steps
+
+
+def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
+    """
+    Step-based command editor for startup/completion lists.
+
+    Each step has a delay (seconds) and one or more command entries.
+    Commands within a step execute sequentially after the step's delay.
+    Steps and commands can be reordered and removed.
+
+    Uses stable _id fields on steps/commands so that widget keys survive
+    reorders without stale session_state collisions.
+    """
+    raw   = st.session_state.get(state_key, [])
+    steps = _ensure_step_ids(_coerce_steps(raw))
+
+    mutation = None  # tuple describing pending structural mutation
+    toggle   = None  # (session_state_key, new_bool) for expand/collapse
+
+    if not steps:
+        st.caption("No steps configured. Click **+ Add Step** to begin.")
+
+    for si, step in enumerate(steps):
+        step_id  = step["_id"]
+        commands = step.get("commands", [])
+
+        with st.container(border=True):
+            # ── Step header ─────────────────────────────────────────────────
+            hc1, hc2, hc3, hc4 = st.columns([4, 0.7, 0.7, 0.7])
+            with hc1:
+                _open = st.session_state.get(f"_sc_{pfx}_{step_id}_open", True)
+                _first_cmd = commands[0].get("command", "").strip() if commands else ""
+                _preview = (_first_cmd[:40] + "…") if len(_first_cmd) > 40 else _first_cmd
+                _delay_tag = f" [+{step.get('delay_seconds', 0.0):.1g}s]" if step.get('delay_seconds', 0.0) > 0 else ""
+                _label = f"{'▼' if _open else '▶'} Step {si + 1}{(' — ' + _preview) if _preview else ' — (empty)'}{_delay_tag}"
+                if st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True,
+                             help="Collapse/expand this step"):
+                    toggle = (f"_sc_{pfx}_{step_id}_open", not _open)
+            with hc2:
+                if st.button("↑", key=f"_sc_{pfx}_{step_id}_up",
+                             disabled=(si == 0), use_container_width=True,
+                             help="Move step up"):
+                    mutation = ("move_step", si, si - 1)
+            with hc3:
+                if st.button("↓", key=f"_sc_{pfx}_{step_id}_dn",
+                             disabled=(si == len(steps) - 1), use_container_width=True,
+                             help="Move step down"):
+                    mutation = ("move_step", si, si + 1)
+            with hc4:
+                if st.button("✕", key=f"_sc_{pfx}_{step_id}_del",
+                             use_container_width=True, help="Remove step"):
+                    mutation = ("del_step", si)
+
+            # ── Collapsible body ────────────────────────────────────────────
+            if st.session_state.get(f"_sc_{pfx}_{step_id}_open", True):
+                # ── Step delay ──────────────────────────────────────────────
+                delay_key = f"_sc_{pfx}_{step_id}_delay"
+                new_delay = st.number_input(
+                    "Delay before step (seconds)",
+                    min_value=0.0, max_value=3600.0, step=0.5,
+                    value=float(step.get("delay_seconds", 0.0)),
+                    key=delay_key,
+                    help="Commands in this step run after this delay. Set to 0 to run immediately.",
+                )
+                step["delay_seconds"] = new_delay
+
+                # ── Commands ────────────────────────────────────────────────
+                if not commands:
+                    st.caption("No commands. Click **+ Add Command** below.")
+
+                for ci, cmd in enumerate(commands):
+                    cmd_id = cmd["_id"]
+
+                    if ci > 0:
+                        st.markdown("---")
+
+                    # Command input row
+                    cc1, cc2, cc3, cc4 = st.columns([7, 0.6, 0.6, 0.6])
+                    with cc1:
+                        cmd_key  = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                        new_text = st.text_input(
+                            f"Command {ci + 1}",
+                            value=cmd.get("command", ""),
+                            placeholder=placeholder,
+                            key=cmd_key,
+                            label_visibility="collapsed",
+                        )
+                        cmd["command"] = new_text
+                    with cc2:
+                        if st.button("↑", key=f"_sc_{pfx}_{step_id}_{cmd_id}_cup",
+                                     disabled=(ci == 0), use_container_width=True):
+                            mutation = ("move_cmd", si, ci, ci - 1)
+                    with cc3:
+                        if st.button("↓", key=f"_sc_{pfx}_{step_id}_{cmd_id}_cdn",
+                                     disabled=(ci == len(commands) - 1),
+                                     use_container_width=True):
+                            mutation = ("move_cmd", si, ci, ci + 1)
+                    with cc4:
+                        if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del",
+                                     use_container_width=True):
+                            mutation = ("del_cmd", si, ci)
+
+                    # Command meta row: enabled, long-running, timeout
+                    mc1, mc2, mc3 = st.columns([1.2, 1.5, 2.5])
+                    with mc1:
+                        en_key         = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                        cmd["enabled"] = st.checkbox(
+                            "Enabled",
+                            value=cmd.get("enabled", True),
+                            key=en_key,
+                        )
+                    with mc2:
+                        lr_key              = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                        cmd["long_running"] = st.checkbox(
+                            "Long-running",
+                            value=cmd.get("long_running", False),
+                            key=lr_key,
+                            help="Disables the per-command timeout; allows up to 1 hour.",
+                        )
+                    with mc3:
+                        to_key                 = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                        cmd["timeout_seconds"] = st.number_input(
+                            "Timeout (s)",
+                            min_value=1, max_value=3600,
+                            value=int(cmd.get("timeout_seconds", 60)),
+                            key=to_key,
+                            disabled=cmd["long_running"],
+                            help="Per-command timeout in seconds.",
+                        )
+
+                # Add Command button
+                if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                    mutation = ("add_cmd", si)
+
+    # Add Step button
+    if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
+        mutation = ("add_step",)
+
+    # ── Handle expand/collapse toggle (UI-only, no undo entry) ──────────────
+    if toggle:
+        st.session_state[toggle[0]] = toggle[1]
+        st.rerun()
+
+    # ── Apply mutation and rerun ─────────────────────────────────────────────
+    if mutation:
+        _push_undo({"desc": f"edit {pfx} commands", "type": "cmd",
+                    "state_key": state_key, "data": copy.deepcopy(steps)})
+        m = mutation
+        if m[0] == "add_step":
+            steps.append({
+                "_id":           _next_step_id(),
+                "delay_seconds": 0.0,
+                "commands": [{
+                    "_id":             _next_step_id(),
+                    "command":         "",
+                    "enabled":         True,
+                    "long_running":    False,
+                    "timeout_seconds": 60,
+                }],
+            })
+        elif m[0] == "del_step":
+            steps.pop(m[1])
+        elif m[0] == "move_step":
+            si1, si2 = m[1], m[2]
+            steps[si1], steps[si2] = steps[si2], steps[si1]
+        elif m[0] == "add_cmd":
+            steps[m[1]]["commands"].append({
+                "_id":             _next_step_id(),
+                "command":         "",
+                "enabled":         True,
+                "long_running":    False,
+                "timeout_seconds": 60,
+            })
+        elif m[0] == "del_cmd":
+            steps[m[1]]["commands"].pop(m[2])
+        elif m[0] == "move_cmd":
+            _, ci1, ci2 = m[1], m[2], m[3]
+            cmds         = steps[m[1]]["commands"]
+            cmds[ci1], cmds[ci2] = cmds[ci2], cmds[ci1]
+
+        st.session_state[state_key] = steps
+        st.rerun()
+    else:
+        st.session_state[state_key] = steps
+
+
+def _render_bash_runtime(project: dict) -> None:
+    """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
+
+    with st.expander("Execution Target", expanded=True):
+        target = st.selectbox(
+            "Mode",
+            options=["local", "ssh"],
+            format_func=lambda v: "Local" if v == "local" else "SSH (Remote)",
+            key="bash_execution_target",
+            help="Run commands on the local machine or via SSH on a remote host.",
+        )
+        st.checkbox(
+            "Run commands with sudo",
+            key="bash_sudo",
+            help="Prefix every startup, validation, and completion command with `sudo`. "
+                 "Useful when the evaluation needs elevated privileges.",
+        )
+        if target == "ssh":
+            st.divider()
+            st.markdown("**SSH Credentials**")
+            c_host, c_port = st.columns([3, 1])
+            with c_host:
+                st.text_input("Host", key="bash_ssh_host", placeholder="192.168.1.100")
+            with c_port:
+                st.number_input("Port", min_value=1, max_value=65535, key="bash_ssh_port")
+            c_user, c_pass = st.columns(2)
+            with c_user:
+                st.text_input("Username", key="bash_ssh_user")
+            with c_pass:
+                st.text_input("Password", key="bash_ssh_password", type="password",
+                              help="Leave empty to use key-based auth.")
+            st.text_input("Key Path", key="bash_ssh_key_path",
+                          placeholder="~/.ssh/id_rsa",
+                          help="Path to private key file. Leave empty if using password auth.")
+            if st.button("Test Connection", key="btn_bash_test_ssh"):
+                _test_bash_ssh_connection()
+
+    with st.expander("Commands", expanded=True):
+        tab_startup, tab_validation, tab_completion = st.tabs(
+            ["▶  Startup", "✓  Validation", "⏹  Completion"]
+        )
+        with tab_startup:
+            st.caption(
+                "Commands run when execution starts, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="bash_startup_commands",
+                pfx="startup",
+                placeholder="e.g. /bin/bash setup.sh",
+            )
+        with tab_validation:
+            st.caption(
+                "Commands that verify success after startup. "
+                "All must exit 0 (and produce no fail-pattern output) to count as PASS."
+            )
+            _addable_list(
+                state_key="bash_validation_commands",
+                placeholder="e.g. cat /tmp/output.txt",
+                input_key="_bash_new_val_cmd",
+                add_key="btn_bash_add_val_cmd",
+                del_key_prefix="bash_del_val",
+            )
+        with tab_completion:
+            st.caption(
+                "Cleanup commands run after startup and validation finish, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="bash_completion_commands",
+                pfx="completion",
+                placeholder="e.g. rm -rf /tmp/test_workdir",
+            )
+
+    st.number_input(
+        "Default Timeout (seconds)",
+        min_value=1, max_value=3600,
+        key="bash_timeout",
+        help="Default per-command timeout. Override per individual command inside each step.",
+    )
+
+    _flush_bash_config(project)
+
+
+def _test_bash_ssh_connection() -> None:
+    """Quick SSH connectivity check using paramiko."""
+    try:
+        import paramiko
+        host     = st.session_state.get("bash_ssh_host", "").strip()
+        port     = int(st.session_state.get("bash_ssh_port", 22))
+        user     = st.session_state.get("bash_ssh_user", "root").strip()
+        password = st.session_state.get("bash_ssh_password", "").strip() or None
+        key_path = st.session_state.get("bash_ssh_key_path", "").strip() or None
+
+        if not host:
+            st.error("Host is required.")
+            return
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
+        if key_path:
+            connect_kwargs["key_filename"] = key_path
+        if password:
+            connect_kwargs["password"] = password
+        client.connect(**connect_kwargs)
+        _, stdout, _ = client.exec_command("echo ok")
+        result = stdout.read().decode().strip()
+        client.close()
+        if result == "ok":
+            st.success(f"Connected to {user}@{host}:{port} ✓")
+        else:
+            st.warning(f"Connected but unexpected echo response: {result!r}")
+    except Exception as exc:
+        st.error(f"Connection failed: {exc}")
+
+
+def _render_bash_metrics(project: dict) -> None:
+    """Metrics sub-tab for Bash-Bot: fail patterns, metrics matrix."""
+
+    # Validation Commands are managed in the Runtime tab → Commands → Validation.
+
+    # ── Fail Patterns ──────────────────────────────────────────────────────────
+    st.subheader("Fail Patterns")
+    st.caption("Output strings that indicate failure even when exit code = 0.")
+    patterns: list = st.session_state.get("bash_fail_patterns", [])
+    col_inp, col_add = st.columns([5, 1])
+    with col_inp:
+        new_p = st.text_input(
+            "New pattern", placeholder='e.g. "error: file not found"',
+            label_visibility="collapsed", key="_bash_new_fail_pattern",
+        )
+    with col_add:
+        if st.button("Add", use_container_width=True, key="btn_bash_add_fail_pattern"):
+            p = new_p.strip()
+            if p and p not in patterns:
+                st.session_state["bash_fail_patterns"] = patterns + [p]
+                st.rerun()
+    if patterns:
+        to_remove = None
+        for i, p in enumerate(patterns):
+            pc, pd = st.columns([8, 1])
+            pc.code(p)
+            if pd.button("✕", key=f"bash_del_fp_{i}"):
+                to_remove = i
+        if to_remove is not None:
+            del patterns[to_remove]
+            st.session_state["bash_fail_patterns"] = patterns
+            st.rerun()
+
+    st.divider()
+
+    # ── Metrics Matrix (CAF-* categories excluded) ─────────────────────────────
+    st.subheader("Metrics Matrix")
+    st.caption("Metrics evaluated against run telemetry after execution.")
+    _render_metrics_matrix("bash_metrics_matrix", "bash")
+
+    _flush_bash_config(project)
+
+
+def _render_bash_bot_config(project: dict) -> None:
+    """Top-level config renderer for Bash-Bot projects (2 sub-tabs: Runtime, Metrics)."""
+    col_name, col_ren, col_dup, col_export, _, col_del = st.columns([5, 0.75, 0.75, 0.75, 0.25, 1.8])
+    with col_name:
+        st.markdown(f"**{project['name']}** — Bash-Bot")
+    with col_ren:
+        if st.button("✏", key=f"btn_ren_{project['id']}", use_container_width=True,
+                     help="Rename this project"):
+            _show_rename_project_dialog(project["id"])
+    with col_dup:
+        if st.button("⧉", key=f"btn_dup_{project['id']}", use_container_width=True,
+                     help="Duplicate this project"):
+            _duplicate_project(project["id"])
+    with col_export:
+        st.download_button(
+            "⬇", data=_export_project_json(project),
+            file_name=f"{project['name'].replace(' ', '_')}.json",
+            mime="application/json", key=f"btn_export_{project['id']}",
+            use_container_width=True, help="Export project as JSON",
+        )
+    with col_del:
+        if st.button("🗑 Delete", key=f"btn_del_{project['id']}", use_container_width=True,
+                     type="secondary", help="Delete this project"):
+            _show_delete_project_dialog(project["id"])
+    st.divider()
+
+    sub_runtime, sub_metrics = st.tabs(["🖥  Runtime", "📐  Metrics"])
+    with sub_runtime:
+        _render_bash_runtime(project)
+    with sub_metrics:
+        _render_bash_metrics(project)
+
+
+# ── Shared Metrics Matrix widget ───────────────────────────────────────────────
+
+def _render_metrics_matrix(state_key: str, key_prefix: str) -> None:
+    """Reusable metrics matrix add/edit/delete UI (shared by bash and llama_cli bots)."""
+    matrix: list = st.session_state.get(state_key, [])
+
+    visible_cats = [c for c in CATEGORIES if not c.startswith("CAF-")]
+
+    with st.expander("+ Add metric"):
+        type_options: list[str] = []
+        for cat in visible_cats:
+            for mkey, info in METRIC_TYPES.items():
+                if info["category"] == cat:
+                    type_options.append(f"{cat}: {info['label']}")
+
+        existing_ids = {m.get("id", "") for m in matrix}
+        suggested_id = next(
+            f"M-{i:03d}" for i in range(1, 999)
+            if f"M-{i:03d}" not in existing_ids
+        )
+
+        c1, c2, c3 = st.columns([2, 3, 4])
+        new_id     = c1.text_input("ID",   value=suggested_id, key=f"_{key_prefix}_nm_id")
+        new_name   = c2.text_input("Name", placeholder="My Check", key=f"_{key_prefix}_nm_name")
+        type_label = c3.selectbox("Type",  options=type_options, key=f"_{key_prefix}_nm_type")
+
+        selected_type_key = ""
+        for mkey, info in METRIC_TYPES.items():
+            if f"{info['category']}: {info['label']}" == type_label:
+                selected_type_key = mkey
+                break
+
+        param_values: dict = {}
+        if selected_type_key:
+            type_info = METRIC_TYPES[selected_type_key]
+            if type_info["params"]:
+                st.caption(f"*{type_info['description']}*")
+                pcols = st.columns(min(3, len(type_info["params"])))
+                for i, param in enumerate(type_info["params"]):
+                    with pcols[i % 3]:
+                        pkey = f"_{key_prefix}_nm_p_{param['name']}"
+                        if param["type"] == "int":
+                            param_values[param["name"]] = st.number_input(
+                                param["label"], value=int(param.get("default", 0)),
+                                step=1, key=pkey,
+                            )
+                        elif param["type"] == "float":
+                            param_values[param["name"]] = st.number_input(
+                                param["label"], value=float(param.get("default", 0.0)),
+                                step=0.1, format="%.1f", key=pkey,
+                            )
+                        elif param["type"] == "bool":
+                            param_values[param["name"]] = st.checkbox(
+                                param["label"],
+                                value=bool(param.get("default", True)), key=pkey,
+                            )
+                        else:
+                            param_values[param["name"]] = st.text_input(
+                                param["label"],
+                                value=str(param.get("default", "")), key=pkey,
+                            )
+
+        if st.button("Add Metric", key=f"btn_{key_prefix}_add_metric"):
+            _errors = []
+            _id   = new_id.strip()
+            _name = new_name.strip()
+            if not _name:
+                _errors.append("Name is required.")
+            if not _id:
+                _errors.append("ID is required.")
+            elif not re.match(r"^M-\d{3}$", _id):
+                _errors.append("ID must match format M-NNN (e.g. M-001).")
+            elif _id in existing_ids:
+                _errors.append(f"ID **{_id}** is already used.")
+            if _errors:
+                for err in _errors:
+                    st.error(err)
+            else:
+                matrix.append({
+                    "id":      _id,
+                    "name":    _name,
+                    "type":    selected_type_key,
+                    "enabled": True,
+                    "params":  dict(param_values),
+                })
+                st.session_state[state_key] = matrix
+                st.rerun()
+
+    if matrix:
+        hcols = st.columns([1, 2, 3, 3, 4, 1])
+        for lbl, col in zip(["On", "ID", "Name", "Type", "Criterion", "Del"], hcols):
+            col.markdown(f"**{lbl}**")
+        st.divider()
+        to_delete = None
+        for i, m in enumerate(matrix):
+            rc      = st.columns([1, 2, 3, 3, 4, 1])
+            enabled = rc[0].checkbox(
+                "Include", value=m.get("enabled", True),
+                key=f"{key_prefix}_me_{i}_{m['id']}", label_visibility="collapsed",
+            )
+            matrix[i]["enabled"] = enabled
+            rc[1].code(m["id"])
+            rc[2].write(m["name"])
+            rc[3].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
+            rc[4].markdown(
+                f'<span class="criterion">{html.escape(format_criterion(m))}</span>',
+                unsafe_allow_html=True,
+            )
+            if rc[5].button("✕", key=f"{key_prefix}_md_{i}"):
+                to_delete = i
+        if to_delete is not None:
+            del matrix[to_delete]
+            st.session_state[state_key] = matrix
+            st.rerun()
+        st.session_state[state_key] = matrix
+    else:
+        st.info("No metrics configured. Add one above.")
+
+
+# ── Llama-CLI Bot configuration ────────────────────────────────────────────────
+
+def _flush_llama_cli_config(project: dict) -> None:
+    """Write flat llama_cli_* working keys back into the project's config bundle."""
+    # Derive legacy prompts/commands lists from unified steps for evaluator compat
+    _steps = st.session_state.get("llama_cli_steps", [])
+    _prompts  = [s["content"] for s in _steps if s.get("type") == "prompt"  and s.get("enabled", True)]
+    _commands = [s["content"] for s in _steps if s.get("type") == "command" and s.get("enabled", True)]
+    # Fall back to the flat lists if steps not yet migrated
+    if not _steps:
+        _prompts  = st.session_state.get("llama_cli_prompts", [])
+        _commands = st.session_state.get("llama_cli_commands", [])
+
+    project["config"].update({
+        "execution_target":    st.session_state.get("llama_cli_execution_target", "local"),
+        "ssh_host":            st.session_state.get("llama_cli_ssh_host", ""),
+        "ssh_port":            st.session_state.get("llama_cli_ssh_port", 22),
+        "ssh_user":            st.session_state.get("llama_cli_ssh_user", "root"),
+        "ssh_password":        st.session_state.get("llama_cli_ssh_password", ""),
+        "ssh_key_path":        st.session_state.get("llama_cli_ssh_key_path", ""),
+        "sudo":                st.session_state.get("llama_cli_sudo", False),
+        "backend":             st.session_state.get("llama_cli_backend", "llama.cpp"),
+        "binary_path":         st.session_state.get("llama_cli_binary_path", ""),
+        "model_dir":           st.session_state.get("llama_cli_model_dir", ""),
+        "model_name":          st.session_state.get("llama_cli_model_name", ""),
+        "openai_base_url":     st.session_state.get("llama_cli_openai_base_url", ""),
+        "openai_api_key":      st.session_state.get("llama_cli_openai_api_key", ""),
+        "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", True),
+        "tokens":              st.session_state.get("llama_cli_tokens", 2048),
+        "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
+        "mcp_servers":         st.session_state.get("llama_cli_mcp_servers", []),
+        "steps":               _steps,
+        "prompts":             _prompts,
+        "commands":            _commands,
+        "timeout":             st.session_state.get("llama_cli_timeout", 120),
+        "validation_commands": st.session_state.get("llama_cli_validation_commands", []),
+        "fail_patterns":       st.session_state.get("llama_cli_fail_patterns", []),
+        "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
+    })
+    from core.settings_store import save_settings
+    save_settings(st.session_state)
+
+
+def _test_llama_cli_ssh_connection() -> None:
+    """Quick SSH connectivity check for llama_cli_ssh_* credentials."""
+    try:
+        import paramiko
+        host     = st.session_state.get("llama_cli_ssh_host", "").strip()
+        port     = int(st.session_state.get("llama_cli_ssh_port", 22))
+        user     = st.session_state.get("llama_cli_ssh_user", "root").strip()
+        password = st.session_state.get("llama_cli_ssh_password", "").strip() or None
+        key_path = st.session_state.get("llama_cli_ssh_key_path", "").strip() or None
+
+        if not host:
+            st.error("Host is required.")
+            return
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
+        if key_path:
+            connect_kwargs["key_filename"] = key_path
+        if password:
+            connect_kwargs["password"] = password
+        client.connect(**connect_kwargs)
+        _, stdout, _ = client.exec_command("echo ok")
+        result = stdout.read().decode().strip()
+        client.close()
+        if result == "ok":
+            st.success(f"Connected to {user}@{host}:{port} ✓")
+        else:
+            st.warning(f"Connected but unexpected echo response: {result!r}")
+    except Exception as exc:
+        st.error(f"Connection failed: {exc}")
+
+
+def _scan_models(project: dict) -> None:
+    """Scan local or remote machine for .gguf models and populate discovered list."""
+    model_dir = st.session_state.get("llama_cli_model_dir", "").strip()
+    target    = st.session_state.get("llama_cli_execution_target", "local")
+    if not model_dir:
+        st.warning("Set Model Directory first.")
+        return
+    if target == "local":
+        from core.models import scan_gguf_models
+        models = scan_gguf_models(model_dir)
+    else:
+        _flush_llama_cli_config(project)
+        cfg = project["config"]
+        from core.environment import SSHEnvironment
+        env = SSHEnvironment(
+            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
+            username=cfg.get("ssh_user", "root"),
+            password=cfg.get("ssh_password") or None,
+            key_path=cfg.get("ssh_key_path") or None,
+            remote_cwd=".",
+        )
+        try:
+            res   = env.execute(
+                f'find "{model_dir}" -name "*.gguf" -not -name "ggml-vocab-*"',
+                timeout=15,
+            )
+            paths  = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
+            models = [{"name": p.split("/")[-1], "path": p} for p in paths]
+        finally:
+            env.close()
+    st.session_state["llama_cli_discovered_models"] = models
+    if not models:
+        st.warning("No .gguf models found in that directory.")
+    else:
+        st.success(f"Found {len(models)} model(s).")
+    st.rerun()
+
+
+def _fetch_mcp_servers(project: dict) -> None:
+    """Read mcp_config.json from local or remote machine and populate server list."""
+    cfg_path = st.session_state.get("llama_cli_mcp_config_path", "").strip()
+    target   = st.session_state.get("llama_cli_execution_target", "local")
+    if not cfg_path:
+        st.warning("Set MCP Config Path first.")
+        return
+    import json
+    raw: dict = {}
+    if target == "local":
+        import pathlib
+        try:
+            raw = json.loads(pathlib.Path(cfg_path).read_text())
+        except Exception as exc:
+            st.error(f"Could not read {cfg_path}: {exc}")
+            return
+    else:
+        _flush_llama_cli_config(project)
+        cfg = project["config"]
+        from core.environment import SSHEnvironment
+        env = SSHEnvironment(
+            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
+            username=cfg.get("ssh_user", "root"),
+            password=cfg.get("ssh_password") or None,
+            key_path=cfg.get("ssh_key_path") or None,
+            remote_cwd=".",
+        )
+        try:
+            res = env.execute(f'cat "{cfg_path}"', timeout=10)
+        finally:
+            env.close()
+        if res["exit_code"] != 0:
+            st.error(f"Could not read remote file: {res['stderr']}")
+            return
+        try:
+            raw = json.loads(res["stdout"])
+        except json.JSONDecodeError as exc:
+            st.error(f"Invalid JSON in {cfg_path}: {exc}")
+            return
+    if not isinstance(raw, dict):
+        st.error(
+            f"Expected a JSON object in that file but got `{type(raw).__name__}`. "
+            'MCP config must be `{"mcpServers": {"name": {"command": "...", "args": [...]}}}}`.'
+        )
+        return
+    servers = []
+    for name, spec in raw.get("mcpServers", {}).items():
+        servers.append({
+            "name":    name,
+            "command": spec.get("command", ""),
+            "args":    spec.get("args", []),
+            "enabled": True,
+        })
+    st.session_state["llama_cli_mcp_servers"] = servers
+    st.success(f"Fetched {len(servers)} MCP server(s).")
+    st.rerun()
+
+
+def _render_llama_cli_runtime(project: dict) -> None:
+    """Runtime sub-tab for Llama-CLI-Bot: target, model setup, MCP servers, timeout."""
+
+    with st.expander("Execution Target", expanded=True):
+        target = st.selectbox(
+            "Mode",
+            options=["local", "ssh"],
+            format_func=lambda v: "Local" if v == "local" else "SSH (Remote)",
+            key="llama_cli_execution_target",
+            help="Run on the local machine or connect via SSH.",
+        )
+        st.checkbox(
+            "Run commands with sudo",
+            key="llama_cli_sudo",
+            help="Prefix shell commands and the llama-cli invocation with `sudo`.",
+        )
+        if target == "ssh":
+            st.divider()
+            st.markdown("**SSH Credentials**")
+            c_host, c_port = st.columns([3, 1])
+            with c_host:
+                st.text_input("Host", key="llama_cli_ssh_host", placeholder="192.168.1.100")
+            with c_port:
+                st.number_input("Port", min_value=1, max_value=65535, key="llama_cli_ssh_port")
+            c_user, c_pass = st.columns(2)
+            with c_user:
+                st.text_input("Username", key="llama_cli_ssh_user")
+            with c_pass:
+                st.text_input("Password", key="llama_cli_ssh_password", type="password",
+                              help="Leave empty to use key-based auth.")
+            st.text_input("Key Path", key="llama_cli_ssh_key_path",
+                          placeholder="~/.ssh/id_rsa")
+            if st.button("Test Connection", key="btn_llama_test_ssh"):
+                _test_llama_cli_ssh_connection()
+
+    with st.expander("Model Setup", expanded=True):
+        backend = st.selectbox(
+            "Provider",
+            options=["llama.cpp", "llama-server (managed)", "OpenAI-compatible HTTP"],
+            key="llama_cli_backend",
+            help="llama.cpp uses llama-cli binary with --prompt; llama-server (managed) starts server and uses tools; OpenAI-compatible HTTP connects to any /v1/chat/completions endpoint.",
+        )
+
+        if backend == "llama.cpp":
+            st.text_input(
+                "Binary Path",
+                key="llama_cli_binary_path",
+                placeholder="/usr/local/bin/llama-cli",
+                help="Full path to the llama-cli executable (batch-inference binary). E.g. /usr/local/bin/llama-cli. Note: llama-server is the HTTP server — this field needs llama-cli.",
+            )
+            col_dir, col_scan = st.columns([4, 1])
+            with col_dir:
+                st.text_input(
+                    "Model Directory",
+                    key="llama_cli_model_dir",
+                    placeholder="/home/user/models",
+                    help="Directory to scan for .gguf model files.",
+                )
+            with col_scan:
+                st.write("")
+                st.write("")
+                if st.button("Scan", key="btn_llama_scan_models", use_container_width=True):
+                    _scan_models(project)
+
+            discovered: list = st.session_state.get("llama_cli_discovered_models", [])
+            if discovered:
+                model_names = [m["name"] for m in discovered]
+                current     = st.session_state.get("llama_cli_model_name", "")
+                default_idx = model_names.index(current) if current in model_names else 0
+                chosen = st.selectbox(
+                    "Model", options=model_names, index=default_idx,
+                    key="_llama_model_sel_widget",
+                )
+                st.session_state["llama_cli_model_name"] = chosen
+            elif st.session_state.get("llama_cli_model_name"):
+                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` "
+                        "(click Scan to refresh list)")
+            else:
+                st.caption("Set Model Directory and click **Scan** to discover models.")
+        elif backend == "llama-server (managed)":
+            st.text_input(
+                "Binary Path",
+                key="llama_cli_binary_path",
+                placeholder="/usr/local/bin/llama-server",
+                help="Full path to the llama-server executable. Will be started as a subprocess with managed port.",
+            )
+            col_dir, col_scan = st.columns([4, 1])
+            with col_dir:
+                st.text_input(
+                    "Model Directory",
+                    key="llama_cli_model_dir",
+                    placeholder="/home/user/models",
+                    help="Directory to scan for .gguf model files.",
+                )
+            with col_scan:
+                st.write("")
+                st.write("")
+                if st.button("Scan", key="btn_llama_scan_models_managed", use_container_width=True):
+                    _scan_models(project)
+
+            discovered: list = st.session_state.get("llama_cli_discovered_models", [])
+            if discovered:
+                model_names = [m["name"] for m in discovered]
+                current     = st.session_state.get("llama_cli_model_name", "")
+                default_idx = model_names.index(current) if current in model_names else 0
+                chosen = st.selectbox(
+                    "Model", options=model_names, index=default_idx,
+                    key="_llama_model_sel_managed_widget",
+                )
+                st.session_state["llama_cli_model_name"] = chosen
+            elif st.session_state.get("llama_cli_model_name"):
+                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` "
+                        "(click Scan to refresh list)")
+            else:
+                st.caption("Set Model Directory and click **Scan** to discover models.")
+
+            col_port, col_ctx = st.columns(2)
+            with col_port:
+                st.number_input(
+                    "Server Port",
+                    min_value=1024, max_value=65535, step=1,
+                    key="llama_cli_server_port",
+                    value=st.session_state.get("llama_cli_server_port", 18080),
+                    help="Port for the managed llama-server instance (default 18080).",
+                )
+            with col_ctx:
+                st.number_input(
+                    "Context Size",
+                    min_value=256, max_value=131072, step=256,
+                    key="llama_cli_tokens",
+                    value=st.session_state.get("llama_cli_tokens", 2048),
+                    help="Maximum context window.",
+                )
+        else:
+            col_url, col_fetch = st.columns([5, 1])
+            with col_url:
+                _url = st.text_input(
+                    "Instance URL",
+                    key="_llama_openai_url_widget",
+                    value=st.session_state.get("llama_cli_openai_base_url", ""),
+                    placeholder="http://localhost:8080",
+                    help="Base URL of any OpenAI-compatible server. Examples: http://localhost:8080 (llama-server), https://api.openai.com (OpenAI), http://localhost:1234 (LM Studio). Do not include /v1 — it is appended automatically.",
+                )
+                st.session_state["llama_cli_openai_base_url"] = _url
+            with col_fetch:
+                st.write("")
+                st.write("")
+                if st.button("Fetch", key="btn_llama_fetch_openai_models", use_container_width=True):
+                    _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
+                    if _base:
+                        from core.models import fetch_llama_cpp_models
+                        _found, _err = fetch_llama_cpp_models(_base)
+                        if _found:
+                            st.session_state["llama_cli_openai_models"] = _found
+                            st.success(f"{len(_found)} model(s) found")
+                        else:
+                            st.error(_err or "No models returned — is the server running?")
+                    else:
+                        st.warning("Enter an Instance URL first.")
+
+            _ssl = st.checkbox(
+                "Require SSL Certificate Verification",
+                key="_llama_openai_ssl_widget",
+                value=st.session_state.get("llama_cli_openai_verify_ssl", True),
+                help="Uncheck for self-signed certs or plain HTTP servers.",
+            )
+            st.session_state["llama_cli_openai_verify_ssl"] = _ssl
+
+            _apikey = st.text_input(
+                "API Key (optional)",
+                key="_llama_openai_apikey_widget",
+                type="password",
+                help="API key for the endpoint. Leave empty for unauthenticated servers.",
+            )
+            st.session_state["llama_cli_openai_api_key"] = _apikey
+
+            _openai_models = st.session_state.get("llama_cli_openai_models", [])
+            if _openai_models:
+                _model_names = [m["name"] for m in _openai_models]
+                _cur = st.session_state.get("llama_cli_model_name", "")
+                _idx = _model_names.index(_cur) if _cur in _model_names else 0
+                _chosen = st.selectbox("Model", options=_model_names, index=_idx, key="_llama_openai_model_sel")
+                st.session_state["llama_cli_model_name"] = _chosen
+            elif st.session_state.get("llama_cli_model_name"):
+                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` (click Fetch to refresh)")
+            else:
+                st.caption("Enter Instance URL and click **Fetch** to discover models.")
+
+            if st.button("Check Status", key="btn_llama_check_openai_status", use_container_width=True):
+                _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
+                if _base:
+                    _info = llama_server.get_server_info(_base)
+                    if _info:
+                        _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
+                        st.success(f"Online  |  model: `{_mname}`  |  n_ctx: `{_info.get('n_ctx', '?')}`")
+                    else:
+                        st.error("Could not reach server.")
+                else:
+                    st.warning("Enter an Instance URL first.")
+
+        st.number_input(
+            "Context Window (tokens)",
+            min_value=128, max_value=131072, step=256,
+            key="llama_cli_tokens",
+            help="Maximum context length passed to llama-cli via -c.",
+        )
+
+        st.divider()
+        _col_svc, _col_status = st.columns([1, 2])
+        _backend = st.session_state.get("llama_cli_backend", "llama.cpp")
+        with _col_svc:
+            if st.button("Start Service", key="btn_llama_start_service",
+                         use_container_width=True, type="primary",
+                         help="Start llama-server with the selected model (llama.cpp), or test connectivity (OpenAI-compatible)."):
+                if _backend.lower().startswith("openai"):
+                    _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
+                    if not _base:
+                        st.session_state["_llama_svc_result"] = ("error", "No Instance URL configured.", "")
+                    else:
+                        _info = llama_server.get_server_info(_base)
+                        if _info:
+                            _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
+                            st.session_state["_llama_svc_result"] = (
+                                "ok",
+                                f"Online  |  model: `{_mn}`  |  n_ctx: `{_info.get('n_ctx', '?')}`",
+                                "",
+                            )
+                        else:
+                            st.session_state["_llama_svc_result"] = (
+                                "error",
+                                f"Could not reach `{_base}` — check URL and network.",
+                                "",
+                            )
+                else:
+                    # Resolve model path from discovered models
+                    _disc = st.session_state.get("llama_cli_discovered_models", [])
+                    _mname = st.session_state.get("llama_cli_model_name", "")
+                    _mpath = next(
+                        (m["path"] for m in _disc if m["name"] == _mname),
+                        _mname,  # fallback: use the name as the path
+                    )
+                    _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip() or "/usr/local/bin/llama-server"
+                    _ctx  = int(st.session_state.get("llama_cli_tokens", 2048))
+                    _cmd  = f"{_bin} --model {_mpath} --ctx-size {_ctx} --host 127.0.0.1 --port 8080 --jinja --parallel 1"
+                    if not _mpath:
+                        st.session_state["_llama_svc_result"] = (
+                            "error",
+                            "No model selected — set Model Directory and Scan first.",
+                            "",
+                        )
+                    else:
+                        _ok, _msg = llama_server.start(
+                            _mpath,
+                            context_size=_ctx,
+                            binary=_bin,
+                        )
+                        st.session_state["_llama_svc_result"] = ("ok" if _ok else "error", _msg, _cmd)
+                        st.session_state["_llama_svc_cmd"]    = _cmd
+                st.rerun()
+
+        # ── Service status display (always shown) ─────────────────────────────
+        with _col_status:
+            _svc_result = st.session_state.get("_llama_svc_result")
+            if _svc_result:
+                _level, _msg, _cmd = _svc_result
+                if _level == "ok":
+                    st.success(_msg)
+                    if _cmd:
+                        st.code(_cmd, language="bash")
+                else:
+                    st.error(_msg)
+            elif _backend.lower().startswith("llama") or _backend == "llama.cpp":
+                # Show running state if server is already up
+                _srv_url = "http://127.0.0.1:8080"
+                if llama_server.poll_ready(_srv_url):
+                    _info = llama_server.get_server_info(_srv_url)
+                    _mn   = (_info.get("model_path") or "").split("/")[-1] if _info else "?"
+                    _ctx  = _info.get("n_ctx", "?") if _info else "?"
+                    st.markdown(
+                        f'<div class="service-active-box">'
+                        f'<div class="service-label">Running</div>'
+                        f'<div class="service-cmd">model: {_mn}  |  n_ctx: {_ctx}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _cached_cmd = st.session_state.get("_llama_svc_cmd", "")
+                    if _cached_cmd:
+                        st.code(_cached_cmd, language="bash")
+
+    with st.expander("MCP Servers", expanded=False):
+        st.caption("Discover MCP servers available on the target machine.")
+        col_path, col_fetch = st.columns([4, 1])
+        with col_path:
+            st.text_input(
+                "MCP Config Path",
+                key="llama_cli_mcp_config_path",
+                placeholder="/home/user/.mcp/config.json",
+                help="Path to a mcp_config.json file on the target machine.",
+                label_visibility="collapsed",
+            )
+        with col_fetch:
+            if st.button("Fetch", key="btn_llama_fetch_mcp", use_container_width=True):
+                _fetch_mcp_servers(project)
+
+        servers: list = st.session_state.get("llama_cli_mcp_servers", [])
+        if servers:
+            st.caption(f"{len(servers)} server(s) discovered. Enable the ones to use:")
+            for i, srv in enumerate(servers):
+                enabled = st.checkbox(
+                    srv["name"],
+                    value=srv.get("enabled", True),
+                    key=f"llama_mcp_en_{i}",
+                )
+                servers[i]["enabled"] = enabled
+            st.session_state["llama_cli_mcp_servers"] = servers
+        else:
+            st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
+
+    st.number_input(
+        "Timeout (seconds)",
+        min_value=1, max_value=3600,
+        key="llama_cli_timeout",
+        help="Maximum time (seconds) each command or prompt invocation may run.",
+    )
+
+    _flush_llama_cli_config(project)
+
+
+def _coerce_step_types(raw: list) -> list:
+    """Normalise a steps list; handles legacy dicts and assigns _id fields."""
+    if not raw:
+        return []
+    out = []
+    for item in raw:
+        if isinstance(item, dict) and "type" in item:
+            entry = {
+                "type":            item.get("type", "prompt"),
+                "content":         str(item.get("content", "")),
+                "enabled":         bool(item.get("enabled", True)),
+                "long_running":    bool(item.get("long_running", False)),
+                "timeout_seconds": int(item.get("timeout_seconds", 60)),
+            }
+            if "_id" in item:
+                entry["_id"] = item["_id"]
+            out.append(entry)
+    return out
+
+
+def _ensure_unified_step_ids(steps: list) -> list:
+    """Assign stable _id to any unified step that lacks one."""
+    seen: set = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if "_id" not in step or step["_id"] in seen:
+            step["_id"] = _next_step_id()
+        seen.add(step["_id"])
+    return steps
+
+
+def _render_step_editor(state_key: str, pfx: str) -> None:
+    """
+    Unified step editor: each step has a Prompt | Command radio type.
+    Mirrors the structural pattern of _render_command_steps.
+    """
+    raw   = st.session_state.get(state_key, [])
+    steps = _ensure_unified_step_ids(_coerce_step_types(raw))
+
+    mutation = None
+    toggle   = None
+
+    if not steps:
+        st.caption("No steps. Click **+ Add Step** to begin.")
+
+    for si, step in enumerate(steps):
+        step_id = step["_id"]
+        stype   = step.get("type", "prompt")
+
+        border_color = "#2dd4bf" if stype == "prompt" else "#f0883e"
+        with st.container(border=True):
+            # Custom left-border via inline style
+            st.markdown(
+                f'<div style="border-left:3px solid {border_color};'
+                f'margin:-8px -12px 6px;padding:2px 12px 0;border-radius:2px 0 0 2px;'
+                f'opacity:0.9"></div>',
+                unsafe_allow_html=True,
+            )
+
+            # ── Step header row ──────────────────────────────────────────
+            hc1, hc2, hc3, hc4 = st.columns([4, 0.7, 0.7, 0.7])
+            with hc1:
+                _open    = st.session_state.get(f"_us_{pfx}_{step_id}_open", True)
+                _preview = (step.get("content", "")[:42] + "…") if len(step.get("content", "")) > 42 else step.get("content", "")
+                _icon    = "▼" if _open else "▶"
+                _badge   = "PROMPT" if stype == "prompt" else "CMD"
+                _label   = f"{_icon} Step {si + 1}  [{_badge}]{(' — ' + _preview) if _preview else ' — (empty)'}"
+                if st.button(_label, key=f"_us_{pfx}_{step_id}_toggle",
+                             use_container_width=True, help="Collapse/expand"):
+                    toggle = (f"_us_{pfx}_{step_id}_open", not _open)
+            with hc2:
+                if st.button("↑", key=f"_us_{pfx}_{step_id}_up",
+                             disabled=(si == 0), use_container_width=True):
+                    mutation = ("move", si, si - 1)
+            with hc3:
+                if st.button("↓", key=f"_us_{pfx}_{step_id}_dn",
+                             disabled=(si == len(steps) - 1), use_container_width=True):
+                    mutation = ("move", si, si + 1)
+            with hc4:
+                if st.button("✕", key=f"_us_{pfx}_{step_id}_del",
+                             use_container_width=True):
+                    mutation = ("del", si)
+
+            # ── Collapsible body ─────────────────────────────────────────
+            if st.session_state.get(f"_us_{pfx}_{step_id}_open", True):
+                # Type radio
+                type_key  = f"_us_{pfx}_{step_id}_type"
+                new_type  = st.radio(
+                    "Step Type",
+                    options=["Prompt", "Command"],
+                    index=0 if stype == "prompt" else 1,
+                    key=type_key,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+                step["type"] = "prompt" if new_type == "Prompt" else "command"
+
+                # Content input
+                content_key    = f"_us_{pfx}_{step_id}_content"
+                placeholder    = "Describe what you want the model to do…" if step["type"] == "prompt" else "echo hello"
+                step["content"] = st.text_area(
+                    "Content",
+                    value=step.get("content", ""),
+                    placeholder=placeholder,
+                    key=content_key,
+                    height=80,
+                    label_visibility="collapsed",
+                )
+
+                # Meta row
+                mc1, mc2, mc3 = st.columns([1.2, 1.5, 2.5])
+                with mc1:
+                    step["enabled"] = st.checkbox(
+                        "Enabled",
+                        value=step.get("enabled", True),
+                        key=f"_us_{pfx}_{step_id}_en",
+                    )
+                if step["type"] == "command":
+                    with mc2:
+                        step["long_running"] = st.checkbox(
+                            "Long-running",
+                            value=step.get("long_running", False),
+                            key=f"_us_{pfx}_{step_id}_lr",
+                            help="Disables per-step timeout.",
+                        )
+                    with mc3:
+                        step["timeout_seconds"] = st.number_input(
+                            "Timeout (s)",
+                            min_value=1, max_value=3600,
+                            value=int(step.get("timeout_seconds", 60)),
+                            key=f"_us_{pfx}_{step_id}_to",
+                            disabled=step["long_running"],
+                        )
+
+    if st.button("+ Add Step", key=f"_us_{pfx}_addstep", type="primary"):
+        mutation = ("add",)
+
+    if toggle:
+        st.session_state[toggle[0]] = toggle[1]
+        st.rerun()
+
+    if mutation:
+        _push_undo({"desc": f"edit steps ({pfx})", "type": "cmd",
+                    "state_key": state_key, "data": copy.deepcopy(steps)})
+        m = mutation
+        if m[0] == "add":
+            steps.append({
+                "_id":             _next_step_id(),
+                "type":            "prompt",
+                "content":         "",
+                "enabled":         True,
+                "long_running":    False,
+                "timeout_seconds": 60,
+            })
+        elif m[0] == "del":
+            steps.pop(m[1])
+        elif m[0] == "move":
+            i1, i2 = m[1], m[2]
+            steps[i1], steps[i2] = steps[i2], steps[i1]
+        st.session_state[state_key] = steps
+        st.rerun()
+    else:
+        st.session_state[state_key] = steps
+
+
+def _render_llama_cli_metrics_setup(project: dict) -> None:
+    """Inputs sub-tab for Llama-CLI-Bot: steps, validation, metrics."""
+
+    # ── Preset Scenarios ─────────────────────────────────────────────────────
+    _presets = _load_llama_cli_presets()
+    if _presets:
+        st.subheader("Preset Scenarios")
+        _preset_opts = ["Custom"] + list(_presets.keys())
+        _sel_col, _btn_col = st.columns([4, 1])
+        with _sel_col:
+            _chosen = st.selectbox(
+                "Scenario", options=_preset_opts,
+                key="_llama_preset_sel", label_visibility="collapsed",
+            )
+        with _btn_col:
+            if st.button("Load", key="btn_llama_load_preset", type="primary",
+                         disabled=(_chosen == "Custom"), use_container_width=True):
+                _p = _presets[_chosen]
+                # Build unified steps from preset prompts + commands
+                _new_steps: list = []
+                for _pr in _p.get("prompts", []):
+                    _new_steps.append({
+                        "_id": _next_step_id(), "type": "prompt",
+                        "content": _pr, "enabled": True,
+                        "long_running": False, "timeout_seconds": 60,
+                    })
+                for _cm in _p.get("commands", []):
+                    _new_steps.append({
+                        "_id": _next_step_id(), "type": "command",
+                        "content": _cm, "enabled": True,
+                        "long_running": False, "timeout_seconds": 60,
+                    })
+                st.session_state["llama_cli_steps"]               = _new_steps
+                # Keep legacy lists in sync for settings persistence
+                st.session_state["llama_cli_prompts"]             = list(_p.get("prompts", []))
+                st.session_state["llama_cli_commands"]            = list(_p.get("commands", []))
+                st.session_state["llama_cli_validation_commands"] = list(_p.get("validation_commands", []))
+                st.session_state["llama_cli_fail_patterns"]       = copy.deepcopy(_p.get("fail_patterns", []))
+                st.session_state["llama_cli_metrics_matrix"]      = copy.deepcopy(_p.get("metrics_matrix", []))
+                st.rerun()
+        st.divider()
+
+    # ── Migration: convert legacy flat lists to unified steps ─────────────────
+    _existing_steps = st.session_state.get("llama_cli_steps", [])
+    if not _existing_steps:
+        _old_prompts  = st.session_state.get("llama_cli_prompts", [])
+        _old_commands = st.session_state.get("llama_cli_commands", [])
+        if _old_prompts or _old_commands:
+            _migrated: list = []
+            for _pr in _old_prompts:
+                _migrated.append({
+                    "_id": _next_step_id(), "type": "prompt",
+                    "content": _pr, "enabled": True,
+                    "long_running": False, "timeout_seconds": 60,
+                })
+            for _cm in _old_commands:
+                _migrated.append({
+                    "_id": _next_step_id(), "type": "command",
+                    "content": _cm, "enabled": True,
+                    "long_running": False, "timeout_seconds": 60,
+                })
+            st.session_state["llama_cli_steps"] = _migrated
+
+    # ── Evaluation Steps ──────────────────────────────────────────────────────
+    st.subheader("Evaluation Steps")
+    st.caption(
+        "Steps are executed in order. "
+        "**Prompt** steps send natural-language instructions to the LLM; "
+        "**Command** steps run shell commands directly."
+    )
+    _render_step_editor("llama_cli_steps", "llama")
+
+    st.divider()
+
+    # ── Validation Steps ──────────────────────────────────────────────────────
+    st.subheader("Validation Steps")
+    with st.expander("Validation Commands", expanded=True):
+        st.caption("Commands run after steps complete — must exit 0 to count as PASS.")
+        _addable_list(
+            state_key="llama_cli_validation_commands",
+            placeholder="grep -q 'expected' /tmp/output.txt",
+            input_key="_llama_new_val",
+            add_key="btn_llama_add_val",
+            del_key_prefix="llama_del_val",
+        )
+
+    with st.expander("Fail Patterns", expanded=True):
+        st.caption("Patterns evaluated after execution — string match, shell command exit, or prompt check.")
+        # Normalize legacy string patterns to typed dicts
+        _raw_patterns = st.session_state.get("llama_cli_fail_patterns", [])
+        patterns: list = [
+            p if isinstance(p, dict) else {"type": "string", "value": p}
+            for p in _raw_patterns
+        ]
+        st.session_state["llama_cli_fail_patterns"] = patterns
+
+        _TYPE_LABELS = {"string": "String match", "command": "Command", "prompt": "Prompt"}
+        _fp_type_col, _fp_val_col, _fp_add_col = st.columns([2, 5, 1])
+        with _fp_type_col:
+            _new_fp_type = st.selectbox(
+                "Type", options=list(_TYPE_LABELS.keys()),
+                format_func=lambda k: _TYPE_LABELS[k],
+                key="_llama_fp_type", label_visibility="collapsed",
+            )
+        with _fp_val_col:
+            _fp_placeholders = {
+                "string":  'e.g. "Error: file not found"',
+                "command": "e.g. test -f /tmp/output.txt",
+                "prompt":  "e.g. Did the command produce an error? Answer YES or NO.",
+            }
+            _new_fp_val = st.text_input(
+                "Value", placeholder=_fp_placeholders[_new_fp_type],
+                key="_llama_fp_val", label_visibility="collapsed",
+            )
+        with _fp_add_col:
+            if st.button("Add", key="btn_llama_add_fp", use_container_width=True):
+                _v = _new_fp_val.strip()
+                if _v:
+                    patterns.append({"type": _new_fp_type, "value": _v})
+                    st.session_state["llama_cli_fail_patterns"] = patterns
+                    st.rerun()
+
+        if patterns:
+            _TYPE_COLOURS = {
+                "string":  ("#79c0ff", "rgba(121,192,255,0.14)", "rgba(121,192,255,0.35)"),
+                "command": ("#f0883e", "rgba(240,136,62,0.14)",  "rgba(240,136,62,0.35)"),
+                "prompt":  ("#bc8cff", "rgba(188,140,255,0.14)", "rgba(188,140,255,0.35)"),
+            }
+            _TYPE_ICONS = {"string": "STR", "command": "CMD", "prompt": "PROMPT"}
+            _to_remove = None
+            for _i, _fp in enumerate(patterns):
+                _ftype = _fp.get("type", "string")
+                _clr, _bg, _border = _TYPE_COLOURS.get(_ftype, ("#8b949e", "rgba(139,148,158,0.14)", "rgba(139,148,158,0.35)"))
+                _badge_html = (
+                    f'<span style="background:{_bg};color:{_clr};padding:3px 9px;'
+                    f'border-radius:999px;font-size:0.67rem;font-weight:700;'
+                    f'border:1px solid {_border};font-family:monospace;letter-spacing:0.3px;'
+                    f'display:inline-block">{_TYPE_ICONS.get(_ftype, "?")}</span>'
+                )
+                _pc1, _pc2, _pc3 = st.columns([1, 7, 1])
+                _pc1.markdown(_badge_html, unsafe_allow_html=True)
+                _pc2.code(_fp.get("value", ""))
+                if _pc3.button("✕", key=f"llama_del_fp_{_i}"):
+                    _to_remove = _i
+            if _to_remove is not None:
+                patterns.pop(_to_remove)
+                st.session_state["llama_cli_fail_patterns"] = patterns
+                st.rerun()
+
+    st.divider()
+
+    st.subheader("Metrics Matrix")
+    st.caption("Metrics evaluated against run telemetry after execution.")
+    _render_metrics_matrix("llama_cli_metrics_matrix", "llama")
+
+    _flush_llama_cli_config(project)
+
+
+def _render_llama_cli_bot_config(project: dict) -> None:
+    """Top-level config renderer for Llama-CLI-Bot projects (2 sub-tabs: Runtime, Inputs)."""
+    col_name, col_ren, col_dup, col_export, _, col_del = st.columns([5, 0.75, 0.75, 0.75, 0.25, 1.8])
+    with col_name:
+        st.markdown(f"**{project['name']}** — Llama-CLI Bot")
+    with col_ren:
+        if st.button("✏", key=f"btn_ren_{project['id']}", use_container_width=True,
+                     help="Rename this project"):
+            _show_rename_project_dialog(project["id"])
+    with col_dup:
+        if st.button("⧉", key=f"btn_dup_{project['id']}", use_container_width=True,
+                     help="Duplicate this project"):
+            _duplicate_project(project["id"])
+    with col_export:
+        st.download_button(
+            "⬇", data=_export_project_json(project),
+            file_name=f"{project['name'].replace(' ', '_')}.json",
+            mime="application/json", key=f"btn_export_{project['id']}",
+            use_container_width=True, help="Export project as JSON",
+        )
+    with col_del:
+        if st.button("🗑 Delete", key=f"btn_del_{project['id']}", use_container_width=True,
+                     type="secondary", help="Delete this project"):
+            _show_delete_project_dialog(project["id"])
+    st.divider()
+
+    sub_runtime, sub_inputs = st.tabs(["🖥  Runtime", "📐  Metrics Setup"])
+    with sub_runtime:
+        _render_llama_cli_runtime(project)
+    with sub_inputs:
+        _render_llama_cli_metrics_setup(project)

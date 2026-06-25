@@ -5,6 +5,7 @@ from config.defaults import LLAMA_CPP_DEFAULT_URL
 from config.scenarios import SCENARIOS
 from core.comparison import ComparisonConfig, run_comparison
 from core.environment import LocalEnvironment
+from ui.components import badge_pass, badge_fail, badge_na
 
 
 def render() -> None:
@@ -180,7 +181,7 @@ def render() -> None:
             cols[3].write(s.get("na", 0))
             rate = s.get("pass_rate", 0)
             rate_icon = "✓" if rate >= 0.7 else "✗"
-            rate_colour = "#16a34a" if rate >= 0.7 else "#dc2626"
+            rate_colour = "#3fb950" if rate >= 0.7 else "#f85149"
             cols[4].markdown(
                 f'<span style="color:{rate_colour};font-weight:700">{rate_icon} {rate:.0%}</span>',
                 unsafe_allow_html=True,
@@ -202,20 +203,11 @@ def render() -> None:
             for i, label in enumerate(model_labels):
                 result_val = scores.get(label)
                 if result_val is True:
-                    row_cols[2 + i].markdown(
-                        '<span style="color:#16a34a;font-weight:700">PASS ✓</span>',
-                        unsafe_allow_html=True,
-                    )
+                    row_cols[2 + i].markdown(badge_pass("PASS"), unsafe_allow_html=True)
                 elif result_val is False:
-                    row_cols[2 + i].markdown(
-                        '<span style="color:#dc2626;font-weight:700">FAIL ✗</span>',
-                        unsafe_allow_html=True,
-                    )
+                    row_cols[2 + i].markdown(badge_fail("FAIL"), unsafe_allow_html=True)
                 else:
-                    row_cols[2 + i].markdown(
-                        '<span style="color:#64748b">N/A</span>',
-                        unsafe_allow_html=True,
-                    )
+                    row_cols[2 + i].markdown(badge_na(), unsafe_allow_html=True)
 
     dl_col, _ = st.columns([2, 6])
     with dl_col:

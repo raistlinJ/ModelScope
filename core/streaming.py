@@ -16,6 +16,14 @@ from typing import Callable
 import requests
 
 
+def _normalize_openai_url(url: str) -> str:
+    """Strip trailing /v1 or /v1/ so appending /v1/... never doubles it."""
+    u = url.rstrip("/")
+    if u.endswith("/v1"):
+        u = u[:-3]
+    return u
+
+
 # ── Internal buffer helpers ───────────────────────────────────────────────────
 
 def _flush_buf(buf: str, in_think: bool, on_log: Callable) -> str:
@@ -115,22 +123,28 @@ def stream_llama_cpp(
     tools: list,
     context_size: int,
     on_log: Callable,
+    verify: bool = True,
+    api_key: str | None = None,
 ) -> dict:
     """Streaming call to llama.cpp /v1/chat/completions (OpenAI SSE). Returns normalised dict."""
     payload: dict = {
         "messages":       messages,
         "stream":         True,
-        "n_ctx":          context_size,
         "stream_options": {"include_usage": True},
     }
     if model:
         payload["model"] = model
     if tools:
         payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    headers: dict = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     resp = requests.post(
-        base_url.rstrip("/") + "/v1/chat/completions",
-        json=payload, stream=True, timeout=(10, None),
+        _normalize_openai_url(base_url) + "/v1/chat/completions",
+        json=payload, headers=headers or None, stream=True, timeout=(10, None), verify=verify,
     )
     resp.raise_for_status()
 

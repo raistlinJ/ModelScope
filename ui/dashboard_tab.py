@@ -1,28 +1,223 @@
 import html
 import json
 import streamlit as st
-from config.metrics import METRIC_TYPES, CATEGORIES, evaluate_metric, format_criterion
+from config.metrics import (
+    METRIC_TYPES, CATEGORIES,
+    evaluate_metric, format_criterion, metric_observed_value,
+)
 from ui.caf_dashboard import render_attack_tree, render_judge_panel
-from ui.components import badge, type_badge, CAT_COLOUR
+from ui.components import badge, badge_pass, badge_fail, badge_na, type_badge, CAT_COLOUR
+
+
+def _get_active_project() -> "dict | None":
+    pid = st.session_state.get("active_project_id")
+    for p in st.session_state.get("projects", []):
+        if p["id"] == pid:
+            return p
+    return None
+
+
+def _hydrate_project_history_if_empty(project: dict) -> None:
+    """Populate ``run_history_<pid>`` from on-disk session logs if it's empty.
+
+    Runs in this Streamlit process keep appending to the in-memory history,
+    so hydration only fires when the list is empty — i.e. the user just opened
+    the app or just switched to this project.  Guarded by a per-pid flag so
+    even an empty on-disk store isn't re-scanned on every rerun.
+    """
+    from config.defaults import MAX_RUN_HISTORY
+    from core.session_log import SessionRepository
+
+    pid        = project["id"]
+    history_key = f"run_history_{pid}"
+    hydrated_key = f"_history_hydrated_{pid}"
+
+    if st.session_state.get(hydrated_key):
+        return
+    existing = st.session_state.get(history_key, [])
+    if existing:
+        # User already has in-memory runs (current session); don't overwrite
+        # those with disk data — they may be newer than what's persisted.
+        st.session_state[hydrated_key] = True
+        return
+
+    repo = SessionRepository()
+    try:
+        loaded = repo.history_for_project(pid, limit=MAX_RUN_HISTORY)
+    except Exception:
+        # Don't let a broken sessions dir block the dashboard.
+        st.session_state[hydrated_key] = True
+        return
+
+    if loaded:
+        st.session_state[history_key] = loaded
+    st.session_state[hydrated_key] = True
+
+
+# ── Shared metrics rendering helper ───────────────────────────────────────────
+
+def _render_metrics_evaluation(
+    matrix: list,
+    tel: dict,
+    *,
+    categories: list = None,
+) -> None:
+    """Render the full metrics evaluation table — badges, per-category rows,
+    Observed column, and collapsible detail expanders.
+
+    Args:
+        matrix:     List of enabled metric dicts (pre-filtered to m["enabled"]).
+        tel:        Telemetry dict for the run being displayed.
+        categories: Category display order; defaults to all CATEGORIES.
+                   Bash uses a filtered list excluding CAF-prefixed categories.
+    """
+    if categories is None:
+        categories = CATEGORIES
+
+    if not matrix:
+        st.info("No metrics enabled — configure them in **Configuration → Metrics Setup**.")
+        return
+
+    results = [(m, evaluate_metric(m, tel)) for m in matrix]
+    passed  = sum(1 for _, r in results if r is True)
+    failed  = sum(1 for _, r in results if r is False)
+    na      = sum(1 for _, r in results if r is None)
+
+    s1, s2, s3, _ = st.columns([1, 1, 1, 4])
+    s1.markdown(badge_pass(f"PASS {passed}"), unsafe_allow_html=True)
+    s2.markdown(badge_fail(f"FAIL {failed}"), unsafe_allow_html=True)
+    s3.markdown(badge_na(f"N/A  {na}"), unsafe_allow_html=True)
+    st.write("")
+
+    # Group by category
+    by_cat: dict[str, list] = {c: [] for c in categories}
+    for m, r in results:
+        cat = METRIC_TYPES.get(m.get("type", ""), {}).get("category", "Validation")
+        if cat in by_cat:
+            by_cat[cat].append((m, r))
+
+    # Determine which metric statuses are PASS/FAIL/NA so we can render each
+    # section visibly (groups that are entirely one colour otherwise look
+    # identical to a passing row).
+    for cat in categories:
+        items = by_cat.get(cat, [])
+        if not items:
+            continue
+        colour = CAT_COLOUR.get(cat, "#64748b")
+        _cat_passed = sum(1 for _, r in items if r is True)
+        _cat_failed = sum(1 for _, r in items if r is False)
+        _cat_total  = len(items)
+        _cat_summary = (
+            f"  ·  <span style='color:#3fb950'>{_cat_passed} ✓</span>"
+            if _cat_passed else ""
+        ) + (
+            f"  ·  <span style='color:#f85149'>{_cat_failed} ✗</span>"
+            if _cat_failed else ""
+        )
+        st.markdown(
+            f'<div style="margin:12px 0 6px;font-weight:700;font-size:0.75rem;'
+            f'letter-spacing:0.8px;text-transform:uppercase;color:{colour};">'
+            f'{cat}  ({_cat_total}){_cat_summary}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        # Header row: ID, Name, Type, Criterion, Observed, Result
+        hcols = st.columns([2, 3, 3, 3, 5, 2])
+        for lbl, col in zip(["ID", "Name", "Type", "Criterion", "Observed", "Result"], hcols):
+            col.markdown(f"*{lbl}*")
+
+        for m, result in items:
+            _obs = metric_observed_value(m, tel)
+            with st.container():
+                rc = st.columns([2, 3, 3, 3, 5, 2])
+                rc[0].code(m["id"])
+                rc[1].write(m["name"])
+                rc[2].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
+                rc[3].markdown(
+                    f'<span class="criterion">{html.escape(format_criterion(m))}</span>',
+                    unsafe_allow_html=True,
+                )
+                # Observed value — coloured to match the result so it's
+                # scannable at a glance even without the badge column.
+                if result is True:
+                    _obs_colour = "#3fb950"
+                elif result is False:
+                    _obs_colour = "#f85149"
+                else:
+                    _obs_colour = "#94a3b8"
+                rc[4].markdown(
+                    f'<span style="color:{_obs_colour};font-size:0.85rem;'
+                    f'font-family:ui-monospace,monospace;">'
+                    f'{html.escape(_obs)}</span>',
+                    unsafe_allow_html=True,
+                )
+                if result is True:
+                    rc[5].markdown(badge_pass("PASS"), unsafe_allow_html=True)
+                elif result is False:
+                    rc[5].markdown(badge_fail("FAIL"), unsafe_allow_html=True)
+                else:
+                    rc[5].markdown(badge_na(), unsafe_allow_html=True)
+
+                # Expandable detail row so users can see the full params
+                # and the criterion verbatim without it dominating the table.
+                with st.expander(f"Details for {m.get('id', '?')} — {m.get('name', '?')}",
+                                 expanded=False):
+                    d1, d2 = st.columns(2)
+                    with d1:
+                        st.markdown("**Criterion**")
+                        st.code(format_criterion(m) or "(no criterion)")
+                    with d2:
+                        st.markdown("**Observed value**")
+                        st.code(_obs)
+                    params = m.get("params", {}) or {}
+                    if params:
+                        st.markdown("**Configured parameters**")
+                        st.json(params)
 
 
 # ── Sessions viewer ────────────────────────────────────────────────────────────
 
-def _render_sessions_viewer() -> None:
-    """List recent session directories and let users inspect them."""
-    # Read from the same directory SessionLog writes to, via the shared
-    # repository. (Previously this read ~/.modelscope/sessions, which is never
-    # written, so the viewer was always empty — see core.session_log.)
+def _render_session_summary(t_path, t_idx: int = 0, total: int = 1) -> None:
+    """Render the top metrics row for a single telemetry JSON file."""
+    try:
+        tel_data = json.loads(t_path.read_text(encoding="utf-8"))
+    except Exception:
+        st.warning(f"Could not parse {t_path.name}.")
+        return
+    label = "**Telemetry summary**" if total == 1 else f"**Prompt {t_idx + 1}**"
+    st.markdown(label)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Model", tel_data.get("run_model") or tel_data.get("selected_model") or "?")
+    c2.metric("Latency", f"{tel_data.get('total_latency', 0):.2f} s")
+    c3.metric("Total Tokens", tel_data.get("total_tokens", "?"))
+    _val = tel_data.get("validation_passed")
+    _val_label = "PASS" if _val is True else ("FAIL" if _val is False else "N/A")
+    c4.metric("Validation", _val_label)
+    if total > 1 and t_idx < total - 1:
+        st.divider()
+
+
+def _render_sessions_viewer(sessions: list | None = None, title: str = "Recent Sessions") -> None:
+    """List recent session directories and let users inspect them.
+
+    Args:
+        sessions: Optional pre-filtered list of session dirs.  When None, all
+                  sessions from the repo's base dir are shown.
+        title:    The expander title — caller can rebrand for context.
+    """
     from core.session_log import SessionRepository
 
     repo = SessionRepository()
     sessions_base = repo.base_dir
-    session_dirs = repo.list_sessions(limit=20)
+    if sessions is None:
+        session_dirs = repo.list_sessions(limit=20)
+    else:
+        session_dirs = sessions
 
     if not session_dirs:
         return
 
-    with st.expander("Recent Sessions", expanded=False):
+    with st.expander(title, expanded=False):
         st.caption(
             f"Showing the last {len(session_dirs)} session(s) from "
             f"`{sessions_base}`.  Each directory contains `run.log`, "
@@ -32,7 +227,7 @@ def _render_sessions_viewer() -> None:
         selected = st.selectbox(
             "Session",
             options=[d.name for d in session_dirs],
-            key="_sessions_viewer_sel",
+            key=f"_sessions_viewer_sel_{title}",
             label_visibility="collapsed",
         )
         if not selected:
@@ -45,21 +240,7 @@ def _render_sessions_viewer() -> None:
         # Prefer telemetry.json; fall back to indexed CAF files (telemetry_0.json, etc.)
         tel_files = repo.telemetry_files(sel_dir)
         for t_idx, t_path in enumerate(tel_files):
-            try:
-                tel_data = json.loads(t_path.read_text(encoding="utf-8"))
-                label = "**Telemetry summary**" if len(tel_files) == 1 else f"**Prompt {t_idx + 1}**"
-                st.markdown(label)
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Model", tel_data.get("run_model") or tel_data.get("selected_model") or "?")
-                c2.metric("Latency", f"{tel_data.get('total_latency', 0):.2f} s")
-                c3.metric("Total Tokens", tel_data.get("total_tokens", "?"))
-                _val = tel_data.get("validation_passed")
-                _val_label = "PASS" if _val is True else ("FAIL" if _val is False else "N/A")
-                c4.metric("Validation", _val_label)
-                if len(tel_files) > 1 and t_idx < len(tel_files) - 1:
-                    st.divider()
-            except Exception:
-                st.warning(f"Could not parse {t_path.name}.")
+            _render_session_summary(t_path, t_idx, len(tel_files))
 
         # ── run.log viewer ────────────────────────────────────────────────
         log_path = sel_dir / "run.log"
@@ -70,6 +251,62 @@ def _render_sessions_viewer() -> None:
                 st.code(log_text, language=None)
             except Exception:
                 st.warning("Could not read run.log.")
+
+
+def _render_sessions_for_project() -> None:
+    """Show on-disk sessions that belong to the active project.
+
+    A session is associated with a project when its ``config.json`` contains a
+    matching ``active_project_id``.  Sessions without a config (or with no
+    active_project_id) are surfaced under a separate 'Unscoped' header so the
+    user can still browse them.  Sessions for other projects are hidden — the
+    viewer is project-scoped.
+    """
+    import json as _json
+    from core.session_log import SessionRepository
+
+    _proj = _get_active_project()
+    if _proj is None:
+        return
+    pid = _proj["id"]
+
+    repo = SessionRepository()
+    all_sessions = repo.list_sessions(limit=None)
+    if not all_sessions:
+        return
+
+    mine: list = []
+    other_unscoped: list = []
+    for d in all_sessions:
+        cfg_path = d / "config.json"
+        if not cfg_path.exists():
+            other_unscoped.append(d)
+            continue
+        try:
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            other_unscoped.append(d)
+            continue
+        if cfg.get("active_project_id") == pid:
+            mine.append(d)
+        elif "active_project_id" not in cfg:
+            other_unscoped.append(d)
+        # else: belongs to a different project — skip
+
+    # Most recent first
+    mine            = sorted(mine,            key=lambda p: p.name, reverse=True)[:20]
+    other_unscoped  = sorted(other_unscoped,  key=lambda p: p.name, reverse=True)[:20]
+
+    if mine:
+        _render_sessions_viewer(
+            sessions=mine,
+            title=f"Saved Sessions for '{_proj['name']}' ({len(mine)})",
+        )
+    if other_unscoped:
+        _render_sessions_viewer(
+            sessions=other_unscoped,
+            title=f"Unscoped Sessions (no project tag) ({len(other_unscoped)})",
+        )
 
 
 def _render_response_comparison(response: str, validation_out: str, tool_focus: str) -> None:
@@ -101,7 +338,7 @@ def _render_response_comparison(response: str, validation_out: str, tool_focus: 
                 all_ok = all(f for _, _, f in rows)
                 for port_spec, _, found in rows:
                     icon = "✓" if found else "✗"
-                    colour = "#16a34a" if found else "#dc2626"
+                    colour = "#3fb950" if found else "#f85149"
                     st.markdown(
                         f'<span style="color:{colour};font-weight:700">{icon}</span> `{port_spec}`',
                         unsafe_allow_html=True,
@@ -156,19 +393,282 @@ def _render_response_comparison(response: str, validation_out: str, tool_focus: 
                 st.info("No key terms to compare.")
 
 
+def _render_bash_dashboard(project: dict) -> None:
+    """Bash-bot specific dashboard — per-project history, no LLM metrics."""
+    _hydrate_project_history_if_empty(project)
+    pid = project["id"]
+    history_key = f"run_history_{pid}"
+    history: list = st.session_state.get(history_key, [])
+
+    if not history:
+        st.info("No runs yet for this project — go to **Execute** and run it.")
+        return
+
+    # Run selector
+    tel: dict = history[-1]
+    if len(history) > 1:
+        labels = []
+        for i, h in enumerate(reversed(history)):
+            ts  = h.get("run_timestamp", "")
+            lbl = f"Run {len(history)-i}  —  {ts}"
+            labels.append(lbl)
+        sel_label = st.selectbox(
+            "Select run", options=labels, index=0,
+            help="Browse previous runs for this project",
+            key=f"bash_dash_sel_{pid}",
+        )
+        sel_idx = labels.index(sel_label)
+        tel = list(reversed(history))[sel_idx]
+
+    ts = tel.get("run_timestamp", "")
+    if ts:
+        st.caption(f"🕒 {ts}  |  💻 {project['name']} (bash_bot)")
+
+    if tel.get("run_aborted"):
+        st.warning("⚠️  This run was aborted — metrics may be incomplete.")
+
+    # Top metrics — bash-relevant only (no tokens/LLM rounds)
+    tool_calls: list = tel.get("tool_calls", [])
+    val_passed = tel.get("validation_passed")
+    val_label  = "PASS ✓" if val_passed is True else ("FAIL ✗" if val_passed is False else "N/A")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Latency (s)",          f"{tel.get('total_latency', 0):.2f}",
+              help="Total wall-clock time from run start to completion")
+    c2.metric("Commands Executed",    len(tool_calls),
+              help="Number of bash commands that ran (startup + completion)")
+    c3.metric("Validation",           val_label,
+              help="Aggregate result of all validation commands")
+
+    st.divider()
+
+    # Export
+    export_col, _ = st.columns([2, 5])
+    with export_col:
+        _ts_safe = tel.get("run_timestamp", "run").replace(" ", "_").replace(":", "-")
+        st.download_button(
+            "⬇  Export Results (JSON)",
+            data=json.dumps(tel, indent=2, default=str),
+            file_name=f"bash_results_{_ts_safe}.json",
+            mime="application/json",
+        )
+
+    # Commands executed
+    if tool_calls:
+        st.subheader(f"Commands Executed  ({len(tool_calls)})")
+        for i, tc in enumerate(tool_calls):
+            exit_code = tc.get("exit_code", "?")
+            status    = "✓" if exit_code == 0 else "✗"
+            cmd_str   = tc.get("args", {}).get("command", tc.get("tool", "?"))
+            label     = f"#{i+1}  {cmd_str[:60]}  {status}"
+            with st.expander(label):
+                result = tc.get("result", {})
+                if isinstance(result, dict):
+                    if result.get("stdout"):
+                        st.code(result["stdout"][:1000], language="bash")
+                    if result.get("stderr"):
+                        st.warning(result["stderr"][:400])
+                else:
+                    st.code(str(result))
+                st.caption(f"Exit code: {exit_code}")
+
+    st.divider()
+
+    # Validation output
+    st.subheader("Validation Output")
+    val_exit = tel.get("validation_exit_code")
+    if val_exit is None:
+        st.info("No validation command was run.")
+    else:
+        if tel.get("validation_passed"):
+            st.success(f"PASS ✓  (exit code: {val_exit})")
+        else:
+            st.error(f"FAIL ✗  (exit code: {val_exit})")
+        if tel.get("validation_stdout"):
+            st.text_area("Stdout", value=tel["validation_stdout"], height=160,
+                         key=f"bash_val_stdout_{pid}")
+        if tel.get("validation_stderr"):
+            st.text_area("Stderr", value=tel["validation_stderr"], height=100,
+                         key=f"bash_val_stderr_{pid}")
+
+    # Metrics matrix — use run-snapshot or current bash_metrics_matrix
+    _run_matrix = tel.get("metrics_matrix", [])
+    matrix = [m for m in (_run_matrix or st.session_state.get("bash_metrics_matrix", []))
+              if m.get("enabled")]
+
+    if matrix:
+        st.divider()
+        st.subheader("Metrics Evaluation")
+        # Exclude CAF-specific categories for bash view
+        bash_categories = [c for c in CATEGORIES if not c.startswith("CAF-")]
+        _render_metrics_evaluation(matrix, tel, categories=bash_categories)
+
+
+def _render_llama_cli_dashboard(project: dict) -> None:
+    """Llama-CLI-Bot dashboard — per-project history with prompt responses and validation."""
+    _hydrate_project_history_if_empty(project)
+    pid         = project["id"]
+    history_key = f"run_history_{pid}"
+    history: list = st.session_state.get(history_key, [])
+
+    if not history:
+        st.info("No runs yet for this project — go to **Execute** and run it.")
+        return
+
+    tel: dict = history[-1]
+    if len(history) > 1:
+        labels = []
+        for i, h in enumerate(reversed(history)):
+            ts  = h.get("run_timestamp", "")
+            lbl = f"Run {len(history) - i}  —  {ts}"
+            labels.append(lbl)
+        sel_label = st.selectbox(
+            "Select run", options=labels, index=0,
+            key=f"llama_dash_sel_{pid}",
+        )
+        tel = list(reversed(history))[labels.index(sel_label)]
+
+    ts = tel.get("run_timestamp", "")
+    if ts:
+        model   = tel.get("run_model", "")
+        backend = tel.get("run_backend", "")
+        st.caption(f"🕒 {ts}  |  🦙 {project['name']}  |  {backend}  |  {model}")
+
+    if tel.get("run_aborted"):
+        st.warning("⚠️  This run was aborted — metrics may be incomplete.")
+
+    # Top metrics
+    prompt_responses: list = tel.get("prompt_responses", [])
+    tool_calls: list       = tel.get("tool_calls", [])
+    val_passed = tel.get("validation_passed")
+    val_label  = "PASS ✓" if val_passed is True else ("FAIL ✗" if val_passed is False else "N/A")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Latency (s)",      f"{tel.get('total_latency', 0):.2f}")
+    c2.metric("Prompts Run",      len(prompt_responses))
+    c3.metric("Commands Run",     len([tc for tc in tool_calls if tc.get("tool") == "bash"]))
+    c4.metric("Validation",       val_label)
+
+    st.divider()
+
+    # Export
+    export_col, _ = st.columns([2, 5])
+    with export_col:
+        _ts_safe = tel.get("run_timestamp", "run").replace(" ", "_").replace(":", "-")
+        st.download_button(
+            "⬇  Export Results (JSON)",
+            data=json.dumps(tel, indent=2, default=str),
+            file_name=f"llama_results_{_ts_safe}.json",
+            mime="application/json",
+        )
+
+    # Prompt responses
+    if prompt_responses:
+        st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
+        for i, pr in enumerate(prompt_responses):
+            with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):
+                st.markdown("**Prompt**")
+                st.code(pr.get("prompt", ""), language="text")
+                st.markdown("**Response**")
+                st.code(pr.get("response", ""), language="text")
+
+    # Shell commands
+    shell_calls = [tc for tc in tool_calls if tc.get("tool") == "bash"]
+    if shell_calls:
+        st.subheader(f"Commands Executed  ({len(shell_calls)})")
+        for i, tc in enumerate(shell_calls):
+            exit_code = tc.get("exit_code", "?")
+            status    = "✓" if exit_code == 0 else "✗"
+            cmd_str   = tc.get("args", {}).get("command", "?")
+            with st.expander(f"#{i + 1}  {cmd_str[:60]}  {status}"):
+                result = tc.get("result", {})
+                if isinstance(result, dict):
+                    if result.get("stdout"):
+                        st.code(result["stdout"][:1000], language="bash")
+                    if result.get("stderr"):
+                        st.warning(result["stderr"][:400])
+                st.caption(f"Exit code: {exit_code}")
+
+    st.divider()
+
+    # Validation output
+    st.subheader("Validation Output")
+    val_exit = tel.get("validation_exit_code")
+    if val_exit is None:
+        st.info("No validation command was run.")
+    else:
+        if tel.get("validation_passed"):
+            st.success(f"PASS ✓  (exit code: {val_exit})")
+        else:
+            st.error(f"FAIL ✗  (exit code: {val_exit})")
+        if tel.get("validation_stdout"):
+            st.text_area("Stdout", value=tel["validation_stdout"], height=160,
+                         key=f"llama_val_stdout_{pid}")
+        if tel.get("validation_stderr"):
+            st.text_area("Stderr", value=tel["validation_stderr"], height=100,
+                         key=f"llama_val_stderr_{pid}")
+
+    # Metrics matrix
+    _run_matrix = tel.get("metrics_matrix", [])
+    matrix = [m for m in (_run_matrix or st.session_state.get("llama_cli_metrics_matrix", []))
+              if m.get("enabled")]
+    if matrix:
+        st.divider()
+        st.subheader("Metrics Evaluation")
+        _render_metrics_evaluation(matrix, tel)
+
+
 def render() -> None:
     st.header("Analytical Dashboard")
 
+    # Dispatch to bot-type-specific view
+    _proj = _get_active_project()
+    if _proj and _proj.get("type") == "bash_bot":
+        _render_bash_dashboard(_proj)
+        return
+    if _proj and _proj.get("type") == "llama_cli_bot":
+        _render_llama_cli_dashboard(_proj)
+        return
+
+    # Project context banner — makes it obvious which project's runs are shown.
+    if _proj:
+        bc, br = st.columns([9, 1])
+        with bc:
+            st.caption(
+                f"📁 Showing runs for project: **{_proj['name']}** "
+                f"(`{_proj.get('type', '?')}`)"
+            )
+        with br:
+            if st.button(
+                "↻", key=f"refresh_hist_{_proj['id']}",
+                help="Re-read run history from on-disk session logs (ModelScope/logs/sessions/).",
+            ):
+                # Drop both the in-memory list and the per-pid hydration flag so
+                # the next call to _hydrate_project_history_if_empty re-scans.
+                st.session_state.pop(f"run_history_{_proj['id']}", None)
+                st.session_state.pop(f"_history_hydrated_{_proj['id']}", None)
+                st.rerun()
+        # Hydrate the standard flow's run history too — same behaviour as the
+        # bot-type dashboards, so a fresh app start picks up prior runs.
+        _hydrate_project_history_if_empty(_proj)
+
     # Sessions viewer is always rendered — even before any run in the current
     # session — so past runs from previous sessions are always browsable.
-    _render_sessions_viewer()
+    # When a project is active, only that project's sessions are shown (plus
+    # any unscoped ones) — so switching projects changes what history you see.
+    _render_sessions_for_project()
 
     if not st.session_state.get("run_completed"):
         st.info("No evaluation run yet — go to **Execute Evaluation** and run a scenario.")
         return
 
     # ── Run history selector (fix #26) ────────────────────────────────────────
-    history: list = st.session_state.get("run_history", [])
+    # Read from the per-project history key when there's an active project so
+    # the dropdown only shows that project's runs (matches the bash/llama-CLI
+    # dashboards above and the Execute tab's per-project persistence).
+    _pid = _proj["id"] if _proj else None
+    history_key = f"run_history_{_pid}" if _pid else "run_history"
+    history: list = st.session_state.get(history_key, [])
     tel: dict     = st.session_state.get("telemetry", {})
 
     if len(history) > 1:
@@ -178,8 +678,13 @@ def render() -> None:
             sc  = h.get("run_scenario", "")[:30]
             lbl = f"Run {len(history)-i}  —  {ts}  |  {sc}"
             labels.append(lbl)
-        sel_label = st.selectbox("Select run", options=labels, index=0,
-                                 help="Compare previous evaluation runs")
+        sel_label = st.selectbox(
+            "Select run",
+            options=labels, index=0,
+            help=f"Browse previous evaluation runs for this project "
+                 f"({len(history)} stored, most recent first)",
+            key=f"std_dash_sel_{_pid or 'default'}",
+        )
         sel_idx   = labels.index(sel_label)
         tel = list(reversed(history))[sel_idx]
 
@@ -243,55 +748,7 @@ def render() -> None:
     if _tool_focus:
         st.caption(f"Metrics configured for tool: `{_tool_focus}`")
 
-    if not matrix:
-        st.info("No metrics enabled — configure them in **Configuration → Metrics Setup**.")
-    else:
-        results = [(m, evaluate_metric(m, tel)) for m in matrix]
-        passed  = sum(1 for _, r in results if r is True)
-        failed  = sum(1 for _, r in results if r is False)
-        na      = sum(1 for _, r in results if r is None)
-
-        s1, s2, s3, _ = st.columns([1, 1, 1, 4])
-        s1.markdown(badge(f"PASS {passed}", "#16a34a"), unsafe_allow_html=True)
-        s2.markdown(badge(f"FAIL {failed}", "#dc2626"), unsafe_allow_html=True)
-        s3.markdown(badge(f"N/A  {na}",     "#475569"), unsafe_allow_html=True)
-        st.write("")
-
-        # Group by category
-        by_cat: dict[str, list] = {c: [] for c in CATEGORIES}
-        for m, r in results:
-            cat = METRIC_TYPES.get(m.get("type", ""), {}).get("category", "Validation")
-            by_cat.setdefault(cat, []).append((m, r))
-
-        for cat in CATEGORIES:
-            items = by_cat.get(cat, [])
-            if not items:
-                continue
-            colour = CAT_COLOUR.get(cat, "#64748b")
-            st.markdown(
-                f'<div style="margin:12px 0 4px;font-weight:700;color:{colour}">'
-                f'{cat.upper()}</div>',
-                unsafe_allow_html=True,
-            )
-            hcols = st.columns([2, 3, 3, 4, 2])
-            for lbl, col in zip(["ID", "Name", "Type", "Criterion", "Result"], hcols):
-                col.markdown(f"*{lbl}*")
-
-            for m, result in items:
-                rc = st.columns([2, 3, 3, 4, 2])
-                rc[0].code(m["id"])
-                rc[1].write(m["name"])
-                rc[2].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
-                rc[3].markdown(
-                    f'<span class="criterion">{html.escape(format_criterion(m))}</span>',
-                    unsafe_allow_html=True,
-                )
-                if result is True:
-                    rc[4].markdown(badge("PASS ✓", "#16a34a"), unsafe_allow_html=True)
-                elif result is False:
-                    rc[4].markdown(badge("FAIL ✗", "#dc2626"), unsafe_allow_html=True)
-                else:
-                    rc[4].markdown(badge("N/A",   "#475569"), unsafe_allow_html=True)
+    _render_metrics_evaluation(matrix, tel)
 
     st.divider()
 

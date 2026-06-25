@@ -56,6 +56,47 @@ PERSIST_KEYS: frozenset[str] = frozenset({
     "validation_command",
     "fail_patterns",
 
+    # Projects (new project management system)
+    "projects",
+    "active_project_id",
+
+    # Bash-bot working copy keys
+    "bash_startup_commands",
+    "bash_timeout",
+    "bash_completion_commands",
+    "bash_validation_commands",
+    "bash_execution_target",
+    "bash_ssh_host",
+    "bash_ssh_port",
+    "bash_ssh_user",
+    "bash_ssh_key_path",
+    "bash_fail_patterns",
+    "bash_metrics_matrix",
+    "bash_sudo",
+
+    # Llama-CLI-bot working copy keys
+    "llama_cli_execution_target",
+    "llama_cli_ssh_host",
+    "llama_cli_ssh_port",
+    "llama_cli_ssh_user",
+    "llama_cli_ssh_key_path",
+    "llama_cli_sudo",
+    "llama_cli_backend",
+    "llama_cli_binary_path",
+    "llama_cli_model_dir",
+    "llama_cli_model_name",
+    "llama_cli_tokens",
+    "llama_cli_openai_base_url",
+    "llama_cli_openai_verify_ssl",
+    "llama_cli_mcp_config_path",
+    "llama_cli_mcp_servers",
+    "llama_cli_prompts",
+    "llama_cli_commands",
+    "llama_cli_timeout",
+    "llama_cli_validation_commands",
+    "llama_cli_fail_patterns",
+    "llama_cli_metrics_matrix",
+
     # GGUF compile pipeline
     "compile_source_path",
     "compile_output_dir",
@@ -67,7 +108,32 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "target_ssh_password",
     "target_ssh_key_path",
     "judge_api_key",
+    "bash_ssh_password",
+    "llama_cli_ssh_password",
+    "llama_cli_openai_api_key",
 })
+
+# Sensitive keys nested inside project config dicts.
+NESTED_SENSITIVE: frozenset[str] = frozenset({
+    "ssh_password",
+    "openai_api_key",
+    "ssh_key_path",
+})
+
+
+def _sanitize_projects(projects: list) -> list:
+    """Return a deep copy of *projects* with sensitive config keys cleared."""
+    import copy
+    clean = []
+    for proj in projects:
+        p = copy.deepcopy(proj)
+        cfg = p.get("config", {})
+        for k in NESTED_SENSITIVE:
+            if k in cfg:
+                cfg[k] = ""
+        p["config"] = cfg
+        clean.append(p)
+    return clean
 
 _SETTINGS_PATH: Path = Path.home() / ".modelscope" / "settings.json"
 
@@ -94,6 +160,10 @@ def save_settings(session_state: Any) -> None:
                 data[key] = value
             except (KeyError, TypeError):
                 pass
+
+        # Sanitize sensitive fields nested inside project configs before writing.
+        if "projects" in data and isinstance(data["projects"], list):
+            data["projects"] = _sanitize_projects(data["projects"])
 
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")

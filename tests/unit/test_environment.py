@@ -46,6 +46,14 @@ class TestLocalExecute:
         assert result["exit_code"] == 0
         assert result["stdout"].strip() == "1\n2\n3"
 
+    def test_generic_exception_returns_error_dict(self, env, monkeypatch):
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("no such file or directory")))
+        result = env.execute("bad_cmd")
+        assert result["exit_code"] == -1
+        assert "no such file or directory" in result["stderr"]
+        assert result["stdout"] == ""
+
 
 # ── write_file / read_file ─────────────────────────────────────────────────────
 

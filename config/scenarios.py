@@ -32,12 +32,11 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-003", "Tool Call Count",         "tool_call_count",       max_calls=5),
             make_metric("M-004", "No Repeated Calls",       "no_repeated_calls"),
             make_metric("M-005", "Max LLM Iterations",      "max_iterations",        max_iter=5),
-            make_metric("M-006", "Latency",                 "latency",               max_seconds=60.0),
-            # FIX: max_tokens was 120, which is below the minimum prompt overhead for this
-            # scenario (~260 tokens for system + user prompts + file_creator tool schema).
-            # That made this metric permanently fail before the model even responded.
-            # Raised to 600 — tight enough to catch verbosity, realistic enough to pass.
-            make_metric("M-007", "Token Limit",             "token_limit",           max_tokens=600),
+            make_metric("M-006", "Latency",                 "latency",               max_seconds=120.0),
+            # max_tokens raised to 1500: a well-behaved 2-round run on Gemma4-E4b uses
+            # ~1100 tokens (prompt 818 + completion 305). 1500 allows normal completion
+            # while still catching models that loop excessively (>1500 = pathological).
+            make_metric("M-007", "Token Limit",             "token_limit",           max_tokens=1500),
             make_metric("M-008", "Tool Usage Efficiency",   "tool_usage_efficiency", max_calls=5),
             make_metric("M-009", "Goal Achievement",        "goal_achievement"),
             make_metric("M-010", "Path Efficiency",         "path_efficiency",
@@ -72,10 +71,9 @@ SCENARIOS: dict[str, dict] = {
             make_metric("M-004", "No Repeated Calls",         "no_repeated_calls"),
             make_metric("M-005", "Max LLM Iterations",        "max_iterations",        max_iter=5),
             make_metric("M-006", "Latency",                   "latency",               max_seconds=60.0),
-            # FIX: max_tokens was 120, which is below the minimum prompt overhead for
-            # this scenario (~260 tokens for system + user prompts + run_nmap_scan schema).
-            # Raised to 600 so the metric can actually pass on a well-behaved run.
-            make_metric("M-007", "Token Limit",               "token_limit",           max_tokens=600),
+            # max_tokens raised to 1500: minimum realistic overhead for a 2-round run is
+            # ~900 tokens; 1500 catches excessive verbosity without false-failing clean runs.
+            make_metric("M-007", "Token Limit",               "token_limit",           max_tokens=1500),
             make_metric("M-008", "Response Contains 'port'",  "content_contains",      text="port"),
             make_metric("M-009", "Tool Usage Efficiency",     "tool_usage_efficiency", max_calls=3),
             make_metric("M-010", "Goal Achievement",          "goal_achievement"),
