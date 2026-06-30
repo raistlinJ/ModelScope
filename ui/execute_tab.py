@@ -54,6 +54,79 @@ def _get_active_project() -> dict | None:
     return None
 
 
+def _get_selected_validation_sets(cfg: dict) -> list:
+    """Return a filtered deep-copy of cfg['validation_sets'] based on execute-tab checkboxes.
+
+    Sets whose bash_exec_vset_{idx}_selected flag is False are excluded entirely.
+    Per-command enabled fields are overridden by bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected.
+    """
+    import copy
+    filtered = []
+    for idx, vset in enumerate(cfg.get("validation_sets", [])):
+        if not st.session_state.get(f"bash_exec_vset_{idx}_selected", True):
+            continue
+        vset_copy = copy.deepcopy(vset)
+        for sidx, step in enumerate(vset_copy.get("steps", [])):
+            for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                key = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                cmd_obj["enabled"] = st.session_state.get(key, cmd_obj.get("enabled", True))
+        filtered.append(vset_copy)
+    return filtered
+
+
+def _render_step_list_readonly(steps: list, label: str) -> None:
+    """Read-only listing of a step/command list (startup or completion)."""
+    total_cmds = sum(
+        len(s.get("commands", [])) if isinstance(s, dict) else 1
+        for s in steps
+    )
+    st.caption(f"{len(steps)} step(s), {total_cmds} command(s)")
+    if not steps:
+        st.caption(f"None configured — add {label} commands in the Config tab.")
+        return
+    for si, step in enumerate(steps):
+        if isinstance(step, str):
+            st.code(step, language="bash")
+        else:
+            delay = step.get("delay_seconds", 0)
+            delay_str = f" (+{delay}s delay)" if delay > 0 else ""
+            st.markdown(f"*Step {si + 1}{delay_str}*")
+            for cmd_obj in step.get("commands", []):
+                if isinstance(cmd_obj, dict):
+                    text    = cmd_obj.get("command", "")
+                    enabled = cmd_obj.get("enabled", True)
+                    if text and enabled:
+                        st.code(text, language="bash")
+                    elif text:
+                        st.markdown(f"~~`{text}`~~ *(disabled)*")
+                elif isinstance(cmd_obj, str) and cmd_obj:
+                    st.code(cmd_obj, language="bash")
+
+
+def _save_bash_validation_validation_set(project: dict, validation_set_name: str) -> None:
+    """Save current bash_validation_sets as a named validation_set in project config."""
+    import copy
+    sets = copy.deepcopy(st.session_state.get("bash_validation_sets", []))
+    project["config"].setdefault("validation_validation_sets", {})[validation_set_name] = sets
+    _flush_bash_config(project)
+    st.success(f"Validation set '{validation_set_name}' saved.")
+
+
+def _load_bash_validation_validation_set(project: dict, validation_set_name: str) -> None:
+    """Load a user-saved validation validation_set, reset per-set selection state, and rerun."""
+    import copy
+    validation_sets = project["config"].get("validation_validation_sets", {})
+    if validation_set_name not in validation_sets:
+        st.error(f"Validation set '{validation_set_name}' not found.")
+        return
+    st.session_state["bash_validation_sets"] = copy.deepcopy(validation_sets[validation_set_name])
+    _flush_bash_config(project)
+    for k in list(st.session_state.keys()):
+        if k.startswith("bash_exec_vset_"):
+            del st.session_state[k]
+    st.rerun()
+
+
 def _run_bash_bot(project: dict) -> None:
     """Build the environment and run the bash evaluation."""
     from core.environment import LocalEnvironment, SSHEnvironment
@@ -99,6 +172,7 @@ def _run_bash_bot(project: dict) -> None:
         "bash_timeout":        cfg.get("bash_timeout", 60),
         "completion_commands": cfg.get("completion_commands", []),
         "validation_commands": cfg.get("validation_commands", []),
+        "validation_sets":     _get_selected_validation_sets(cfg),
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
         "bash_sudo":           cfg.get("sudo", False),
@@ -136,55 +210,162 @@ def _run_bash_bot(project: dict) -> None:
 
 
 def _render_bash_execute(project: dict) -> None:
-    """Execute view for Bash-Bot: config summary + Execute button + log."""
+    """Execute view for Bash-Bot: collapsible config sub-blocks + Execute button + log."""
     cfg = project.get("config", {})
 
     st.markdown(f"### {project['name']}")
 
-    # Config summary
-    with st.expander("Run Configuration", expanded=True):
-        target = cfg.get("execution_target", "local")
-        st.write(f"**Target:** {target.upper()}")
-        if target == "ssh":
-            _user = cfg.get("ssh_user", "root")
-            _host = cfg.get("ssh_host", "?")
-            _port = cfg.get("ssh_port", 22)
-            st.write(f"**SSH:** `{_user}@{_host}:{_port}`")
+    # ── Two-column configuration panel ───────────────────────────────────────
+    _cfg_open = st.session_state.get("bash_exec_config_expanded", True)
+    with st.container(border=True):
+        col_hdr_outer, col_tog_outer = st.columns([9, 1])
+        with col_hdr_outer:
+            st.markdown("**⚙️ Run Configuration**")
+        with col_tog_outer:
+            if st.button("▼" if _cfg_open else "▶",
+                         key="btn_bash_exec_outer_toggle", use_container_width=True,
+                         help="Expand/collapse all"):
+                st.session_state["bash_exec_config_expanded"] = not _cfg_open
+                st.rerun()
 
-        startup = cfg.get("startup_commands", [])
-        _total_startup_cmds = sum(
-            len(s.get("commands", [])) if isinstance(s, dict) else 1
-            for s in startup
-        )
-        st.write(f"**Startup — {len(startup)} step(s), {_total_startup_cmds} command(s):**")
-        if startup:
-            for si, step in enumerate(startup):
-                if isinstance(step, str):
-                    st.code(step, language="bash")
-                else:
-                    delay     = step.get("delay_seconds", 0)
-                    delay_str = f" (+{delay}s delay)" if delay > 0 else ""
-                    st.markdown(f"*Step {si + 1}{delay_str}*")
-                    for cmd_obj in step.get("commands", []):
-                        if isinstance(cmd_obj, dict):
-                            text    = cmd_obj.get("command", "")
-                            enabled = cmd_obj.get("enabled", True)
-                            if text and enabled:
-                                st.code(text, language="bash")
-                            elif text:
-                                st.markdown(f"~~`{text}`~~ *(disabled)*")
-                        elif isinstance(cmd_obj, str) and cmd_obj:
-                            st.code(cmd_obj, language="bash")
-        else:
-            st.caption("None configured — add startup commands in Configuration.")
+        if _cfg_open:
+            col_a, col_b = st.columns(2)
 
-        st.write(f"**Timeout:** {cfg.get('bash_timeout', 60)}s")
+            # ── Left: Startup & Completion ─────────────────────────────────
+            with col_a:
+                with st.container(border=True):
+                    _startup_open = st.session_state.get("bash_exec_startup_expanded", True)
+                    col_title_a, col_tog_a = st.columns([9, 1])
+                    with col_title_a:
+                        st.markdown("**Startup & Completion**")
+                    with col_tog_a:
+                        if st.button("▼" if _startup_open else "▶",
+                                     key="btn_bash_exec_startup_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["bash_exec_startup_expanded"] = not _startup_open
+                            st.rerun()
+                    if _startup_open:
+                        target = cfg.get("execution_target", "local")
+                        st.write(f"**Target:** {target.upper()}")
+                        if target == "ssh":
+                            st.write(f"**SSH:** `{cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)}`")
+                        st.write(f"**Timeout:** {cfg.get('bash_timeout', 60)}s")
+                        st.markdown("**Startup:**")
+                        _render_step_list_readonly(cfg.get("startup_commands", []), "startup")
+                        st.markdown("**Completion:**")
+                        _render_step_list_readonly(cfg.get("completion_commands", []), "completion")
 
-        val_cmds = cfg.get("validation_commands", [])
-        if val_cmds:
-            st.write(f"**Validation commands ({len(val_cmds)}):**")
-            for cmd in val_cmds:
-                st.code(cmd, language="bash")
+            # ── Right: Validation Steps ────────────────────────────────────
+            with col_b:
+                with st.container(border=True):
+                    _val_open = st.session_state.get("bash_exec_validation_expanded", True)
+                    col_title_b, col_tog_b = st.columns([9, 1])
+                    with col_title_b:
+                        st.markdown("**Validation Steps**")
+                    with col_tog_b:
+                        if st.button("▼" if _val_open else "▶",
+                                     key="btn_bash_exec_val_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["bash_exec_validation_expanded"] = not _val_open
+                            st.rerun()
+                    if _val_open:
+                        # Save Validation set row
+                        col_pname, col_psave = st.columns([4, 1])
+                        with col_pname:
+                            _pname = st.text_input(
+                                "validation_set_name", label_visibility="collapsed",
+                                placeholder="Validation set name…", key="bash_exec_validation_set_name",
+                            )
+                        with col_psave:
+                            if st.button("Save", key="btn_bash_exec_save_validation_set",
+                                         use_container_width=True,
+                                         disabled=not _pname.strip()):
+                                _save_bash_validation_validation_set(project, _pname.strip())
+                        # Load validation_set row
+                        _user_validation_sets = list(cfg.get("validation_validation_sets", {}).keys())
+                        col_psel, col_pload = st.columns([4, 1])
+                        with col_psel:
+                            _validation_set_options = ["— select validation_set —"] + _user_validation_sets
+                            _validation_set_sel = st.selectbox(
+                                "load_validation_set", _validation_set_options,
+                                label_visibility="collapsed",
+                                key="bash_exec_load_validation_set_sel",
+                            )
+                        with col_pload:
+                            if st.button("Load", key="btn_bash_exec_load_validation_set",
+                                         use_container_width=True,
+                                         disabled=(_validation_set_sel == "— select validation_set —")):
+                                _load_bash_validation_validation_set(project, _validation_set_sel)
+
+                        st.divider()
+
+                        # Validation set list
+                        val_sets = cfg.get("validation_sets", [])
+                        if not val_sets:
+                            st.caption("No validation sets configured — add them in the Config tab (Validation).")
+                        else:
+                            for idx, vset in enumerate(val_sets):
+                                set_sel_key = f"bash_exec_vset_{idx}_selected"
+                                set_exp_key = f"bash_exec_vset_{idx}_expanded"
+                                set_selected = st.session_state.get(set_sel_key, True)
+                                set_expanded = st.session_state.get(set_exp_key, False)
+
+                                col_chk, col_lbl, col_exp = st.columns([1, 8, 1])
+                                with col_chk:
+                                    new_sel = st.checkbox(
+                                        "", value=set_selected,
+                                        key=f"bash_exec_vset_{idx}_chk",
+                                        label_visibility="collapsed",
+                                    )
+                                    if new_sel != set_selected:
+                                        st.session_state[set_sel_key] = new_sel
+                                with col_lbl:
+                                    desc = vset.get("description", "")
+                                    label_md = f"**{idx + 1}. {vset['name']}**"
+                                    if desc:
+                                        label_md += f" — {desc}"
+                                    st.markdown(label_md)
+                                with col_exp:
+                                    exp_icon = "▲" if set_expanded else "▼"
+                                    if st.button(exp_icon, key=f"btn_bash_exec_vset_{idx}_toggle",
+                                                 use_container_width=True):
+                                        st.session_state[set_exp_key] = not set_expanded
+                                        st.rerun()
+
+                                if set_expanded:
+                                    with st.container(border=False):
+                                        for sidx, step in enumerate(vset.get("steps", [])):
+                                            delay = step.get("delay_seconds", 0)
+                                            dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                            st.caption(f"Step {sidx + 1}{dstr}:")
+                                            for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                                cmd_text = cmd_obj.get("command", "")
+                                                if not cmd_text:
+                                                    continue
+                                                cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                                cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                                exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                                exp_out  = cmd_obj.get("expected_output", "")
+                                                hint = ""
+                                                if exp_type != "Ignore" and exp_out:
+                                                    short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                                    hint = f"  # expect {exp_type.lower()}: {short}"
+
+                                                col_cc, col_cl = st.columns([1, 10])
+                                                with col_cc:
+                                                    new_cmd_sel = st.checkbox(
+                                                        "", value=cmd_sel,
+                                                        key=f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                        label_visibility="collapsed",
+                                                    )
+                                                    if new_cmd_sel != cmd_sel:
+                                                        st.session_state[cmd_key] = new_cmd_sel
+                                                with col_cl:
+                                                    display = cmd_text + hint if hint else cmd_text
+                                                    if cmd_sel:
+                                                        st.code(display, language="bash")
+                                                    else:
+                                                        st.markdown(f"~~`{display}`~~ *(skipped)*")
 
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)

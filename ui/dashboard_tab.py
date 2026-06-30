@@ -506,8 +506,53 @@ def _render_bash_dashboard(project: dict) -> None:
 
     # Validation commands — each is shown as an individual metric check
     st.subheader("Validation Checks")
+    val_sets_results = tel.get("validation_sets_results")
     val_results: list = tel.get("validation_results", [])
-    if val_results:
+    
+    if val_sets_results is not None:
+        if not val_sets_results:
+            st.info("No validation sets configured.")
+        else:
+            for s_idx, vr_set in enumerate(val_sets_results):
+                set_name = vr_set.get("name", "Unnamed Set")
+                set_desc = vr_set.get("description", "")
+                set_passed = vr_set.get("passed", False)
+                
+                badge = "PASS ✓" if set_passed else "FAIL ✗"
+                label = f"{badge} Validation Set: {set_name} — {set_desc}"
+                
+                with st.expander(label, expanded=not set_passed):
+                    # Show steps in the set
+                    steps = vr_set.get("steps", [])
+                    if not steps:
+                        st.caption("No commands executed in this set.")
+                    for c_idx, cmd_res in enumerate(steps):
+                        cmd_text = cmd_res.get("command", "")
+                        cmd_passed = cmd_res.get("passed", False)
+                        exit_cd = cmd_res.get("exit_code", "?")
+                        out_type = cmd_res.get("expected_output_type", "Ignore")
+                        expected = cmd_res.get("expected_output", "")
+                        reason = cmd_res.get("reason", "")
+                        
+                        cmd_badge = "✓" if cmd_passed else "✗"
+                        st.markdown(f"**Command {c_idx + 1}:** `{cmd_text}` ({cmd_badge})")
+                        
+                        # Match spec details
+                        st.caption(f"Expected Output: {out_type} {f'({expected!r})' if out_type != 'Ignore' else ''} | Exit code: {exit_cd}")
+                        if reason:
+                            st.warning(f"Failure reason: {reason}")
+                            
+                        # Stdout / Stderr details
+                        if cmd_res.get("stdout"):
+                            st.text_area("Stdout", value=cmd_res["stdout"], height=120,
+                                         key=f"bash_vr_stdout_{pid}_{s_idx}_{c_idx}")
+                        if cmd_res.get("stderr"):
+                            st.text_area("Stderr", value=cmd_res["stderr"], height=80,
+                                         key=f"bash_vr_stderr_{pid}_{s_idx}_{c_idx}")
+                        
+                        if c_idx < len(steps) - 1:
+                            st.markdown("---")
+    elif val_results:
         for i, vr in enumerate(val_results):
             passed   = vr.get("passed")
             cmd      = vr.get("cmd", "?")

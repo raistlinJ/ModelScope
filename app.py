@@ -84,6 +84,7 @@ def _make_default_project() -> dict:
             "validation_commands": [],
             "fail_patterns": [],
             "metrics_matrix": [],
+            "validation_sets": [],
             "sudo": False,
         },
     }
@@ -129,6 +130,7 @@ def _apply_undo() -> None:
 # ── New Project dialog ─────────────────────────────────────────────────────────
 @st.dialog("New Project")
 def _show_add_project_dialog() -> None:
+    from config.bash_templates import BASH_BOT_TEMPLATES
     name = st.text_input("Project Name", placeholder="My Bash Bot")
     bot_type = st.selectbox(
         "Bot Type",
@@ -147,7 +149,7 @@ def _show_add_project_dialog() -> None:
             "ssh_password": "", "ssh_key_path": "", "sudo": False,
             "startup_commands": [], "bash_timeout": 60,
             "completion_commands": [], "validation_commands": [],
-            "fail_patterns": [], "metrics_matrix": [],
+            "fail_patterns": [], "metrics_matrix": [], "validation_sets": [],
         },
         "llama_cli_bot": {
             "execution_target": "local",
@@ -162,6 +164,28 @@ def _show_add_project_dialog() -> None:
         },
         "ai_agent": {},
     }
+
+    _template_key = "blank"
+    if bot_type == "Bash-Bot":
+        _TEMPLATE_LABELS = {
+            "Blank":                    "blank",
+            "File Creator (example)":   "file_creator",
+            "Nmap Scanner (example)":   "nmap_scanner",
+        }
+        _tmpl_label = st.selectbox(
+            "Template",
+            options=list(_TEMPLATE_LABELS.keys()),
+            help="Start from a pre-configured ground-truth example or a blank project.",
+            key="dlg_bash_template_sel",
+        )
+        _template_key = _TEMPLATE_LABELS[_tmpl_label]
+        if _template_key != "blank":
+            st.caption(
+                "File Creator: creates `/tmp/test` with numbers 1–10, then validates content."
+                if _template_key == "file_creator" else
+                "Nmap Scanner: runs `nmap -F 127.0.0.1`, saves output, then validates scan structure."
+            )
+
     if bot_type == "AI-Agent":
         st.info("AI-Agent configuration is coming soon. You can create the project now.")
 
@@ -173,11 +197,15 @@ def _show_add_project_dialog() -> None:
             _push_undo({"desc": "create project", "type": "project",
                         "projects": copy.deepcopy(st.session_state.get("projects", [])),
                         "active_project_id": st.session_state.get("active_project_id")})
+            if _type_key == "bash_bot" and _template_key != "blank":
+                base_cfg = copy.deepcopy(BASH_BOT_TEMPLATES[_template_key])
+            else:
+                base_cfg = dict(_CONFIG_DEFAULTS.get(_type_key, {}))
             new_proj = {
                 "id":     str(uuid.uuid4())[:8],
                 "name":   proj_name,
                 "type":   _type_key,
-                "config": dict(_CONFIG_DEFAULTS.get(_type_key, {})),
+                "config": base_cfg,
             }
             st.session_state["projects"].append(new_proj)
             st.session_state["active_project_id"] = new_proj["id"]

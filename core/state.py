@@ -83,6 +83,7 @@ _DEFAULTS: dict = {
     "bash_ssh_key_path":        "",
     "bash_fail_patterns":       [],
     "bash_metrics_matrix":      [],
+    "bash_validation_sets":     [],
     "bash_sudo":                False,
 
     # Llama-CLI-bot working-copy keys (synced from active project on project switch)
@@ -224,7 +225,11 @@ _BASH_DEFAULTS: dict = {
     "bash_ssh_key_path":        "",
     "bash_fail_patterns":       [],
     "bash_metrics_matrix":      [],
+    "bash_validation_sets":     [],
     "bash_sudo":                False,
+    # UI-only state — not in _BASH_KEY_MAP (not persisted to project config)
+    "bash_val_editor_nonce":    0,   # bumped on add/delete/reset to invalidate data_editor baseline
+    "bash_val_active_set_idx":  0,   # persists set selection; reset to 0 on project switch
 }
 
 _BASH_KEY_MAP: dict = {
@@ -240,6 +245,7 @@ _BASH_KEY_MAP: dict = {
     "bash_ssh_key_path":        "ssh_key_path",
     "bash_fail_patterns":       "fail_patterns",
     "bash_metrics_matrix":      "metrics_matrix",
+    "bash_validation_sets":     "validation_sets",
     "bash_sudo":                "sudo",
 }
 
@@ -341,6 +347,10 @@ _DYNAMIC_WIDGET_PREFIXES: tuple = (
     "_us_",
     "_sc_",
     "llama_mcp_en_",
+    "_bash_val_baseline_",  # data_editor stable-baseline cache keys for validation sets
+    "bash_val_editor_",     # data_editor widget keys (keyed by set index + nonce)
+    "bash_val_name_",       # inline name text_input keys (keyed by set index + nonce)
+    "bash_val_desc_",       # inline description text_input keys (keyed by set index + nonce)
 )
 
 

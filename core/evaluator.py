@@ -312,6 +312,112 @@ def _run_validation(
     }
 
 
+def _run_validation_sets(
+    env: BaseEnvironment,
+    validation_sets: list,
+    on_log: Callable[[str], None],
+    cancel_ref: list[bool] = [False],
+) -> tuple[bool, list]:
+    """
+    Execute all validation sets.
+    Each validation set contains steps, which contain commands and expected outputs.
+    Returns (all_passed, results_list).
+    """
+    if not validation_sets:
+        on_log("[VALIDATE] No validation sets configured")
+        return True, []
+
+    overall_passed = True
+    results = []
+
+    for vset in validation_sets:
+        set_name = vset.get("name", "Unnamed Set")
+        set_desc = vset.get("description", "")
+        on_log(f"[VALIDATE SET] Starting set: {set_name} ({set_desc})")
+
+        set_passed = True
+        step_results = []
+
+        for step_idx, step in enumerate(vset.get("steps", [])):
+            if cancel_ref[0]:
+                on_log("[CANCEL] Validation cancelled by user")
+                break
+
+            delay = float(step.get("delay_seconds", 0.0))
+            if delay > 0:
+                on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s")
+                time.sleep(delay)
+
+            for cmd_obj in step.get("commands", []):
+                if cancel_ref[0]:
+                    break
+                if not cmd_obj.get("enabled", True):
+                    continue
+
+                cmd_text = cmd_obj.get("command", "").strip()
+                if not cmd_text:
+                    continue
+
+                timeout = int(cmd_obj.get("timeout_seconds", 60))
+                on_log(f"[VALIDATE CMD] Running: {cmd_text}")
+
+                res = env.execute(cmd_text, timeout=timeout)
+                stdout = res.get("stdout", "")
+                stderr = res.get("stderr", "")
+                exit_code = res.get("exit_code", -1)
+
+                # Verify output
+                out_type = cmd_obj.get("expected_output_type", "Ignore")
+                expected = cmd_obj.get("expected_output", "")
+                cmd_passed = (exit_code == 0)
+
+                reason = ""
+                if not cmd_passed:
+                    reason = f"Exit code was {exit_code}"
+                else:
+                    if out_type == "Exact String":
+                        if stdout.strip() != expected.strip():
+                            cmd_passed = False
+                            reason = f"Output did not match exact string. Expected: {expected!r}, Got: {stdout!r}"
+                    elif out_type == "Regex":
+                        try:
+                            if not re.search(expected, stdout):
+                                cmd_passed = False
+                                reason = f"Output did not match regex pattern {expected!r}. Got: {stdout!r}"
+                        except re.error as e:
+                            cmd_passed = False
+                            reason = f"Invalid regex pattern: {expected!r} ({e})"
+
+                status_str = "PASS ✓" if cmd_passed else f"FAIL ✗ ({reason})"
+                on_log(f"[VALIDATE CMD RESULT] {cmd_text!r} → {status_str}")
+
+                if not cmd_passed:
+                    set_passed = False
+
+                step_results.append({
+                    "command": cmd_text,
+                    "exit_code": exit_code,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "passed": cmd_passed,
+                    "reason": reason,
+                    "expected_output_type": out_type,
+                    "expected_output": expected
+                })
+
+        if not set_passed:
+            overall_passed = False
+
+        results.append({
+            "name": set_name,
+            "description": set_desc,
+            "passed": set_passed,
+            "steps": step_results
+        })
+
+    return overall_passed, results
+
+
 # ── Inline tool-call parsing (fallback for models that use <tool_call> tags) ──
 
 def _parse_inline_tool_calls(content: str) -> list[dict]:
@@ -721,8 +827,25 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     # Startup commands
     _run_step_list(startup, label="RUN")
 
-    # Validation commands — each command is an independent metric check
-    if not telemetry["run_aborted"] and val_cmds:
+    # Validation
+    val_sets = config.get("validation_sets", [])
+    if not telemetry["run_aborted"] and val_sets:
+        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref)
+        telemetry["validation_passed"] = all_passed
+        telemetry["validation_sets_results"] = set_results
+        # Backwards compatibility: populate stdout/stderr
+        telemetry["validation_stdout"] = "\n".join(
+            cmd_res.get("stdout", "") for vset in set_results for cmd_res in vset.get("steps", [])
+        )
+        telemetry["validation_stderr"] = "\n".join(
+            cmd_res.get("stderr", "") for vset in set_results for cmd_res in vset.get("steps", [])
+        )
+        if set_results:
+            last_set = set_results[-1]
+            if last_set.get("steps"):
+                telemetry["validation_exit_code"] = last_set["steps"][-1].get("exit_code")
+    elif not telemetry["run_aborted"] and val_cmds:
+        # Legacy fallback
         all_passed = True
         for cmd in val_cmds:
             if cancel_ref[0]:
@@ -743,8 +866,8 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
             telemetry["validation_stderr"] += val.get("stderr", "")
             telemetry["validation_exit_code"] = val["exit_code"]
         telemetry["validation_passed"] = all_passed
-    elif not val_cmds:
-        on_log("[VALIDATE] No validation commands configured")
+    else:
+        on_log("[VALIDATE] No validation configured")
 
     # Completion / cleanup commands
     if not cancel_ref[0]:

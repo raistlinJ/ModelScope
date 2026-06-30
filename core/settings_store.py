@@ -72,6 +72,7 @@ PERSIST_KEYS: frozenset[str] = frozenset({
     "bash_ssh_key_path",
     "bash_fail_patterns",
     "bash_metrics_matrix",
+    "bash_validation_sets",
     "bash_sudo",
 
     # Llama-CLI-bot working copy keys

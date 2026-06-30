@@ -26,6 +26,33 @@ SCENARIOS: dict[str, dict] = {
         "expected_stdout": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10",
         "pre_run_cleanup": ["/tmp/test"],
         "related_tool": "file_creator",
+        "default_validation_sets": [
+            {
+                "name": "FileCheck",
+                "description": "Checks file creation and content",
+                "steps": [
+                    {
+                        "delay_seconds": 0.0,
+                        "commands": [
+                            {
+                                "command": "ls /tmp/test",
+                                "enabled": True,
+                                "timeout_seconds": 60,
+                                "expected_output_type": "Ignore",
+                                "expected_output": ""
+                            },
+                            {
+                                "command": "cat /tmp/test",
+                                "enabled": True,
+                                "timeout_seconds": 60,
+                                "expected_output_type": "Exact String",
+                                "expected_output": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
         "default_metrics": [
             make_metric("M-001", "Task Completion",        "task_completion"),
             make_metric("M-002", "Tool Was Called",         "tool_called",           tool_name="file_creator"),
@@ -59,11 +86,35 @@ SCENARIOS: dict[str, dict] = {
             "Scan my machine (127.0.0.1) with nmap using fast scan flags "
             "and tell me which ports are open."
         ),
+        "user_prompt": (
+            "Scan my machine (127.0.0.1) with nmap using fast scan flags "
+            "and tell me which ports are open."
+        ),
         "validation_command": "nmap -F 127.0.0.1",
         "fail_patterns": [
             "failed", "unreachable", "refused", "no route", "not found",
         ],
         "related_tool": "run_nmap_scan",
+        "default_validation_sets": [
+            {
+                "name": "NmapCheck",
+                "description": "Checks network scan output structure",
+                "steps": [
+                    {
+                        "delay_seconds": 0.0,
+                        "commands": [
+                            {
+                                "command": "nmap -F 127.0.0.1",
+                                "enabled": True,
+                                "timeout_seconds": 60,
+                                "expected_output_type": "Regex",
+                                "expected_output": "PORT\\s+STATE\\s+SERVICE|Nmap scan report"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
         "default_metrics": [
             make_metric("M-001", "Task Completion",          "task_completion"),
             make_metric("M-002", "Tool Was Called",           "tool_called",           tool_name="run_nmap_scan"),
