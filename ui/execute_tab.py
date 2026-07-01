@@ -176,6 +176,7 @@ def _run_bash_bot(project: dict) -> None:
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
         "bash_sudo":           cfg.get("sudo", False),
+        "sudo_password":       cfg.get("sudo_password", ""),
         "cancel_requested_ref": cancel_ref,
         "execution_mode": "bash",
         "active_project_id":   project.get("id"),

@@ -1379,6 +1379,11 @@ def _flush_bash_config(project: dict) -> None:
         "metrics_matrix":    st.session_state.get("bash_metrics_matrix", []),
         "validation_sets":   st.session_state.get("bash_validation_sets", []),
         "sudo":              st.session_state.get("bash_sudo", False),
+        "sudo_password":     (
+            st.session_state.get("bash_ssh_password", "")
+            if st.session_state.get("bash_execution_target", "local") == "ssh"
+            else st.session_state.get("bash_sudo_password", "")
+        ) if st.session_state.get("bash_sudo") else "",
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1577,6 +1582,9 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 if not commands:
                     st.caption("No commands. Click **+ Add Command** below.")
 
+                _addcmd_flag_key = f"_sc_{pfx}_{step_id}_addcmd_flag"
+                _is_last_cmd_idx = len(commands) - 1
+
                 for ci, cmd in enumerate(commands):
                     cmd_id = cmd["_id"]
 
@@ -1586,12 +1594,32 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                         cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
                         if cmd_key not in st.session_state:
                             st.session_state[cmd_key] = cmd.get("command", "")
-                        st.text_input(
-                            f"Command {ci + 1}",
-                            key=cmd_key,
-                            placeholder=placeholder,
-                            label_visibility="collapsed",
-                        )
+
+                        # On the last command row, pressing Enter (on_change) sets a
+                        # flag to add a new command — same action as clicking "+ Add Command".
+                        # on_change fires after the widget commits its value, so
+                        # st.session_state[cmd_key] already holds the new text.
+                        if ci == _is_last_cmd_idx:
+                            def _on_last_cmd_enter(
+                                _ck=cmd_key, _fk=_addcmd_flag_key
+                            ):
+                                if st.session_state.get(_ck, "").strip():
+                                    st.session_state[_fk] = True
+
+                            st.text_input(
+                                f"Command {ci + 1}",
+                                key=cmd_key,
+                                placeholder=placeholder,
+                                label_visibility="collapsed",
+                                on_change=_on_last_cmd_enter,
+                            )
+                        else:
+                            st.text_input(
+                                f"Command {ci + 1}",
+                                key=cmd_key,
+                                placeholder=placeholder,
+                                label_visibility="collapsed",
+                            )
                         cmd["command"] = st.session_state.get(cmd_key, "")
                     with cc2:
                         to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
@@ -1625,8 +1653,10 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                                      use_container_width=True):
                             mutation = ("del_cmd", si, ci)
 
-                # Add Command button
-                if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                # Add Command: either button click or Enter in the last command field.
+                if st.session_state.pop(_addcmd_flag_key, False):
+                    mutation = ("add_cmd", si)
+                elif st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
                     mutation = ("add_cmd", si)
 
     # Add Step button
@@ -1779,9 +1809,18 @@ def _render_bash_runtime(project: dict) -> None:
         st.checkbox(
             "Run commands with sudo",
             key="bash_sudo",
-            help="Prefix every startup, validation, and completion command with `sudo`. "
-                 "Useful when the evaluation needs elevated privileges.",
+            help="Run every startup, validation, and completion command as root via `sudo bash -c`.",
         )
+        if st.session_state.get("bash_sudo"):
+            if target == "local":
+                st.text_input(
+                    "Sudo password",
+                    key="bash_sudo_password",
+                    type="password",
+                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
+                )
+            else:
+                st.caption("SSH password will be reused for sudo.")
         if target == "ssh":
             st.divider()
             st.markdown("**SSH Credentials**")

@@ -755,15 +755,25 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
 
-    sudo_prefix = "sudo " if config.get("bash_sudo") else ""
-    if sudo_prefix:
-        on_log("[BASH] sudo access enabled — commands will be prefixed with sudo")
+    _sudo_pw   = (config.get("sudo_password") or "").strip()
+    _use_sudo  = bool(config.get("bash_sudo"))
+    if _use_sudo:
+        mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
+        on_log(f"[BASH] sudo access enabled — commands will run as root {mode}")
     on_log("[BASH] Starting bash evaluation")
 
     def _exec_cmd(cmd: str, label: str = "RUN", timeout_override: int | None = None) -> dict:
-        t          = timeout_override if timeout_override is not None else timeout
-        actual_cmd = f"{sudo_prefix}{cmd}"
-        on_log(f"[{label}] {actual_cmd}")
+        t = timeout_override if timeout_override is not None else timeout
+        if _use_sudo:
+            if _sudo_pw:
+                # Use sudo bash -c so we authenticate via stdin (no TTY required).
+                # Log the original command only — never log the password.
+                actual_cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+            else:
+                actual_cmd = f"sudo {cmd}"
+        else:
+            actual_cmd = cmd
+        on_log(f"[{label}] {cmd}")
         res = env.execute(actual_cmd, timeout=t)
         if res.get("stdout"):
             on_log(f"[STDOUT] {res['stdout'][:800]}")

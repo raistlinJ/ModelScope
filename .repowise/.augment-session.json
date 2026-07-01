@@ -1,0 +1,1 @@
+{"session_id": "c55b8fa2-7176-4f32-a971-787eefd1d767", "seq": 9, "reads": {"core/evaluator.py": 9, "ui/config_tab.py": 2, "ui/execute_tab.py": 3}, "edits": {"core/evaluator.py": 4, "ui/config_tab.py": 6, "ui/execute_tab.py": 7, "config/bash_templates.py": 8}, "nudged": [], "stale_notified": ["core/evaluator.py"], "reread_notified": []}

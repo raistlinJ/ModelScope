@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "repowise": {
+      "command": "repowise",
+      "args": [
+        "mcp",
+        "/home/dsch/Projects/SPARK/ModelScope2.0/ModelScope2.1",
+        "--transport",
+        "stdio"
+      ],
+      "description": "repowise: codebase intelligence \u2014 docs, graph, git signals, dead code, decisions"
+    }
+  }
+}

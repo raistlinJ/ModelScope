@@ -450,6 +450,10 @@ def _render_bash_dashboard(project: dict) -> None:
         sel_idx = labels.index(sel_label)
         tel = list(reversed(history))[sel_idx]
 
+    # Per-run token so text_area keys change when the selected run changes,
+    # preventing Streamlit from retaining stale widget state across selections.
+    _run_tok = (tel.get("run_timestamp", "") or "latest").replace(" ", "_").replace(":", "-")
+
     ts = tel.get("run_timestamp", "")
     if ts:
         st.caption(f"🕒 {ts}  |  💻 {project['name']} (bash_bot)")
@@ -545,10 +549,10 @@ def _render_bash_dashboard(project: dict) -> None:
                         # Stdout / Stderr details
                         if cmd_res.get("stdout"):
                             st.text_area("Stdout", value=cmd_res["stdout"], height=120,
-                                         key=f"bash_vr_stdout_{pid}_{s_idx}_{c_idx}")
+                                         key=f"bash_vr_stdout_{pid}_{_run_tok}_{s_idx}_{c_idx}")
                         if cmd_res.get("stderr"):
                             st.text_area("Stderr", value=cmd_res["stderr"], height=80,
-                                         key=f"bash_vr_stderr_{pid}_{s_idx}_{c_idx}")
+                                         key=f"bash_vr_stderr_{pid}_{_run_tok}_{s_idx}_{c_idx}")
                         
                         if c_idx < len(steps) - 1:
                             st.markdown("---")
@@ -566,10 +570,10 @@ def _render_bash_dashboard(project: dict) -> None:
                     st.error(f"FAIL ✗  exit code: {exit_cd}")
                 if vr.get("stdout"):
                     st.text_area("Stdout", value=vr["stdout"], height=120,
-                                 key=f"bash_vr_stdout_{pid}_{i}")
+                                 key=f"bash_vr_stdout_{pid}_{_run_tok}_{i}")
                 if vr.get("stderr"):
                     st.text_area("Stderr", value=vr["stderr"], height=80,
-                                 key=f"bash_vr_stderr_{pid}_{i}")
+                                 key=f"bash_vr_stderr_{pid}_{_run_tok}_{i}")
     elif tel.get("validation_exit_code") is not None:
         # Legacy telemetry (pre-validation_results) — fall back to aggregate display
         if tel.get("validation_passed"):
@@ -578,10 +582,10 @@ def _render_bash_dashboard(project: dict) -> None:
             st.error(f"FAIL ✗  (exit code: {tel['validation_exit_code']})")
         if tel.get("validation_stdout"):
             st.text_area("Stdout", value=tel["validation_stdout"], height=160,
-                         key=f"bash_val_stdout_{pid}")
+                         key=f"bash_val_stdout_{pid}_{_run_tok}")
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
-                         key=f"bash_val_stderr_{pid}")
+                         key=f"bash_val_stderr_{pid}_{_run_tok}")
     else:
         st.info("No validation commands were run.")
 
@@ -621,6 +625,10 @@ def _render_llama_cli_dashboard(project: dict) -> None:
             key=f"llama_dash_sel_{pid}",
         )
         tel = list(reversed(history))[labels.index(sel_label)]
+
+    # Per-run token so text_area keys change when the selected run changes,
+    # preventing Streamlit from retaining stale widget state across selections.
+    _run_tok = (tel.get("run_timestamp", "") or "latest").replace(" ", "_").replace(":", "-")
 
     ts = tel.get("run_timestamp", "")
     if ts:
@@ -700,10 +708,10 @@ def _render_llama_cli_dashboard(project: dict) -> None:
             st.error(f"FAIL ✗  (exit code: {val_exit})")
         if tel.get("validation_stdout"):
             st.text_area("Stdout", value=tel["validation_stdout"], height=160,
-                         key=f"llama_val_stdout_{pid}")
+                         key=f"llama_val_stdout_{pid}_{_run_tok}")
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
-                         key=f"llama_val_stderr_{pid}")
+                         key=f"llama_val_stderr_{pid}_{_run_tok}")
 
     # Loop / inefficiency detection
     _inefficiencies = tel.get("inefficiencies", [])
