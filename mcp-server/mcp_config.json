@@ -1,8 +1,39 @@
 {
   "mcpServers": {
-    "nmap-server": {
+    "custom": {
+      "label": "Custom Tools (ModelScope)",
       "command": "node",
-      "args": ["/home/dsch/Projects/SPARK/mcp-nmap-server/index.js"]
+      "args": ["./mcp-server/index.js"]
+    },
+    "fetch": {
+      "label": "Fetch",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "filesystem": {
+      "label": "Filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "git": {
+      "label": "Git",
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "."]
+    },
+    "memory": {
+      "label": "Memory",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "time": {
+      "label": "Time",
+      "command": "uvx",
+      "args": ["mcp-server-time"]
+    },
+    "sequentialthinking": {
+      "label": "Sequential Thinking",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
     }
   }
 }

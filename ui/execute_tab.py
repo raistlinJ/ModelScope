@@ -10,6 +10,7 @@ from core import llama_server
 from core.mcp_manager import poll_mcp_process
 from ui.components import status_pill
 from ui.terminal import render_terminal
+from ui.config_tab import _flush_bash_config, _flush_llama_cli_config
 
 
 _LOG_TAG_MAP = {
@@ -45,8 +46,598 @@ def _render_terminal(placeholder, logs: list[dict]) -> None:
     render_terminal(placeholder, logs, _tag, empty_msg="Awaiting run…")
 
 
+def _get_active_project() -> dict | None:
+    pid = st.session_state.get("active_project_id")
+    for p in st.session_state.get("projects", []):
+        if p["id"] == pid:
+            return p
+    return None
+
+
+def _clean_steps(steps_list: list) -> list:
+    import copy
+    cleaned = []
+    for step in steps_list:
+        if not isinstance(step, dict):
+            if isinstance(step, str) and step.strip():
+                cleaned.append(step)
+            continue
+        new_step = copy.deepcopy(step)
+        new_step["commands"] = [
+            c for c in new_step.get("commands", [])
+            if (isinstance(c, dict) and c.get("command", "").strip()) or
+               (isinstance(c, str) and c.strip())
+        ]
+        if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
+            cleaned.append(new_step)
+    return cleaned
+
+
+def _get_selected_validation_sets(cfg: dict) -> list:
+    """Return a filtered deep-copy of cfg['validation_sets'] based on execute-tab checkboxes.
+
+    Sets whose bash_exec_vset_{idx}_selected flag is False are excluded entirely.
+    Per-command enabled fields are overridden by bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected.
+    """
+    import copy
+    filtered = []
+    for idx, vset in enumerate(cfg.get("validation_sets", [])):
+        if not st.session_state.get(f"bash_exec_vset_{idx}_selected", True):
+            continue
+        vset_copy = copy.deepcopy(vset)
+        vset_copy["steps"] = _clean_steps(vset_copy.get("steps", []))
+        for sidx, step in enumerate(vset_copy.get("steps", [])):
+            for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                key = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                cmd_obj["enabled"] = st.session_state.get(key, cmd_obj.get("enabled", True))
+        filtered.append(vset_copy)
+    return filtered
+
+
+def _render_step_list_readonly(steps: list, label: str) -> None:
+    """Read-only listing of a step/command list (startup or completion)."""
+    total_cmds = sum(
+        len(s.get("commands", [])) if isinstance(s, dict) else 1
+        for s in steps
+    )
+    st.caption(f"{len(steps)} step(s), {total_cmds} command(s)")
+    if not steps:
+        st.caption(f"None configured — add {label} commands in the Config tab.")
+        return
+    for si, step in enumerate(steps):
+        if isinstance(step, str):
+            st.code(step, language="bash")
+        else:
+            delay = step.get("delay_seconds", 0)
+            delay_str = f" (+{delay}s delay)" if delay > 0 else ""
+            st.markdown(f"*Step {si + 1}{delay_str}*")
+            for cmd_obj in step.get("commands", []):
+                if isinstance(cmd_obj, dict):
+                    text    = cmd_obj.get("command", "")
+                    enabled = cmd_obj.get("enabled", True)
+                    if text and enabled:
+                        st.code(text, language="bash")
+                    elif text:
+                        st.markdown(f"~~`{text}`~~ *(disabled)*")
+                elif isinstance(cmd_obj, str) and cmd_obj:
+                    st.code(cmd_obj, language="bash")
+
+
+def _save_bash_validation_validation_set(project: dict, validation_set_name: str) -> None:
+    """Save current bash_validation_sets as a named validation_set in project config."""
+    import copy
+    sets = copy.deepcopy(st.session_state.get("bash_validation_sets", []))
+    project["config"].setdefault("validation_validation_sets", {})[validation_set_name] = sets
+    _flush_bash_config(project)
+    st.success(f"Validation set '{validation_set_name}' saved.")
+
+
+def _load_bash_validation_validation_set(project: dict, validation_set_name: str) -> None:
+    """Load a user-saved validation validation_set, reset per-set selection state, and rerun."""
+    import copy
+    validation_sets = project["config"].get("validation_validation_sets", {})
+    if validation_set_name not in validation_sets:
+        st.error(f"Validation set '{validation_set_name}' not found.")
+        return
+    st.session_state["bash_validation_sets"] = copy.deepcopy(validation_sets[validation_set_name])
+    _flush_bash_config(project)
+    for k in list(st.session_state.keys()):
+        if k.startswith("bash_exec_vset_"):
+            del st.session_state[k]
+    st.rerun()
+
+
+def _run_bash_bot(project: dict) -> None:
+    """Build the environment and run the bash evaluation."""
+    from core.environment import LocalEnvironment, SSHEnvironment
+    from core.evaluator import run_bash_evaluation
+    from core.session_log import SessionLog
+
+    _flush_bash_config(project)
+    cfg = project["config"]
+
+    logs: list[dict]       = []
+    cancel_ref: list[bool] = [False]
+    _last_render: list[float] = [0.0]
+    log_placeholder = st.session_state.get("_bash_log_placeholder")
+
+    session_log = SessionLog()
+
+    def on_log(msg: str) -> None:
+        if st.session_state.get("cancel_requested"):
+            cancel_ref[0] = True
+        entry = {"text": msg, "tag": _tag(msg)}
+        logs.append(entry)
+        st.session_state["run_logs"] = list(logs)
+        session_log.log(msg)
+        now = time.monotonic()
+        if log_placeholder and (now - _last_render[0]) >= 0.5:
+            _render_terminal(log_placeholder, logs)
+            _last_render[0] = now
+
+    from core.environment import create_environment
+    tgt = cfg.get("execution_target", "local")
+    is_ssh = tgt == "ssh"
+    
+    env = create_environment(
+        ssh=is_ssh,
+        host=cfg.get("ssh_host", ""),
+        port=int(cfg.get("ssh_port") or 22),
+        username=cfg.get("ssh_user", "root"),
+        password=cfg.get("ssh_password") or None,
+        key_path=cfg.get("ssh_key_path") or None,
+        remote_cwd=".",  # bash-bot: stay in the login shell's default directory
+        pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
+    )
+
+    bash_config = {
+        "startup_commands":    cfg.get("startup_commands", []),
+        "bash_timeout":        cfg.get("bash_timeout", 60),
+        "completion_commands": cfg.get("completion_commands", []),
+        "validation_commands": cfg.get("validation_commands", []),
+        "validation_sets":     _get_selected_validation_sets(cfg),
+        "fail_patterns":       cfg.get("fail_patterns", []),
+        "metrics_matrix":      cfg.get("metrics_matrix", []),
+        "bash_sudo":           cfg.get("sudo", False),
+        "sudo_password":       cfg.get("sudo_password", ""),
+        "cancel_requested_ref": cancel_ref,
+        "execution_mode": "bash",
+        "active_project_id":   project.get("id"),
+    }
+
+    telemetry: dict | None = None
+    try:
+        telemetry = run_bash_evaluation(env, bash_config, on_log)
+    except Exception as exc:
+        on_log(f"[ERROR] Evaluation failed: {exc}")
+        telemetry = {"run_aborted": True, "error": str(exc)}
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+
+    session_log.save_telemetry(telemetry or {})
+    session_log.save_config(bash_config)
+    session_log.close()
+
+    st.session_state["telemetry"]        = telemetry or {}
+    st.session_state["run_completed"]    = True
+    st.session_state["_run_in_progress"] = False
+    st.session_state["cancel_requested"] = False
+
+    from config.defaults import MAX_RUN_HISTORY
+    # Per-project history — isolated so switching projects shows only that project's runs
+    history_key = f"run_history_{project['id']}"
+    history: list = st.session_state.get(history_key, [])
+    history.append(telemetry or {})
+    st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+    st.rerun()
+
+
+def _render_bash_execute(project: dict) -> None:
+    """Execute view for Bash-Bot: collapsible config sub-blocks + Execute button + log."""
+    cfg = project.get("config", {})
+
+    st.markdown(f"### {project['name']}")
+
+    # ── Two-column configuration panel ───────────────────────────────────────
+    _cfg_open = st.session_state.get("bash_exec_config_expanded", True)
+    with st.container(border=True):
+        col_hdr_outer, col_tog_outer = st.columns([9, 1])
+        with col_hdr_outer:
+            st.markdown("**⚙️ Run Configuration**")
+        with col_tog_outer:
+            if st.button("▼" if _cfg_open else "▶",
+                         key="btn_bash_exec_outer_toggle", use_container_width=True,
+                         help="Expand/collapse all"):
+                st.session_state["bash_exec_config_expanded"] = not _cfg_open
+                st.rerun()
+
+        if _cfg_open:
+            col_a, col_b = st.columns(2)
+
+            # ── Left: Startup & Completion ─────────────────────────────────
+            with col_a:
+                with st.container(border=True):
+                    _startup_open = st.session_state.get("bash_exec_startup_expanded", True)
+                    col_title_a, col_tog_a = st.columns([9, 1])
+                    with col_title_a:
+                        target = cfg.get("execution_target", "local")
+                        ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
+                        target_str = f"Target: {target.upper()}{ssh_info}"
+                        timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
+                        st.markdown(f"**Startup & Completion** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
+                    with col_tog_a:
+                        if st.button("▼" if _startup_open else "▶",
+                                     key="btn_bash_exec_startup_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["bash_exec_startup_expanded"] = not _startup_open
+                            st.rerun()
+                    if _startup_open:
+                        with st.expander("**Startup**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
+                        with st.expander("**Completion**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
+
+            # ── Right: Validation Steps ────────────────────────────────────
+            with col_b:
+                with st.container(border=True):
+                    _val_open = st.session_state.get("bash_exec_validation_expanded", True)
+                    col_title_b, col_tog_b = st.columns([9, 1])
+                    with col_title_b:
+                        st.markdown("**Validation Steps**")
+                    with col_tog_b:
+                        if st.button("▼" if _val_open else "▶",
+                                     key="btn_bash_exec_val_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["bash_exec_validation_expanded"] = not _val_open
+                            st.rerun()
+                    if _val_open:
+                        # Validation set list
+
+                        # Validation set list
+                        val_sets = cfg.get("validation_sets", [])
+                        if not val_sets:
+                            st.caption("No validation sets configured — add them in the Config tab (Validation).")
+                        else:
+                            for idx, vset in enumerate(val_sets):
+                                set_sel_key = f"bash_exec_vset_{idx}_selected"
+                                set_selected = st.session_state.get(set_sel_key, True)
+
+                                desc = vset.get("description", "")
+                                label_md = f"**{idx + 1}. {vset['name']}**"
+                                if desc:
+                                    label_md += f" — {desc}"
+
+                                with st.expander(label_md, expanded=set_selected):
+                                    new_sel = st.checkbox(
+                                        "Enable this Validation Set", value=set_selected,
+                                        key=f"bash_exec_vset_{idx}_chk",
+                                    )
+                                    if new_sel != set_selected:
+                                        st.session_state[set_sel_key] = new_sel
+                                        st.rerun()
+
+                                    for sidx, step in enumerate(vset.get("steps", [])):
+                                        delay = step.get("delay_seconds", 0)
+                                        dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                        st.caption(f"Step {sidx + 1}{dstr}:")
+                                        for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                            cmd_text = cmd_obj.get("command", "")
+                                            if not cmd_text:
+                                                continue
+                                            cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                            cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                            exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                            exp_out  = cmd_obj.get("expected_output", "")
+                                            hint = ""
+                                            if exp_type != "Ignore" and exp_out:
+                                                short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                                hint = f"  # expect {exp_type.lower()}: {short}"
+
+                                            col_cc, col_cl = st.columns([1, 10])
+                                            with col_cc:
+                                                new_cmd_sel = st.checkbox(
+                                                    f"Enable command {cidx+1} in step {sidx+1}", value=cmd_sel,
+                                                    key=f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                    label_visibility="collapsed",
+                                                    disabled=not set_selected,
+                                                )
+                                                if new_cmd_sel != cmd_sel:
+                                                    st.session_state[cmd_key] = new_cmd_sel
+                                            with col_cl:
+                                                display = cmd_text + hint if hint else cmd_text
+                                                if cmd_sel and set_selected:
+                                                    st.code(display, language="bash")
+                                                else:
+                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
+
+    # Run / Cancel / Clear buttons
+    run_in_progress = st.session_state.get("_run_in_progress", False)
+    col_run, col_cancel, col_clear = st.columns([3, 1, 1])
+    with col_run:
+        run_btn = st.button(
+            "▶  Execute",
+            key="btn_bash_exec_run",
+            type="primary",
+            use_container_width=True,
+            disabled=run_in_progress,
+        )
+    with col_cancel:
+        if st.button("⏹  Cancel", key="btn_bash_exec_cancel",
+                     use_container_width=True, disabled=not run_in_progress):
+            st.session_state["cancel_requested"] = True
+    with col_clear:
+        if st.button("Clear Log", key="btn_bash_exec_clear",
+                     use_container_width=True):
+            st.session_state["run_logs"]         = []
+            st.session_state["run_completed"]    = False
+            st.session_state["telemetry"]        = {}
+            st.session_state["_run_in_progress"] = False
+            st.session_state["cancel_requested"] = False
+            st.rerun()
+
+    log_placeholder = st.empty()
+    st.session_state["_bash_log_placeholder"] = log_placeholder
+    _render_terminal(log_placeholder, st.session_state.get("run_logs", []))
+
+    # Show result summary if run just completed
+    if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
+        tel = st.session_state["telemetry"]
+        if tel.get("run_aborted"):
+            st.warning("⚠️ Run was cancelled or aborted.")
+        elif tel.get("validation_passed") is True:
+            st.success("✓ Execution complete — all validation commands passed.")
+        elif tel.get("validation_passed") is False:
+            st.error("✗ Execution complete — one or more validation commands failed.")
+        else:
+            st.info("📊 Execution complete.")
+
+    if run_btn and not run_in_progress:
+        st.session_state["run_logs"]         = []
+        st.session_state["run_completed"]    = False
+        st.session_state["telemetry"]        = {}
+        st.session_state["cancel_requested"] = False
+        st.session_state["_run_in_progress"] = True
+        with st.spinner("Running…"):
+            _run_bash_bot(project)
+
+
+# ── Llama-CLI Bot execute ──────────────────────────────────────────────────────
+
+def _run_llama_cli_bot(project: dict) -> None:
+    """Build environment and run llama_cli evaluation."""
+    import shlex
+    from core.environment import LocalEnvironment, SSHEnvironment
+    from core.evaluator import run_llama_cli_evaluation
+    from core.session_log import SessionLog
+
+    _flush_llama_cli_config(project)
+    cfg = project["config"]
+
+    logs: list[dict]       = []
+    cancel_ref: list[bool] = [False]
+    _last_render: list[float] = [0.0]
+    log_placeholder = st.session_state.get("_llama_log_placeholder")
+
+    session_log = SessionLog()
+
+    def on_log(msg: str) -> None:
+        if st.session_state.get("cancel_requested"):
+            cancel_ref[0] = True
+        entry = {"text": msg, "tag": _tag(msg)}
+        logs.append(entry)
+        st.session_state["run_logs"] = list(logs)
+        session_log.log(msg)
+        now = time.monotonic()
+        if log_placeholder and (now - _last_render[0]) >= 0.5:
+            _render_terminal(log_placeholder, logs)
+            _last_render[0] = now
+
+    from core.environment import create_environment
+    tgt = cfg.get("execution_target", "local")
+    is_ssh = tgt == "ssh"
+
+    env = create_environment(
+        ssh=is_ssh,
+        host=cfg.get("ssh_host", ""),
+        port=int(cfg.get("ssh_port") or 22),
+        username=cfg.get("ssh_user", "root"),
+        password=cfg.get("ssh_password") or None,
+        key_path=cfg.get("ssh_key_path") or None,
+        remote_cwd=".",
+        pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
+    )
+
+    llama_config = {
+        "backend":             cfg.get("backend", "llama.cpp"),
+        "binary_path":         cfg.get("binary_path", "llama-cli"),
+        "model_dir":           cfg.get("model_dir", ""),
+        "model_name":          cfg.get("model_name", ""),
+        "tokens":              cfg.get("tokens", 2048),
+        "server_port":         cfg.get("server_port", 18080),
+        "mcp_server_url":      "http://127.0.0.1:9191",
+        "openai_base_url":     cfg.get("openai_base_url", ""),
+        "openai_api_key":      cfg.get("openai_api_key", ""),
+        "openai_verify_ssl":   cfg.get("openai_verify_ssl", True),
+        "mcp_servers":         [s for s in cfg.get("mcp_servers", []) if s.get("enabled")],
+        "prompts":             cfg.get("prompts", []),
+        "commands":            cfg.get("commands", []),
+        "timeout":             cfg.get("timeout", 60),
+        "validation_commands": cfg.get("validation_commands", []),
+        "fail_patterns":       cfg.get("fail_patterns", []),
+        "metrics_matrix":      cfg.get("metrics_matrix", []),
+        "sudo":                cfg.get("sudo", False),
+        "cancel_requested_ref": cancel_ref,
+        "active_project_id":   project.get("id"),
+    }
+
+    telemetry: dict | None = None
+    try:
+        telemetry = run_llama_cli_evaluation(env, llama_config, on_log)
+    except Exception as exc:
+        on_log(f"[ERROR] Evaluation failed: {exc}")
+        telemetry = {"run_aborted": True, "error": str(exc)}
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+
+    # Mark whether an explicit user cancellation caused the abort (vs timeout).
+    # cancel_requested is set only by the Cancel button — the timeout path never
+    # touches it — so it cleanly discriminates the two early-exit cases.
+    if isinstance(telemetry, dict) and telemetry.get("run_aborted"):
+        telemetry["interrupted_by_user"] = bool(
+            st.session_state.get("cancel_requested")
+        )
+
+    session_log.save_telemetry(telemetry or {})
+    session_log.save_config(llama_config)
+    session_log.close()
+
+    st.session_state["telemetry"]        = telemetry or {}
+    st.session_state["run_completed"]    = True
+    st.session_state["_run_in_progress"] = False
+    st.session_state["cancel_requested"] = False
+
+    from config.defaults import MAX_RUN_HISTORY
+    history_key = f"run_history_{project['id']}"
+    history: list = st.session_state.get(history_key, [])
+    history.append(telemetry or {})
+    st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+    st.rerun()
+
+
+def _render_llama_cli_execute(project: dict) -> None:
+    """Execute view for Llama-CLI-Bot: config summary + Execute button + log."""
+    cfg = project.get("config", {})
+
+    st.markdown(f"### {project['name']}")
+
+    with st.expander("Run Configuration", expanded=True):
+        backend = cfg.get("backend", "llama.cpp")
+        target  = cfg.get("execution_target", "local")
+        st.write(f"**Backend:** {backend}")
+        st.write(f"**Target:** {target.upper()}")
+        if target == "ssh":
+            _user = cfg.get("ssh_user", "root")
+            _host = cfg.get("ssh_host", "?")
+            _port = cfg.get("ssh_port", 22)
+            st.write(f"**SSH:** `{_user}@{_host}:{_port}`")
+        if backend == "llama.cpp":
+            model = cfg.get("model_name", "") or "not selected"
+            st.write(f"**Model:** `{model}`")
+            st.write(f"**Binary:** `{cfg.get('binary_path', 'llama-cli')}`")
+        elif backend.lower().startswith("openai"):
+            base_url    = cfg.get("openai_base_url", "") or "not configured"
+            model_label = cfg.get("model_name", "") or "server default"
+            st.write(f"**Base URL:** `{base_url}`")
+            st.write(f"**Model:** `{model_label}` *(server will use its default if blank)*")
+
+        enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
+        if enabled_mcps:
+            st.write(f"**MCP servers ({len(enabled_mcps)}):** {', '.join(enabled_mcps)}")
+
+        prompts = cfg.get("prompts", [])
+        if prompts:
+            st.write(f"**Prompts ({len(prompts)}):**")
+            st.caption(prompts[0][:120] + ("…" if len(prompts[0]) > 120 else ""))
+
+        commands = cfg.get("commands", [])
+        if commands:
+            st.write(f"**Commands ({len(commands)}):**")
+            for cmd in commands:
+                st.code(cmd, language="bash")
+
+        st.write(f"**Timeout:** {cfg.get('timeout', 60)}s")
+
+    # Bug 7: Scenario system prompt display (read-only, auto-populated from selected scenario)
+    active_sc = st.session_state.get("active_scenario", "")
+    sc_data = SCENARIOS.get(active_sc, {})
+    sc_sys_prompt = sc_data.get("system_prompt", "") or sc_data.get("sys_prompt", "")
+    if active_sc or sc_sys_prompt:
+        st.markdown("**Scenario System Prompt**")
+        displayed = sc_sys_prompt or f"No system prompt defined for scenario: {active_sc or 'none'}"
+        st.text_area(
+            "Scenario System Prompt",
+            value=displayed,
+            height=100,
+            key="llama_exec_sys_prompt_display",
+            disabled=True,
+        )
+
+    run_in_progress = st.session_state.get("_run_in_progress", False)
+    col_run, col_cancel, col_clear = st.columns([3, 1, 1])
+    with col_run:
+        run_btn = st.button(
+            "▶  Execute",
+            key="btn_llama_exec_run",
+            type="primary",
+            use_container_width=True,
+            disabled=run_in_progress,
+        )
+    with col_cancel:
+        if st.button("⏹  Cancel", key="btn_llama_exec_cancel",
+                     use_container_width=True, disabled=not run_in_progress):
+            st.session_state["cancel_requested"] = True
+    with col_clear:
+        if st.button("Clear Log", key="btn_llama_exec_clear", use_container_width=True):
+            st.session_state["run_logs"]         = []
+            st.session_state["run_completed"]    = False
+            st.session_state["telemetry"]        = {}
+            st.session_state["_run_in_progress"] = False
+            st.session_state["cancel_requested"] = False
+            st.rerun()
+
+    log_placeholder = st.empty()
+    st.session_state["_llama_log_placeholder"] = log_placeholder
+    _render_terminal(log_placeholder, st.session_state.get("run_logs", []))
+
+    if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
+        tel = st.session_state["telemetry"]
+        if tel.get("run_aborted"):
+            if tel.get("interrupted_by_user"):
+                st.warning("⚠️ Execution was interrupted by the user — metrics may be incomplete.")
+            else:
+                st.warning("⚠️ Execution timed out — metrics may be incomplete.")
+        elif tel.get("validation_passed") is True:
+            st.success("✓ Execution complete — all validation commands passed.")
+        elif tel.get("validation_passed") is False:
+            st.error("✗ Execution complete — one or more validation commands failed.")
+        else:
+            responses = tel.get("prompt_responses", [])
+            if responses:
+                st.info(f"📊 Execution complete — {len(responses)} prompt(s) processed.")
+            else:
+                st.info("📊 Execution complete.")
+
+    if run_btn and not run_in_progress:
+        st.session_state["run_logs"]         = []
+        st.session_state["run_completed"]    = False
+        st.session_state["telemetry"]        = {}
+        st.session_state["cancel_requested"] = False
+        st.session_state["_run_in_progress"] = True
+        with st.spinner("Running…"):
+            _run_llama_cli_bot(project)
+
+
 def render() -> None:
     st.header("Execute Evaluation")
+
+    # Dispatch to bot-type-specific execute view
+    _proj = _get_active_project()
+    if _proj and _proj.get("type") == "bash_bot":
+        _render_bash_execute(_proj)
+        return
+    if _proj and _proj.get("type") == "llama_cli_bot":
+        _render_llama_cli_execute(_proj)
+        return
+
+    # ai_agent type: show guidance when no model is configured yet
+    if _proj and _proj.get("type") == "ai_agent" and not st.session_state.get("selected_model"):
+        st.info(
+            "**AI-Agent** mode requires a model to be configured. "
+            "Go to **Configuration → Model Setup** to scan and select a model, "
+            "then start the LLM server."
+        )
 
     # Refresh llama-server status so the pill reflects current reality
     _backend_now = st.session_state.get("backend_type", "llama.cpp")
@@ -143,21 +734,72 @@ def render() -> None:
     # Track when user edits the prompt fields (fix #10)
 
     # ── Prompt editors ────────────────────────────────────────────────────────
-    col_sys, col_usr = st.columns(2)
+    col_sys, col_cfg = st.columns(2)
     with col_sys:
+        _sp_hdr, _sp_reset = st.columns([5, 1])
+        with _sp_hdr:
+            st.markdown(
+                '<div class="sys-prompt-label">'
+                '<span class="label-text">Scenario System Prompt</span>'
+                '<span class="label-badge">Initial LLM Context</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with _sp_reset:
+            if st.button("↺ Reset", key="btn_reset_sys_prompt",
+                         help="Reset to scenario default", use_container_width=True):
+                st.session_state["_prompts_user_edited"] = False
+                from core.state import sync_scenario
+                sync_scenario(st.session_state.get("active_scenario", ""))
+                st.rerun()
         prev_sys = st.session_state.get("sys_prompt", "")
         new_sys  = st.text_area(
-            "System Prompt", height=150, key="sys_prompt",
-            help="Instructions defining the agent's behaviour and available tools",
+            "Scenario System Prompt", height=150, key="sys_prompt",
+            help="Initial context injected before the user task — defines the agent's behaviour and available tools.",
+            label_visibility="collapsed",
         )
         if new_sys != prev_sys:
             st.session_state["_prompts_user_edited"] = True
 
-    with col_usr:
+    with col_cfg:
+        st.markdown(
+            '<div class="sys-prompt-label">'
+            '<span class="label-text">Run Configuration</span>'
+            '<span class="label-badge">Active Settings</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        def _esc_pipe(v: str) -> str:
+            return v.replace("|", r"\|")
+
+        _backend_disp  = _esc_pipe(st.session_state.get("backend_type", "llama.cpp"))
+        _model_disp    = _esc_pipe(st.session_state.get("selected_model") or "not selected")
+        _ctx_disp      = st.session_state.get("context_size", 4096)
+        _target_disp   = _esc_pipe(st.session_state.get("target_env_type", "local"))
+        _scenario_disp = _esc_pipe(st.session_state.get("active_scenario", "") or "none")
+        _val_cmd_disp  = _esc_pipe(st.session_state.get("validation_command", "") or "none")[:60]
+        st.markdown(
+            f"| Setting | Value |\n"
+            f"|---|---|\n"
+            f"| Backend | `{_backend_disp}` |\n"
+            f"| Model | `{_model_disp}` |\n"
+            f"| Context | `{_ctx_disp}` tokens |\n"
+            f"| Target | `{_target_disp}` |\n"
+            f"| Scenario | {_scenario_disp} |\n"
+            f"| Validation | `{_val_cmd_disp}` |",
+        )
+        st.markdown(
+            '<div class="sys-prompt-label" style="margin-top:8px;">'
+            '<span class="label-text">User Prompt</span>'
+            '<span class="label-badge">Task</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         prev_usr = st.session_state.get("user_prompt", "")
         new_usr  = st.text_area(
-            "User Prompt", height=150, key="user_prompt",
-            help="The task given to the agent",
+            "User Prompt", height=80, key="user_prompt",
+            help="The task given to the agent.",
+            label_visibility="collapsed",
         )
         if new_usr != prev_usr:
             st.session_state["_prompts_user_edited"] = True
@@ -248,6 +890,7 @@ def render() -> None:
             "llm_url":             _url_val,
             "selected_model":      st.session_state.get("selected_model"),
             "context_size":        st.session_state.get("context_size", 4096),
+            "active_project_id":   st.session_state.get("active_project_id"),
             "sys_prompt":          st.session_state.get("sys_prompt", ""),
             "user_prompt":         st.session_state.get("user_prompt", ""),
             "mcp_url":             st.session_state.get("mcp_url", ""),
@@ -283,6 +926,7 @@ def render() -> None:
             from core.environment import create_environment
             env_type = st.session_state.get("target_env_type", "local")
             is_ssh = env_type == "remote (SSH)"
+            is_pct = env_type == "pct (Proxmox LXC)"
             env = None
             try:
                 env = create_environment(
@@ -293,8 +937,11 @@ def render() -> None:
                     password=st.session_state.get("target_ssh_password"),
                     key_path=st.session_state.get("target_ssh_key_path"),
                     remote_cwd=st.session_state.get("target_ssh_caf_dir") or "",
+                    pct_vmid=st.session_state.get("target_pct_vmid") if is_pct else None,
                 )
-                if is_ssh:
+                if is_pct:
+                    on_log(f"[INIT] Target: PCT (VMID: {st.session_state.get('target_pct_vmid', '?')}) via SSH/Local")
+                elif is_ssh:
                     on_log(
                         f"[INIT] Target: SSH "
                         f"({st.session_state.get('target_ssh_user', 'root')}@"
@@ -305,7 +952,7 @@ def render() -> None:
 
                 # Make the dispatch mode explicit rather than relying on the
                 # evaluator to sniff the environment type.
-                config["execution_mode"] = "caf_ssh" if is_ssh else "local"
+                config["execution_mode"] = "pct" if is_pct else ("caf_ssh" if is_ssh else "local")
                 telemetry = run_evaluation(env, config, on_log)
             except Exception as exc:
                 on_log(f"[ERROR] Evaluation failed: {exc}")
@@ -333,11 +980,13 @@ def render() -> None:
         session_log.save_config(config)
         session_log.close()
 
-        # Append to run history (fix #26)
-        history: list = st.session_state.get("run_history", [])
-        history.append(telemetry)
+        # Append to per-project run history
         from config.defaults import MAX_RUN_HISTORY
-        st.session_state["run_history"] = history[-MAX_RUN_HISTORY:]
+        pid = st.session_state.get("active_project_id", "default")
+        history_key = f"run_history_{pid}"
+        history: list = st.session_state.get(history_key, [])
+        history.append(telemetry)
+        st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
 
         if telemetry.get("run_aborted"):
             st.warning("⚠️ Run was cancelled.")
@@ -350,4 +999,5 @@ def render() -> None:
             st.info(
                 "📊 Evaluation complete — open **Analytical Dashboard** to review results."
             )
-        st.info(f"Session log saved to: `{session_log.session_dir}`")
+        if not telemetry.get("run_aborted"):
+            st.info(f"Session log saved to: `{session_log.session_dir}`")

@@ -240,3 +240,41 @@ class SessionRepository:
         if session_dir is None:
             return None
         return {"dir": session_dir, "telemetry": self.read_telemetry(session_dir)}
+
+    def sessions_for_project(self, project_id: str, limit: int | None = None) -> list[Path]:
+        """Return session dirs whose ``config.json`` has ``active_project_id == project_id``.
+
+        Sessions with no config.json or a corrupt one are skipped.  ``limit``
+        caps the result to the N most recent dirs (already sorted newest-first).
+        """
+        if not project_id or not self._base_dir.exists():
+            return []
+        out: list[Path] = []
+        for d in self.list_sessions(limit=None):
+            if limit is not None and len(out) >= limit:
+                break
+            cfg_path = d / "config.json"
+            if not cfg_path.exists():
+                continue
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if cfg.get("active_project_id") == project_id:
+                out.append(d)
+        return out
+
+    def history_for_project(self, project_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return a list of telemetry dicts for *project_id*, newest first.
+
+        Mirrors the shape of ``st.session_state[f"run_history_{pid}"]`` so
+        callers can drop the result in directly.  Sessions without a
+        ``telemetry.json`` (or with a corrupt one) are skipped silently.  When
+        ``limit`` is set, only the N most recent sessions are loaded.
+        """
+        out: list[dict[str, Any]] = []
+        for d in self.sessions_for_project(project_id, limit=limit):
+            tel = self.read_telemetry(d)
+            if tel:
+                out.append(tel)
+        return out

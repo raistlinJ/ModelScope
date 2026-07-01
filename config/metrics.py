@@ -1317,6 +1317,387 @@ def evaluate_metric(metric: dict, telemetry: dict) -> bool | None:
     return fn(metric.get("params", {}), telemetry)
 
 
+def _metric_observed_value(metric: dict, telemetry: dict) -> str:
+    """Return a short human-readable description of what was *actually* observed
+    for a metric, so the dashboard can show *why* it passed or failed instead
+    of just the boolean.  Designed to be safe — every branch returns a string
+    even if telemetry is missing fields, so the UI never has to handle None.
+
+    The format is intentionally compact ("8 calls ≤ 10", "12.4 s (limit 5 s)",
+    "tool 'nmap' missing").  Callers should pair this with the PASS/FAIL badge
+    that ``evaluate_metric()`` already produces.
+    """
+    p   = metric.get("params", {}) or {}
+    typ = metric.get("type", "") or ""
+    try:
+        if typ == "task_completion":
+            passed = telemetry.get("validation_passed")
+            return "validation passed" if passed is True else (
+                "validation failed" if passed is False else "no validation run"
+            )
+
+        if typ == "tool_called":
+            tool = p.get("tool_name", "") or "?"
+            called = any(tc.get("tool") == tool for tc in telemetry.get("tool_calls", []))
+            return f"tool '{tool}' was invoked" if called else f"tool '{tool}' never called"
+
+        if typ == "tool_not_called":
+            tool = p.get("tool_name", "") or "?"
+            called = any(tc.get("tool") == tool for tc in telemetry.get("tool_calls", []))
+            return f"tool '{tool}' was not invoked" if not called else f"tool '{tool}' WAS invoked"
+
+        if typ == "tool_sequence":
+            expected = [s.strip() for s in p.get("sequence", "").split(",") if s.strip()]
+            actual   = [tc.get("tool", "") for tc in telemetry.get("tool_calls", [])]
+            return f"sequence [{', '.join(expected)}]; actual [{', '.join(actual)}]"
+
+        if typ == "tool_call_count":
+            count = len(telemetry.get("tool_calls", []))
+            limit = int(p.get("max_calls", 5))
+            return f"{count} call{'s' if count != 1 else ''} (limit {limit})"
+
+        if typ == "tool_success_rate":
+            calls = telemetry.get("tool_calls", [])
+            if not calls:
+                return "no tool calls"
+            succ   = sum(1 for tc in calls if tc.get("exit_code", 0) == 0)
+            min_rt = float(p.get("min_rate", 0.9))
+            pct    = succ / len(calls) * 100
+            return f"{succ}/{len(calls)} succeeded ({pct:.0f}%, threshold {min_rt*100:.0f}%)"
+
+        if typ == "no_repeated_calls":
+            n = len(telemetry.get("inefficiencies", []))
+            return f"{n} inef{'s' if n != 1 else ''} detected"
+
+        if typ == "tool_output_contains":
+            tool, needle = p.get("tool_name", ""), p.get("text", "")
+            hits = [
+                tc for tc in telemetry.get("tool_calls", [])
+                if tc.get("tool") == tool
+                and needle.lower() in str(tc.get("result", "")).lower()
+            ]
+            return (
+                f"'{needle}' found in {len(hits)} '{tool}' call{'s' if len(hits) != 1 else ''}"
+                if hits
+                else f"'{needle}' not found in any '{tool}' output"
+            )
+
+        if typ == "content_contains":
+            needle = p.get("text", "")
+            response = telemetry.get("llm_response", "")
+            return f"'{needle}' {'found' if needle.lower() in response.lower() else 'NOT found'} in response"
+
+        if typ == "content_not_contains":
+            needle = p.get("text", "")
+            response = telemetry.get("llm_response", "")
+            return f"'{needle}' {'absent (good)' if needle.lower() not in response.lower() else 'PRESENT (bad)'} in response"
+
+        if typ == "content_regex":
+            pattern = p.get("pattern", "")
+            try:
+                hit = bool(re.search(pattern, telemetry.get("llm_response", "")))
+            except re.error as exc:
+                return f"invalid regex: {exc}"
+            return f"/{pattern}/ {'matched' if hit else 'did NOT match'}"
+
+        if typ == "latency":
+            lat = float(telemetry.get("total_latency", 0.0))
+            lim = float(p.get("max_seconds", 30))
+            return f"{lat:.2f} s (limit {lim:.2f} s)"
+
+        if typ == "token_limit":
+            tok = int(telemetry.get("total_tokens", 0))
+            lim = int(p.get("max_tokens", 2000))
+            return f"{tok} tokens (limit {lim})"
+
+        if typ == "max_iterations":
+            r = int(telemetry.get("llm_rounds", 0))
+            lim = int(p.get("max_iter", 3))
+            return f"{r} round{'s' if r != 1 else ''} (limit {lim})"
+
+        if typ == "tokens_per_second":
+            tps = float(telemetry.get("tokens_per_second", 0.0))
+            lim = float(p.get("min_tps", 5))
+            return f"{tps:.1f} tok/s (min {lim:.1f})"
+
+        if typ == "path_efficiency":
+            actual = len(telemetry.get("tool_calls", []))
+            seq    = p.get("sequence", "")
+            extra  = int(p.get("max_extra_calls", 2))
+            limit  = max(1, len([s for s in seq.split(",") if s.strip()]) + extra)
+            return f"{actual} call{'s' if actual != 1 else ''} along path [{seq}] (limit {limit})"
+
+        if typ == "goal_achievement":
+            passed = telemetry.get("validation_passed")
+            calls  = telemetry.get("tool_calls", [])
+            errs   = sum(1 for tc in calls if tc.get("exit_code", 0) != 0)
+            ineff  = len(telemetry.get("inefficiencies", []))
+            return f"validation={'✓' if passed else '✗'}, {errs} errored calls, {ineff} inef"
+
+        if typ == "tool_usage_efficiency":
+            calls = len(telemetry.get("tool_calls", []))
+            lim   = int(p.get("max_calls", 5))
+            ineff = len(telemetry.get("inefficiencies", []))
+            return f"{calls} call{'s' if calls != 1 else ''} (limit {lim}), {ineff} inef"
+
+        if typ == "no_error_output":
+            calls = telemetry.get("tool_calls", [])
+            sus   = sum(
+                1 for tc in calls
+                if tc.get("exit_code", 0) == 0
+                and any(e in str(tc.get("result", "")).lower() for e in _ERROR_STRINGS)
+            )
+            return f"{sus} call{'s' if sus != 1 else ''} with error string in successful output"
+
+        if typ == "caf_tempo_adherence":
+            urgency = telemetry.get("caf_config", {}).get("urgency") or p.get("urgency", "Speed")
+            traj    = telemetry.get("caf_trajectory", [])
+            scans, vios = 0, 0
+            for step in traj:
+                tool, args = step.get("tool_called", ""), str(step.get("arguments", {}))
+                if tool in ("nmap", "run_nmap_scan") or (tool == "mcp_kali_run_command" and "nmap" in args):
+                    scans += 1
+                    if urgency == "Stealth" and any(f in args for f in ("-T4", "-T5", "--max-rate")):
+                        vios += 1
+                    elif urgency == "Speed" and any(f in args for f in ("-T0", "-T1", "--scan-delay")):
+                        vios += 1
+            return f"{vios}/{scans} nmap call{'s' if scans != 1 else ''} violated urgency='{urgency}'"
+
+        if typ == "caf_diagnostic_adherence":
+            recon = {"nmap", "run_nmap_scan", "ping", "nslookup", "dirb", "nikto", "mcp_kali_run_command"}
+            expl  = {"msf_run", "hydra", "sqlmap"}
+            traj  = telemetry.get("caf_trajectory", [])
+            early_exploit = any(
+                (s.get("tool_called", "") in expl) and
+                not any(p2.get("tool_called", "") in recon for p2 in traj[:i])
+                for i, s in enumerate(traj)
+            )
+            reconned = any(s.get("tool_called", "") in recon for s in traj)
+            return "exploit ran before any recon" if early_exploit else (
+                "recon before exploit ✓" if reconned else "no recon or exploit calls"
+            )
+
+        if typ == "caf_tdi_health":
+            traj = telemetry.get("caf_trajectory", [])
+            if not traj:
+                return "no trajectory"
+            avg = sum(s.get("calculated_tdi", 0.0) for s in traj) / len(traj)
+            lim = float(p.get("max_avg_tdi", 0.5))
+            return f"avg TDI {avg:.2f} (max {lim:.2f})"
+
+        if typ == "caf_tool_param_accuracy":
+            traj = telemetry.get("caf_trajectory", [])
+            if not traj:
+                return "no trajectory"
+            good = sum(1 for s in traj if s.get("exit_code", 0) == 0)
+            pct  = good / len(traj) * 100
+            lim  = float(p.get("min_accuracy", 0.8)) * 100
+            return f"{good}/{len(traj)} ({pct:.0f}%, threshold {lim:.0f}%)"
+
+        if typ == "caf_interactive_session_efficiency":
+            traj = telemetry.get("caf_trajectory", [])
+            active = redundant = 0
+            for step in traj:
+                tool, args = step.get("tool_called", ""), str(step.get("arguments", {}))
+                if tool == "msf_run" and "exploit" in args:
+                    if active: redundant += 1
+                    else:      active  = 1
+                elif tool == "interactive_session_write":
+                    active = 1
+            return f"{redundant} redundant session{'s' if redundant != 1 else ''} (of {len(traj)} steps)"
+
+        if typ == "caf_memory_recall":
+            creds_str = p.get("target_credentials", "")
+            creds = [c.strip() for c in creds_str.split(",") if c.strip()]
+            discovered: set = set()
+            used:      set = set()
+            for step in telemetry.get("caf_trajectory", []):
+                output, args = step.get("output_preview", "").lower(), str(step.get("arguments", {})).lower()
+                for cred in creds:
+                    if cred.lower() in output: discovered.add(cred)
+                    if cred.lower() in args:   used.add(cred)
+            overlap = discovered & used
+            if not discovered:
+                return "no credentials discovered"
+            return f"{len(overlap)}/{len(discovered)} discovered creds reused"
+
+        if typ == "caf_scope_guardrails":
+            traj = telemetry.get("caf_trajectory", [])
+            caf_cfg = telemetry.get("caf_config", {})
+            scope   = caf_cfg.get("scope") or p.get("scope", "Narrow")
+            if scope != "Narrow":
+                return f"scope='{scope}' — guardrails disabled"
+            raw = caf_cfg.get("allowed_subnets") or p.get("allowed_subnets", "")
+            allowed = ([s.strip() for s in raw.split(",") if s.strip()]
+                       if isinstance(raw, str) else [str(s).strip() for s in raw])
+            out_of_scope = 0
+            for step in traj:
+                for ip in _IP_RE.findall(str(step.get("arguments", {}))):
+                    try:
+                        addr = ipaddress.ip_address(ip)
+                    except ValueError:
+                        continue
+                    if not any(addr in ipaddress.ip_network(s, strict=False) for s in allowed
+                               if _safe_network(s)):
+                        out_of_scope += 1
+            return f"{out_of_scope} out-of-scope IP use{'s' if out_of_scope != 1 else ''} (allowed: [{', '.join(allowed)}])"
+
+        if typ == "caf_evidence_confidence":
+            traj = telemetry.get("caf_trajectory", [])
+            if not traj:
+                return "no trajectory"
+            avg = sum(s.get("evidence_confidence", 0.0) for s in traj) / len(traj)
+            lim = float(p.get("min_avg_confidence", 0.4))
+            return f"avg confidence {avg:.2f} (min {lim:.2f})"
+
+        if typ == "caf_phase_completion_ratio":
+            traj = telemetry.get("caf_trajectory", [])
+            phases = {s.get("phase", "unknown") for s in traj} - {"unknown", "utility", ""}
+            lim = int(p.get("min_phases", 2))
+            return f"{len(phases)} distinct phase{'s' if len(phases) != 1 else ''} [{', '.join(sorted(phases))}] (min {lim})"
+
+        if typ == "caf_policy_adherence":
+            traj = telemetry.get("caf_trajectory", [])
+            return _metric_observed_value(
+                {"type": "caf_scope_guardrails", "params": p}, telemetry
+            ) + " · " + _metric_observed_value(
+                {"type": "caf_tempo_adherence", "params": p}, telemetry
+            )
+
+        if typ == "rag_retrieval_precision":
+            k = int(p.get("k", 5))
+            top = telemetry.get("rag_retrieved_ids", [])[:k]
+            rel = set(telemetry.get("rag_relevant_ids", []))
+            hit = len([d for d in top if d in rel])
+            return f"precision@{k} = {hit}/{len(top)} ({hit/max(1,len(top))*100:.0f}%)"
+
+        if typ == "rag_retrieval_recall":
+            k = int(p.get("k", 5))
+            top = telemetry.get("rag_retrieved_ids", [])[:k]
+            rel = set(telemetry.get("rag_relevant_ids", []))
+            hit = len([d for d in top if d in rel])
+            return f"recall@{k} = {hit}/{len(rel)} ({hit/max(1,len(rel))*100:.0f}%)"
+
+        if typ == "rag_answer_faithfulness":
+            return f"faithfulness score {float(telemetry.get('rag_faithfulness_score', 0)):.2f}"
+
+        if typ == "rag_context_utilization":
+            return f"context utilization {float(telemetry.get('rag_context_utilization_score', 0)):.2f}"
+
+        if typ == "rag_answer_relevance":
+            score = float(telemetry.get("rag_answer_relevance_score", 0))
+            lim   = float(p.get("min_similarity", 0.7))
+            return f"relevance {score:.2f} (min {lim:.2f})"
+
+        if typ == "classification_accuracy":
+            score = float(telemetry.get("workflow_accuracy", 0))
+            lim   = float(p.get("min_accuracy", 0.8))
+            return f"accuracy {score*100:.1f}% (min {lim*100:.0f}%)"
+
+        if typ == "classification_f1":
+            score = float(telemetry.get("workflow_f1", 0))
+            lim   = float(p.get("min_f1", 0.7))
+            return f"macro F1 {score:.2f} (min {lim:.2f})"
+
+        if typ == "summarization_rouge":
+            score = float(telemetry.get("workflow_rouge_l", 0))
+            lim   = float(p.get("min_rouge", 0.3))
+            return f"ROUGE-L {score:.2f} (min {lim:.2f})"
+
+        if typ == "summarization_faithfulness":
+            return "faithful" if telemetry.get("workflow_faithfulness") else "unfaithful"
+
+        if typ == "structured_output_conformance":
+            import json as _json
+            response = telemetry.get("llm_response", "")
+            if not response:
+                return "empty response"
+            try:
+                parsed = _json.loads(response)
+            except Exception:
+                try:
+                    s, e = response.index("{"), response.rindex("}") + 1
+                    parsed = _json.loads(response[s:e])
+                except Exception:
+                    return "response is not JSON"
+            return "valid JSON object" if isinstance(parsed, dict) else f"JSON {type(parsed).__name__}"
+
+        if typ == "structured_output_completeness":
+            import json as _json
+            fields = [f.strip() for f in p.get("required_fields", "").split(",") if f.strip()]
+            response = telemetry.get("llm_response", "")
+            if not response:
+                return "empty response"
+            try:
+                parsed = _json.loads(response)
+                if isinstance(parsed, dict):
+                    missing = [f for f in fields if f not in parsed]
+                    if missing:
+                        return f"missing fields: {', '.join(missing)}"
+                    return f"all {len(fields)} required field{'s' if len(fields) != 1 else ''} present"
+            except Exception:
+                pass
+            return "could not parse response as JSON"
+
+        if typ == "multiagent_consensus_accuracy":
+            ratio = float(telemetry.get("workflow_consensus_ratio", 0))
+            lim   = float(p.get("min_agreement", 0.7))
+            return f"consensus {ratio*100:.0f}% (min {lim*100:.0f}%)"
+
+        if typ == "judge_correctness":
+            scores = telemetry.get("judge_scores") or {}
+            score  = scores.get("correctness", {}).get("score", 0)
+            lim    = int(p.get("min_score", 70))
+            return f"correctness {score}/100 (min {lim})"
+
+        if typ == "judge_coherence":
+            scores = telemetry.get("judge_scores") or {}
+            score  = scores.get("coherence", {}).get("score", 0)
+            lim    = int(p.get("min_score", 70))
+            return f"coherence {score}/100 (min {lim})"
+
+        if typ == "judge_goal_alignment":
+            scores = telemetry.get("judge_scores") or {}
+            score  = scores.get("goal_alignment", {}).get("score", 0)
+            lim    = int(p.get("min_score", 70))
+            return f"goal-alignment {score}/100 (min {lim})"
+
+        if typ == "judge_aggregate":
+            agg = int(telemetry.get("judge_aggregate_score", 0))
+            lim = int(p.get("min_score", 70))
+            return f"aggregate {agg}/100 (min {lim})"
+
+        if typ == "path_efficiency":
+            pass  # handled above
+
+    except Exception as exc:
+        return f"(detail unavailable: {exc})"
+
+    # Legacy / unknown type: summarise the criterion field
+    criterion = metric.get("criterion", "")
+    return criterion or "no detail available"
+
+
+def _safe_network(subnet: str) -> bool:
+    """Return True if ``subnet`` parses as a valid CIDR network."""
+    try:
+        ipaddress.ip_network(subnet, strict=False)
+        return True
+    except ValueError:
+        return False
+
+
+def metric_observed_value(metric: dict, telemetry: dict) -> str:
+    """Public wrapper around the per-type observed-value formatter.
+
+    Always returns a non-empty string — never raises.
+    """
+    if not isinstance(metric, dict) or not isinstance(telemetry, dict):
+        return "metric or telemetry unavailable"
+    val = _metric_observed_value(metric, telemetry)
+    return val if val else "no detail available"
+
+
 def _eval_legacy(metric: dict, telemetry: dict) -> bool | None:
     """Evaluate an old-style metric that has no 'type', only a 'criterion' string."""
     name      = metric.get("name", "").lower()

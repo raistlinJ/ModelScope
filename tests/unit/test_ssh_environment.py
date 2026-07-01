@@ -7,6 +7,7 @@ command string it was asked to run. The load-bearing behaviour under test is
 the `cd {remote_cwd} && {exports} {command}` wrapping and env-var quoting.
 """
 import pytest
+from unittest.mock import MagicMock
 from core.environment import SSHEnvironment, LocalEnvironment, BaseEnvironment
 
 
@@ -90,10 +91,13 @@ class TestExecuteCommandConstruction:
         # shlex.quote wraps values containing spaces / quotes
         assert "'a b'\"'\"'c'" in fake.last_command
 
-    def test_no_exports_when_no_env_vars(self, ssh):
+    def test_always_exports_term_when_no_env_vars(self, ssh):
         env, fake = ssh
         env.execute("whoami")
-        assert "export" not in fake.last_command
+        # execute() always injects TERM=xterm to suppress ncurses noise
+        assert "export TERM=" in fake.last_command
+        # No caller-supplied vars should appear
+        assert "API_KEY" not in fake.last_command
 
     def test_returns_decoded_streams(self, ssh):
         env, _ = ssh
@@ -107,6 +111,27 @@ class TestExecuteCommandConstruction:
         result = env.execute("ls")
         assert result["exit_code"] == -1
         assert "boom" in result["stderr"]
+
+
+# ── Connection lifecycle ──────────────────────────────────────────────────────
+
+def test_close_suppresses_exception():
+    env = SSHEnvironment(host="x", remote_cwd="/tmp")
+    mock_client = MagicMock()
+    mock_client.close.side_effect = RuntimeError("connection reset")
+    env._client = mock_client
+    env._sftp = None
+    env.close()  # must not raise
+    assert env._client is None
+
+
+def test_close_clears_both_connections():
+    env = SSHEnvironment(host="x", remote_cwd="/tmp")
+    env._client = MagicMock()
+    env._sftp = MagicMock()
+    env.close()
+    assert env._client is None
+    assert env._sftp is None
 
 
 # ── Properties ────────────────────────────────────────────────────────────────

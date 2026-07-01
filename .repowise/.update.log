@@ -1,0 +1,48 @@
+
+--- post-commit hook fired at Tue Jun 30 01:14:39 PM MDT 2026 for HEAD d0557efeafcdd9ee1f3d1c30074fb28cf14cb4f4 ---
+repowise update · ModelScope2.1
+132b3126..d0557efe
+Config files changed — re-running health analysis.
+2026-06-30 13:14:40 [info     ] FileTraverser initialised      extra_exclude_patterns=0 include_nested_repos=False max_file_size_kb=500 repo_root=/home/dsch/Projects/SPARK/ModelScope2.0/ModelScope2.1 submodules_skipped=0
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/duplication_cache.pkl size_kb=5011
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/parse_cache.pkl size_kb=1431
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/wiki.db size_kb=10896
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=Resources/Improving Evaluation of Autonomous Cybersecurity Agents through Prompt and Execution Trace Analysis - AI Analysis.pptx size_kb=2516
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=Resources/Pasted image.png size_kb=530
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/duplication_cache.pkl size_kb=5011
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/parse_cache.pkl size_kb=1431
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=.repowise/wiki.db size_kb=10896
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=Resources/Improving Evaluation of Autonomous Cybersecurity Agents through Prompt and Execution Trace Analysis - AI Analysis.pptx size_kb=2516
+2026-06-30 13:14:40 [debug    ] Skipping oversized file        path=Resources/Pasted image.png size_kb=530
+2026-06-30 13:14:41 [info     ] import_resolution_per_language seconds={'json': 0.0, 'markdown': 0.0, 'python': 0.0, 'shell': 0.0, 'toml': 0.0, 'yaml': 0.0, 'javascript': 0.0}
+2026-06-30 13:14:41 [info     ] Heritage edges resolved        total=2
+2026-06-30 13:14:41 [info     ] Call edges resolved            total=3055
+2026-06-30 13:14:41 [info     ] Graph built                    edge_types={'defines': 2416, 'imports': 222, 'calls': 3055, 'has_method': 1363, 'extends': 2} edges=7058 file_nodes=145 symbol_nodes=2416
+2026-06-30 13:14:41 [info     ] Framework edges added          count=62
+Framework edges added: 62
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=dotnet
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=xaml
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=ruby
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=jvm
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=node_package
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=django_settings
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=scala
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=swift
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=c
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=cpp
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=luau
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=spring
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=php
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=go
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=rust
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=alpine
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=1 extractor=pytest_conftest
+2026-06-30 13:14:42 [debug    ] dynamic_hints                  count=0 extractor=python_dynamic_import
+Dynamic hint edges added: 1
+2026-06-30 13:14:43 [info     ] file_communities_detected      algorithm=louvain communities=33 prod_files=82 test_files=63 total_files=145
+2026-06-30 13:14:43 [info     ] symbol_communities_detected    communities=409 connected=2063 total_symbols=2416
+2026-06-30 13:14:46 [info     ] execution_flows_traced         candidates_scored=76 deduplicated=0 traced=42
+2026-06-30 13:14:48 [debug    ] duplication_token_cache        hits=120 misses=15
+2026-06-30 13:14:48 [debug    ] health_duplication_limits      degenerate_buckets=0 files_considered=136 files_tokenized=106 skipped_minified=1 skipped_token_cap=0 skipped_unreadable=0 timed_out=False total_windows=213451 window_budget_hit=False
+Health re-score: 136 files, 621 findings
+Config-triggered health re-score complete in 19.2s

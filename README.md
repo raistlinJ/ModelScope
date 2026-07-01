@@ -93,12 +93,20 @@ git clone <repo-url>
 cd ModelScope2.0/ModelScope
 
 # 2. Install Python runtime dependencies
+# Using uv (recommended)
+uv sync
+
+# Or using standard pip
 pip install -r requirements.txt
 
 # 3. Install MCP server dependencies (skip if not using MCP tools)
 cd mcp-server && npm install && cd ..
 
 # 4. Optional: install as an editable package to get the `modelscope` CLI command
+# Using uv
+uv pip install -e .
+
+# Or using standard pip
 pip install -e .
 
 # 5. Configure local paths (also editable from the UI Configuration tab)
@@ -119,7 +127,10 @@ All commands in this README assume the working directory is `ModelScope/`. Modul
 ### Path 1 — Streamlit GUI
 
 ```bash
-# Start ModelScope
+# Start ModelScope using uv
+uv run streamlit run app.py
+
+# Or using standard python/pip
 streamlit run app.py
 # Opens at http://localhost:8501
 

@@ -66,7 +66,7 @@ def stop_mcp() -> tuple[bool, str]:
 
 
 def load_tools_from_json(mcp_dir: str) -> list[dict]:
-    """Read tools from tools.json. Returns list of {name, description} dicts."""
+    """Read tools from tools.json. Returns list of {name, description, server} dicts."""
     path = os.path.join(mcp_dir, "tools.json")
     if not os.path.exists(path):
         return []
@@ -74,12 +74,18 @@ def load_tools_from_json(mcp_dir: str) -> list[dict]:
         with open(path) as fh:
             data = json.load(fh)
         if isinstance(data, list):
+            tools_raw = [t for t in data if isinstance(t, dict) and "name" in t]
             return [
-                {"name": t["name"], "description": t.get("description", "")}
-                for t in data if isinstance(t, dict) and "name" in t
+                {
+                    "name": t.get("name", ""),
+                    "description": t.get("description", ""),
+                    "server": t.get("server", "custom"),
+                }
+                for t in tools_raw
+                if t.get("name")
             ]
         if isinstance(data, dict):
-            return [{"name": k, "description": ""} for k in data]
+            return [{"name": k, "description": "", "server": "custom"} for k in data]
     except Exception:
         pass
     return []
@@ -87,10 +93,17 @@ def load_tools_from_json(mcp_dir: str) -> list[dict]:
 
 # ── JSON-RPC session helper ───────────────────────────────────────────────────
 
+_MCP_ACCEPT = {"Accept": "application/json, text/event-stream"}
+
+
 def _mcp_rpc_session(base_url: str, timeout: float = 1.0) -> tuple[bool, dict]:
     """
     Open a JSON-RPC 2.0 session with the MCP server.
     Returns (ok, headers) where headers contains the session-id if provided.
+
+    The MCP SDK's streamable-HTTP transport requires the Accept header below;
+    without it the server returns HTTP 406 and every tool call silently falls
+    through to the local Python fallback.
     """
     try:
         resp = requests.post(
@@ -103,12 +116,13 @@ def _mcp_rpc_session(base_url: str, timeout: float = 1.0) -> tuple[bool, dict]:
                     "clientInfo": {"name": "spark-eval", "version": "1.0"},
                 },
             },
+            headers=_MCP_ACCEPT,
             timeout=timeout,
         )
         if not resp.ok:
             return False, {}
         session_id = resp.headers.get("mcp-session-id", "")
-        headers    = {"mcp-session-id": session_id} if session_id else {}
+        headers    = {**_MCP_ACCEPT, "mcp-session-id": session_id} if session_id else dict(_MCP_ACCEPT)
         requests.post(
             f"{base_url}/message",
             json={"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -120,6 +134,17 @@ def _mcp_rpc_session(base_url: str, timeout: float = 1.0) -> tuple[bool, dict]:
         return False, {}
 
 
+def probe_mcp_server(base_url: str = MCP_SERVER_BASE_URL) -> bool:
+    """Return True if the MCP broker at *base_url* is reachable and ready.
+
+    Uses the JSON-RPC initialize handshake instead of a dummy tool call so the
+    probe never returns False because the tool name didn't exist — it fails only
+    when the server is genuinely unreachable or rejects the session.
+    """
+    ok, _ = _mcp_rpc_session(base_url, timeout=2.0)
+    return ok
+
+
 def fetch_tools_from_server(base_url: str = MCP_SERVER_BASE_URL) -> list[str]:
     """Ask the running MCP server for its tool list via JSON-RPC."""
     ok, headers = _mcp_rpc_session(base_url, timeout=1.0)
@@ -129,7 +154,7 @@ def fetch_tools_from_server(base_url: str = MCP_SERVER_BASE_URL) -> list[str]:
         resp = requests.post(
             f"{base_url}/message",
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-            headers=headers,
+            headers={**_MCP_ACCEPT, **headers},
             timeout=1,
         )
         if not resp.ok:

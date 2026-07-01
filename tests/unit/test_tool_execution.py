@@ -119,3 +119,49 @@ class TestUnknownTool:
         env.execute.assert_not_called()
         env.write_file.assert_not_called()
         env.delete_file.assert_not_called()
+
+
+# ── write_file (filesystem server fallback) ────────────────────────────────────
+
+class TestWriteFileFallback:
+    def test_calls_env_write_file(self):
+        env = _env()
+        result = _execute_tool_in_env(env, "write_file",
+                                       {"path": "/tmp/f.txt", "content": "hello"})
+        env.write_file.assert_called_once_with("/tmp/f.txt", "hello")
+        assert result == {"status": "success", "bytes_written": 5}
+
+    def test_missing_args_use_defaults(self):
+        env = _env()
+        _execute_tool_in_env(env, "write_file", {})
+        env.write_file.assert_called_once_with("", "")
+
+    def test_error_propagated(self):
+        env = _env(write_result={"error": "disk full"})
+        result = _execute_tool_in_env(env, "write_file",
+                                       {"path": "/tmp/f.txt", "content": "x"})
+        assert "error" in result
+
+
+# ── read_file (filesystem server fallback) ─────────────────────────────────────
+
+class TestReadFileFallback:
+    def test_calls_env_read_file_and_returns_content(self):
+        env = _env()
+        env.read_file = MagicMock(return_value="file content here")
+        result = _execute_tool_in_env(env, "read_file", {"path": "/tmp/f.txt"})
+        env.read_file.assert_called_once_with("/tmp/f.txt")
+        assert result == {"content": "file content here"}
+
+    def test_missing_path_uses_empty_string(self):
+        env = _env()
+        env.read_file = MagicMock(return_value="")
+        _execute_tool_in_env(env, "read_file", {})
+        env.read_file.assert_called_once_with("")
+
+    def test_exception_returns_error_dict(self):
+        env = _env()
+        env.read_file = MagicMock(side_effect=FileNotFoundError("no such file"))
+        result = _execute_tool_in_env(env, "read_file", {"path": "/missing"})
+        assert "error" in result
+        assert "no such file" in result["error"]

@@ -4,6 +4,7 @@ Finds available models for each backend: GGUF files on disk for llama.cpp and
 the model list served by a running Ollama/llama.cpp HTTP endpoint. Returns plain
 metadata; it does not start servers (that is core.llama_server) or run inference.
 """
+import json
 import os
 import subprocess
 import sys
@@ -71,6 +72,153 @@ def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
         return [], f"Timed out connecting to {url}"
     except Exception as e:
         return [], str(e)
+
+
+def get_ollama_status(base_url: str) -> dict:
+    """Return {running: bool, version: str, error: str} by probing the Ollama service.
+
+    Uses /api/version for a JSON version string.  Falls back gracefully — a 200
+    response without JSON still counts as running (plain-text "Ollama is running").
+    """
+    url = ensure_http_scheme(base_url)
+    if not url:
+        return {"running": False, "version": "", "error": "Server URL is empty."}
+    try:
+        resp = requests.get(url.rstrip("/") + "/api/version", timeout=5)
+        if resp.status_code == 200:
+            try:
+                version = resp.json().get("version", "")
+            except Exception:
+                version = ""
+            return {"running": True, "version": version, "error": ""}
+        return {
+            "running": False,
+            "version": "",
+            "error": f"HTTP {resp.status_code} from {url}",
+        }
+    except requests.exceptions.MissingSchema:
+        return {"running": False, "version": "", "error": f"Invalid URL (missing scheme): {url}"}
+    except requests.exceptions.ConnectionError:
+        return {"running": False, "version": "", "error": f"Cannot connect to {url} — is Ollama running?"}
+    except requests.exceptions.Timeout:
+        return {"running": False, "version": "", "error": f"Timed out connecting to {url}"}
+    except Exception as e:
+        return {"running": False, "version": "", "error": str(e)}
+
+
+def get_ollama_running_models(base_url: str) -> tuple[list[dict], str]:
+    """Return ([{name, size_gb, expires_at}], error_str) from Ollama /api/ps."""
+    url = ensure_http_scheme(base_url)
+    if not url:
+        return [], "Server URL is empty."
+    try:
+        resp = requests.get(url.rstrip("/") + "/api/ps", timeout=5)
+        resp.raise_for_status()
+        models = []
+        for m in resp.json().get("models", []):
+            models.append({
+                "name":       m.get("name", ""),
+                "size_gb":    round(m.get("size", 0) / 1e9, 1),
+                "expires_at": m.get("expires_at", ""),
+            })
+        return models, ""
+    except requests.exceptions.MissingSchema:
+        return [], f"Invalid URL (missing scheme): {url}"
+    except requests.exceptions.ConnectionError:
+        return [], f"Cannot connect to {url} — is Ollama running?"
+    except requests.exceptions.Timeout:
+        return [], f"Timed out connecting to {url}"
+    except Exception as e:
+        return [], str(e)
+
+
+def pull_ollama_model(base_url: str, model_name: str, on_log=None) -> tuple[bool, str]:
+    """Pull a model via streaming /api/pull.  Calls on_log(str) for each progress line.
+
+    Returns (success, message).
+    """
+    url = ensure_http_scheme(base_url)
+    if not url:
+        return False, "Server URL is empty."
+    model_name = model_name.strip()
+    if not model_name:
+        return False, "Model name is required."
+
+    def _log(msg: str) -> None:
+        if on_log:
+            on_log(msg)
+
+    try:
+        resp = requests.post(
+            url.rstrip("/") + "/api/pull",
+            json={"name": model_name},
+            stream=True,
+            timeout=600,
+        )
+        resp.raise_for_status()
+
+        last_status = ""
+        for raw_line in resp.iter_lines():
+            if not raw_line:
+                continue
+            try:
+                data = json.loads(raw_line)
+            except json.JSONDecodeError:
+                _log(raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line)
+                continue
+
+            if "error" in data:
+                return False, data["error"]
+
+            status = data.get("status", "")
+            completed = data.get("completed")
+            total = data.get("total")
+            if completed is not None and total and total > 0:
+                pct = round(completed / total * 100, 1)
+                line = f"{status}  {pct}%  ({round(completed / 1e6, 1)} / {round(total / 1e6, 1)} MB)"
+            else:
+                line = status
+            if line:
+                _log(line)
+                last_status = status
+
+        return True, f"Pull complete: {model_name}"
+    except requests.exceptions.MissingSchema:
+        return False, f"Invalid URL (missing scheme): {url}"
+    except requests.exceptions.ConnectionError:
+        return False, f"Cannot connect to {url} — is Ollama running?"
+    except requests.exceptions.Timeout:
+        return False, f"Timed out pulling {model_name}"
+    except Exception as e:
+        return False, str(e)
+
+
+def delete_ollama_model(base_url: str, model_name: str) -> tuple[bool, str]:
+    """Delete a pulled Ollama model.  Returns (success, message)."""
+    url = ensure_http_scheme(base_url)
+    if not url:
+        return False, "Server URL is empty."
+    model_name = model_name.strip()
+    if not model_name:
+        return False, "Model name is required."
+    try:
+        resp = requests.delete(
+            url.rstrip("/") + "/api/delete",
+            json={"name": model_name},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return True, f"Deleted: {model_name}"
+    except requests.exceptions.MissingSchema:
+        return False, f"Invalid URL (missing scheme): {url}"
+    except requests.exceptions.ConnectionError:
+        return False, f"Cannot connect to {url} — is Ollama running?"
+    except requests.exceptions.Timeout:
+        return False, f"Timed out deleting {model_name}"
+    except requests.exceptions.HTTPError as e:
+        return False, f"HTTP error: {e}"
+    except Exception as e:
+        return False, str(e)
 
 
 def fetch_llama_cpp_models(base_url: str) -> tuple[list[dict], str]:

@@ -9,6 +9,38 @@ from __future__ import annotations
 import streamlit as st
 
 
+def _test_local_connection() -> None:
+    """Attempt a probe command locally."""
+    from core.environment import LocalEnvironment
+    try:
+        env = LocalEnvironment()
+        res = env.execute("echo ok")
+        if res["exit_code"] == 0 and "ok" in res["stdout"]:
+            st.success("Local execution working successfully.")
+        else:
+            st.warning(f"Unexpected response: {res!r}")
+    except Exception as exc:
+        st.error(f"Local execution failed: {exc}")
+
+
+def _test_pct_connection() -> None:
+    """Attempt a probe command in the specified PCT container."""
+    from core.environment import LocalEnvironment, PCTEnvironment
+    vmid = (st.session_state.get("target_pct_vmid") or "").strip()
+    if not vmid:
+        st.error("VMID is required.")
+        return
+    try:
+        env = PCTEnvironment(vmid, LocalEnvironment())
+        res = env.execute("echo ok")
+        if res["exit_code"] == 0 and "ok" in res["stdout"]:
+            st.success(f"Connected to PCT container {vmid}")
+        else:
+            st.warning(f"Connected but unexpected response: {res!r}")
+    except Exception as exc:
+        st.error(f"PCT connection failed: {exc}")
+
+
 def _test_ssh_connection() -> None:
     """Attempt a probe connection and show success or error inline."""
     import paramiko
@@ -58,17 +90,31 @@ def render() -> None:
 
     # Canonical selectbox — keeps value space as "local" / "remote (SSH)" to
     # match all consumers (execute_tab.py:176,281 / batch_tab.py:129 / comparison_tab.py:20).
-    st.selectbox(
+    st.radio(
         "Execution Mode",
-        options=["local", "remote (SSH)"],
-        format_func=lambda v: "Local" if v == "local" else "Remote (SSH)",
+        options=["local", "remote (SSH)", "pct (Proxmox LXC)"],
+        format_func=lambda v: {"local": "Local", "remote (SSH)": "Remote (SSH)", "pct (Proxmox LXC)": "PCT (Proxmox LXC)"}.get(v, v),
         key="target_env_type",
         help="Where evaluation commands and CAF will execute.",
+        horizontal=True,
     )
 
     target_env = st.session_state.get("target_env_type", "local")
 
-    if target_env == "remote (SSH)":
+    if target_env == "pct (Proxmox LXC)":
+        st.divider()
+        st.subheader("LXC Container ID (VMID)")
+        st.text_input(
+            "VMID",
+            key="target_pct_vmid",
+            placeholder="100",
+            help="The numeric ID of the Proxmox container.",
+        )
+        col_test, _ = st.columns([2, 5])
+        with col_test:
+            if st.button("Test Connection", key="btn_test_pct_target", use_container_width=True, help="Verify execution in the PCT container"):
+                _test_pct_connection()
+    elif target_env == "remote (SSH)":
         st.divider()
         st.subheader("SSH Credentials")
         st.caption("Credentials for the remote Kali Linux machine running CyberAgentFlow.")
@@ -87,6 +133,7 @@ def render() -> None:
                 key="target_ssh_port",
                 min_value=1,
                 max_value=65535,
+                value=22,
                 step=1,
                 help="SSH port on the remote machine (usually 22)",
             )
@@ -156,3 +203,7 @@ def render() -> None:
             "Running locally on this machine. "
             "Switch to **Remote (SSH)** above to target a Kali Linux VM."
         )
+        col_test, _ = st.columns([2, 5])
+        with col_test:
+            if st.button("Test Local Execution", key="btn_test_local_target", use_container_width=True, help="Verify local execution"):
+                _test_local_connection()

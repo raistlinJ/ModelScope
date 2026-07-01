@@ -240,6 +240,8 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
                         help="Remote SSH password.")
     parser.add_argument("--ssh-key-path", dest="ssh_key_path", default=None,
                         help="Path to SSH private key.")
+    parser.add_argument("--pct-vmid", dest="pct_vmid", default=None,
+                        help="Proxmox container VMID (enables PCT execution mode).")
     parser.add_argument(
         "--ssh-caf-dir",
         dest="ssh_caf_dir",
