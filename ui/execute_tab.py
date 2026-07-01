@@ -54,6 +54,25 @@ def _get_active_project() -> dict | None:
     return None
 
 
+def _clean_steps(steps_list: list) -> list:
+    import copy
+    cleaned = []
+    for step in steps_list:
+        if not isinstance(step, dict):
+            if isinstance(step, str) and step.strip():
+                cleaned.append(step)
+            continue
+        new_step = copy.deepcopy(step)
+        new_step["commands"] = [
+            c for c in new_step.get("commands", [])
+            if (isinstance(c, dict) and c.get("command", "").strip()) or
+               (isinstance(c, str) and c.strip())
+        ]
+        if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
+            cleaned.append(new_step)
+    return cleaned
+
+
 def _get_selected_validation_sets(cfg: dict) -> list:
     """Return a filtered deep-copy of cfg['validation_sets'] based on execute-tab checkboxes.
 
@@ -66,6 +85,7 @@ def _get_selected_validation_sets(cfg: dict) -> list:
         if not st.session_state.get(f"bash_exec_vset_{idx}_selected", True):
             continue
         vset_copy = copy.deepcopy(vset)
+        vset_copy["steps"] = _clean_steps(vset_copy.get("steps", []))
         for sidx, step in enumerate(vset_copy.get("steps", [])):
             for cidx, cmd_obj in enumerate(step.get("commands", [])):
                 key = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
@@ -155,17 +175,20 @@ def _run_bash_bot(project: dict) -> None:
             _render_terminal(log_placeholder, logs)
             _last_render[0] = now
 
-    if cfg.get("execution_target") == "ssh":
-        env = SSHEnvironment(
-            host=cfg.get("ssh_host", ""),
-            port=int(cfg.get("ssh_port", 22)),
-            username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
-            key_path=cfg.get("ssh_key_path") or None,
-            remote_cwd=".",  # bash-bot: stay in the login shell's default directory
-        )
-    else:
-        env = LocalEnvironment()
+    from core.environment import create_environment
+    tgt = cfg.get("execution_target", "local")
+    is_ssh = tgt == "ssh"
+    
+    env = create_environment(
+        ssh=is_ssh,
+        host=cfg.get("ssh_host", ""),
+        port=int(cfg.get("ssh_port") or 22),
+        username=cfg.get("ssh_user", "root"),
+        password=cfg.get("ssh_password") or None,
+        key_path=cfg.get("ssh_key_path") or None,
+        remote_cwd=".",  # bash-bot: stay in the login shell's default directory
+        pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
+    )
 
     bash_config = {
         "startup_commands":    cfg.get("startup_commands", []),
@@ -238,7 +261,11 @@ def _render_bash_execute(project: dict) -> None:
                     _startup_open = st.session_state.get("bash_exec_startup_expanded", True)
                     col_title_a, col_tog_a = st.columns([9, 1])
                     with col_title_a:
-                        st.markdown("**Startup & Completion**")
+                        target = cfg.get("execution_target", "local")
+                        ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
+                        target_str = f"Target: {target.upper()}{ssh_info}"
+                        timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
+                        st.markdown(f"**Startup & Completion** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
                     with col_tog_a:
                         if st.button("▼" if _startup_open else "▶",
                                      key="btn_bash_exec_startup_toggle",
@@ -246,15 +273,10 @@ def _render_bash_execute(project: dict) -> None:
                             st.session_state["bash_exec_startup_expanded"] = not _startup_open
                             st.rerun()
                     if _startup_open:
-                        target = cfg.get("execution_target", "local")
-                        st.write(f"**Target:** {target.upper()}")
-                        if target == "ssh":
-                            st.write(f"**SSH:** `{cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)}`")
-                        st.write(f"**Timeout:** {cfg.get('bash_timeout', 60)}s")
-                        st.markdown("**Startup:**")
-                        _render_step_list_readonly(cfg.get("startup_commands", []), "startup")
-                        st.markdown("**Completion:**")
-                        _render_step_list_readonly(cfg.get("completion_commands", []), "completion")
+                        with st.expander("**Startup**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
+                        with st.expander("**Completion**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
             # ── Right: Validation Steps ────────────────────────────────────
             with col_b:
@@ -270,35 +292,7 @@ def _render_bash_execute(project: dict) -> None:
                             st.session_state["bash_exec_validation_expanded"] = not _val_open
                             st.rerun()
                     if _val_open:
-                        # Save Validation set row
-                        col_pname, col_psave = st.columns([4, 1])
-                        with col_pname:
-                            _pname = st.text_input(
-                                "validation_set_name", label_visibility="collapsed",
-                                placeholder="Validation set name…", key="bash_exec_validation_set_name",
-                            )
-                        with col_psave:
-                            if st.button("Save", key="btn_bash_exec_save_validation_set",
-                                         use_container_width=True,
-                                         disabled=not _pname.strip()):
-                                _save_bash_validation_validation_set(project, _pname.strip())
-                        # Load validation_set row
-                        _user_validation_sets = list(cfg.get("validation_validation_sets", {}).keys())
-                        col_psel, col_pload = st.columns([4, 1])
-                        with col_psel:
-                            _validation_set_options = ["— select validation_set —"] + _user_validation_sets
-                            _validation_set_sel = st.selectbox(
-                                "load_validation_set", _validation_set_options,
-                                label_visibility="collapsed",
-                                key="bash_exec_load_validation_set_sel",
-                            )
-                        with col_pload:
-                            if st.button("Load", key="btn_bash_exec_load_validation_set",
-                                         use_container_width=True,
-                                         disabled=(_validation_set_sel == "— select validation_set —")):
-                                _load_bash_validation_validation_set(project, _validation_set_sel)
-
-                        st.divider()
+                        # Validation set list
 
                         # Validation set list
                         val_sets = cfg.get("validation_sets", [])
@@ -307,66 +301,55 @@ def _render_bash_execute(project: dict) -> None:
                         else:
                             for idx, vset in enumerate(val_sets):
                                 set_sel_key = f"bash_exec_vset_{idx}_selected"
-                                set_exp_key = f"bash_exec_vset_{idx}_expanded"
                                 set_selected = st.session_state.get(set_sel_key, True)
-                                set_expanded = st.session_state.get(set_exp_key, False)
 
-                                col_chk, col_lbl, col_exp = st.columns([1, 8, 1])
-                                with col_chk:
+                                desc = vset.get("description", "")
+                                label_md = f"**{idx + 1}. {vset['name']}**"
+                                if desc:
+                                    label_md += f" — {desc}"
+
+                                with st.expander(label_md, expanded=set_selected):
                                     new_sel = st.checkbox(
-                                        "", value=set_selected,
+                                        "Enable this Validation Set", value=set_selected,
                                         key=f"bash_exec_vset_{idx}_chk",
-                                        label_visibility="collapsed",
                                     )
                                     if new_sel != set_selected:
                                         st.session_state[set_sel_key] = new_sel
-                                with col_lbl:
-                                    desc = vset.get("description", "")
-                                    label_md = f"**{idx + 1}. {vset['name']}**"
-                                    if desc:
-                                        label_md += f" — {desc}"
-                                    st.markdown(label_md)
-                                with col_exp:
-                                    exp_icon = "▲" if set_expanded else "▼"
-                                    if st.button(exp_icon, key=f"btn_bash_exec_vset_{idx}_toggle",
-                                                 use_container_width=True):
-                                        st.session_state[set_exp_key] = not set_expanded
                                         st.rerun()
 
-                                if set_expanded:
-                                    with st.container(border=False):
-                                        for sidx, step in enumerate(vset.get("steps", [])):
-                                            delay = step.get("delay_seconds", 0)
-                                            dstr  = f" ({delay}s delay)" if delay > 0 else ""
-                                            st.caption(f"Step {sidx + 1}{dstr}:")
-                                            for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                                                cmd_text = cmd_obj.get("command", "")
-                                                if not cmd_text:
-                                                    continue
-                                                cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
-                                                cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
-                                                exp_type = cmd_obj.get("expected_output_type", "Ignore")
-                                                exp_out  = cmd_obj.get("expected_output", "")
-                                                hint = ""
-                                                if exp_type != "Ignore" and exp_out:
-                                                    short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
-                                                    hint = f"  # expect {exp_type.lower()}: {short}"
+                                    for sidx, step in enumerate(vset.get("steps", [])):
+                                        delay = step.get("delay_seconds", 0)
+                                        dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                        st.caption(f"Step {sidx + 1}{dstr}:")
+                                        for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                            cmd_text = cmd_obj.get("command", "")
+                                            if not cmd_text:
+                                                continue
+                                            cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                            cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                            exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                            exp_out  = cmd_obj.get("expected_output", "")
+                                            hint = ""
+                                            if exp_type != "Ignore" and exp_out:
+                                                short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                                hint = f"  # expect {exp_type.lower()}: {short}"
 
-                                                col_cc, col_cl = st.columns([1, 10])
-                                                with col_cc:
-                                                    new_cmd_sel = st.checkbox(
-                                                        "", value=cmd_sel,
-                                                        key=f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
-                                                        label_visibility="collapsed",
-                                                    )
-                                                    if new_cmd_sel != cmd_sel:
-                                                        st.session_state[cmd_key] = new_cmd_sel
-                                                with col_cl:
-                                                    display = cmd_text + hint if hint else cmd_text
-                                                    if cmd_sel:
-                                                        st.code(display, language="bash")
-                                                    else:
-                                                        st.markdown(f"~~`{display}`~~ *(skipped)*")
+                                            col_cc, col_cl = st.columns([1, 10])
+                                            with col_cc:
+                                                new_cmd_sel = st.checkbox(
+                                                    f"Enable command {cidx+1} in step {sidx+1}", value=cmd_sel,
+                                                    key=f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                    label_visibility="collapsed",
+                                                    disabled=not set_selected,
+                                                )
+                                                if new_cmd_sel != cmd_sel:
+                                                    st.session_state[cmd_key] = new_cmd_sel
+                                            with col_cl:
+                                                display = cmd_text + hint if hint else cmd_text
+                                                if cmd_sel and set_selected:
+                                                    st.code(display, language="bash")
+                                                else:
+                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
 
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
@@ -450,17 +433,20 @@ def _run_llama_cli_bot(project: dict) -> None:
             _render_terminal(log_placeholder, logs)
             _last_render[0] = now
 
-    if cfg.get("execution_target") == "ssh":
-        env = SSHEnvironment(
-            host=cfg.get("ssh_host", ""),
-            port=int(cfg.get("ssh_port", 22)),
-            username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
-            key_path=cfg.get("ssh_key_path") or None,
-            remote_cwd=".",
-        )
-    else:
-        env = LocalEnvironment()
+    from core.environment import create_environment
+    tgt = cfg.get("execution_target", "local")
+    is_ssh = tgt == "ssh"
+
+    env = create_environment(
+        ssh=is_ssh,
+        host=cfg.get("ssh_host", ""),
+        port=int(cfg.get("ssh_port") or 22),
+        username=cfg.get("ssh_user", "root"),
+        password=cfg.get("ssh_password") or None,
+        key_path=cfg.get("ssh_key_path") or None,
+        remote_cwd=".",
+        pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
+    )
 
     llama_config = {
         "backend":             cfg.get("backend", "llama.cpp"),
@@ -940,6 +926,7 @@ def render() -> None:
             from core.environment import create_environment
             env_type = st.session_state.get("target_env_type", "local")
             is_ssh = env_type == "remote (SSH)"
+            is_pct = env_type == "pct (Proxmox LXC)"
             env = None
             try:
                 env = create_environment(
@@ -950,8 +937,11 @@ def render() -> None:
                     password=st.session_state.get("target_ssh_password"),
                     key_path=st.session_state.get("target_ssh_key_path"),
                     remote_cwd=st.session_state.get("target_ssh_caf_dir") or "",
+                    pct_vmid=st.session_state.get("target_pct_vmid") if is_pct else None,
                 )
-                if is_ssh:
+                if is_pct:
+                    on_log(f"[INIT] Target: PCT (VMID: {st.session_state.get('target_pct_vmid', '?')}) via SSH/Local")
+                elif is_ssh:
                     on_log(
                         f"[INIT] Target: SSH "
                         f"({st.session_state.get('target_ssh_user', 'root')}@"
@@ -962,7 +952,7 @@ def render() -> None:
 
                 # Make the dispatch mode explicit rather than relying on the
                 # evaluator to sniff the environment type.
-                config["execution_mode"] = "caf_ssh" if is_ssh else "local"
+                config["execution_mode"] = "pct" if is_pct else ("caf_ssh" if is_ssh else "local")
                 telemetry = run_evaluation(env, config, on_log)
             except Exception as exc:
                 on_log(f"[ERROR] Evaluation failed: {exc}")

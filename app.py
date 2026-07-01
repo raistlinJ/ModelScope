@@ -242,32 +242,7 @@ with st.sidebar:
             st.session_state["active_project_id"] = _proj["id"]
             st.rerun()
 
-    st.divider()
-    _undo_stack = st.session_state.get("_undo_stack", [])
-    _has_undo   = bool(_undo_stack)
-    _undo_lbl   = f"↩ Undo: {_undo_stack[-1]['desc']}" if _has_undo else "↩ Undo"
-    if st.button(_undo_lbl, key="btn_undo", disabled=not _has_undo, use_container_width=True,
-                 help="Undo the last structural change (Ctrl-Z / Cmd-Z)"):
-        _apply_undo()
 
-    if _has_undo:
-        st.html("""
-        <script>
-        (function() {
-          if (window._msUndoListenerAttached) return;
-          window._msUndoListenerAttached = true;
-          document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-              var btns = parent.document.querySelectorAll('button');
-              for (var i = 0; i < btns.length; i++) {
-                var t = btns[i].innerText || '';
-                if (t.startsWith('↩')) { btns[i].click(); e.preventDefault(); return; }
-              }
-            }
-          });
-        })();
-        </script>
-        """)
 
     if st.button("💾 Save Settings", key="btn_save_settings", use_container_width=True,
                  help="Save current configuration to ~/.modelscope/settings.json"):

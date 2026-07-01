@@ -335,6 +335,10 @@ def _run_validation_sets(
         set_desc = vset.get("description", "")
         on_log(f"[VALIDATE SET] Starting set: {set_name} ({set_desc})")
 
+        if not vset.get("enabled", True):
+            on_log(f"[VALIDATE SET] Skipping set (Disabled)")
+            continue
+
         set_passed = True
         step_results = []
 
@@ -387,6 +391,10 @@ def _run_validation_sets(
                         except re.error as e:
                             cmd_passed = False
                             reason = f"Invalid regex pattern: {expected!r} ({e})"
+                    elif out_type == "No output":
+                        if stdout.strip():
+                            cmd_passed = False
+                            reason = f"Output was expected to be empty, but got: {stdout!r}"
 
                 status_str = "PASS ✓" if cmd_passed else f"FAIL ✗ ({reason})"
                 on_log(f"[VALIDATE CMD RESULT] {cmd_text!r} → {status_str}")

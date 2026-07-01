@@ -183,7 +183,31 @@ def _get_active_project() -> dict | None:
 
 
 def render() -> None:
-    st.header("Configuration")
+    proj = _get_active_project()
+    if proj is not None:
+        c_head, c_ren, c_dup, c_exp, c_del = st.columns([3, 0.8, 1, 0.8, 0.6])
+        pid = proj["id"]
+        with c_head:
+            st.header("Configuration", anchor=False)
+        with c_ren:
+            if st.button("✏ Rename", key=f"btn_ren_{pid}", use_container_width=True):
+                _show_rename_project_dialog(pid)
+        with c_dup:
+            if st.button("⧉ Duplicate", key=f"btn_dup_{pid}", use_container_width=True):
+                _duplicate_project(pid)
+        with c_exp:
+            st.download_button(
+                "⬇ Export", data=_export_project_json(proj),
+                file_name=f"{proj['name'].replace(' ', '_')}.json",
+                mime="application/json", key=f"btn_export_{pid}",
+                use_container_width=True,
+            )
+        with c_del:
+            if st.button("🗑", key=f"btn_del_{pid}", use_container_width=True,
+                         help="Delete this project", type="secondary"):
+                _show_delete_project_dialog(pid)
+    else:
+        st.header("Configuration", anchor=False)
     # Danger styling for Delete buttons — scoped to project action headers.
     # Uses the .st-key-{key} container class emitted by Streamlit ≥1.38.
     st.markdown(
@@ -1364,16 +1388,28 @@ def _metrics_setup() -> None:
 
 def _flush_bash_config(project: dict) -> None:
     """Write flat bash_* working keys back into the project's config bundle."""
+    def _clean_steps(steps_list):
+        cleaned = []
+        for step in steps_list:
+            if not isinstance(step, dict):
+                continue
+            new_step = copy.deepcopy(step)
+            new_step["commands"] = [c for c in new_step.get("commands", []) if isinstance(c, dict) and c.get("command", "").strip()]
+            if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
+                cleaned.append(new_step)
+        return cleaned
+
     project["config"].update({
         "execution_target":  st.session_state.get("bash_execution_target", "local"),
+        "pct_vmid":          st.session_state.get("bash_pct_vmid", ""),
         "ssh_host":          st.session_state.get("bash_ssh_host", ""),
         "ssh_port":          st.session_state.get("bash_ssh_port", 22),
         "ssh_user":          st.session_state.get("bash_ssh_user", "root"),
         "ssh_password":      st.session_state.get("bash_ssh_password", ""),
         "ssh_key_path":      st.session_state.get("bash_ssh_key_path", ""),
-        "startup_commands":  st.session_state.get("bash_startup_commands", []),
+        "startup_commands":  _clean_steps(st.session_state.get("bash_startup_commands", [])),
         "bash_timeout":      st.session_state.get("bash_timeout", 60),
-        "completion_commands": st.session_state.get("bash_completion_commands", []),
+        "completion_commands": _clean_steps(st.session_state.get("bash_completion_commands", [])),
         "validation_commands": st.session_state.get("bash_validation_commands", []),
         "fail_patterns":     st.session_state.get("bash_fail_patterns", []),
         "metrics_matrix":    st.session_state.get("bash_metrics_matrix", []),
@@ -1381,7 +1417,7 @@ def _flush_bash_config(project: dict) -> None:
         "sudo":              st.session_state.get("bash_sudo", False),
         "sudo_password":     (
             st.session_state.get("bash_ssh_password", "")
-            if st.session_state.get("bash_execution_target", "local") == "ssh"
+            if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct")
             else st.session_state.get("bash_sudo_password", "")
         ) if st.session_state.get("bash_sudo") else "",
     })
@@ -1468,6 +1504,10 @@ def _coerce_steps(raw: list) -> list:
                         "long_running":   bool(c.get("long_running", False)),
                         "timeout_seconds": int(c.get("timeout_seconds", 60)),
                     }
+                    if "expected_output_type" in c:
+                        entry["expected_output_type"] = str(c["expected_output_type"])
+                    if "expected_output" in c:
+                        entry["expected_output"] = str(c["expected_output"])
                     if "_id" in c:
                         entry["_id"] = c["_id"]
                     cmds.append(entry)
@@ -1492,10 +1532,14 @@ def _ensure_step_ids(steps: list) -> list:
     max_existing = st.session_state.get("_step_id_counter", 0)
     for _s in steps:
         if isinstance(_s, dict):
-            max_existing = max(max_existing, _s.get("_id", 0))
+            _sid = _s.get("_id", 0)
+            if isinstance(_sid, int):
+                max_existing = max(max_existing, _sid)
             for _c in _s.get("commands", []):
                 if isinstance(_c, dict):
-                    max_existing = max(max_existing, _c.get("_id", 0))
+                    _cid = _c.get("_id", 0)
+                    if isinstance(_cid, int):
+                        max_existing = max(max_existing, _cid)
     st.session_state["_step_id_counter"] = max_existing
 
     seen_step_ids: set = set()
@@ -1540,7 +1584,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
 
         with st.container(border=True):
             # ── Step header: toggle | delay | ↑ ↓ ✕ ───────────────────────
-            hc1, hc_delay, hc2, hc3, hc4 = st.columns([4, 1.5, 0.8, 0.8, 0.8])
+            hc1, hcl_delay, hcv_delay, hc2, hc3, hc4 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
             with hc1:
                 _open = st.session_state.get(f"_sc_{pfx}_{step_id}_open", True)
                 _first_cmd = commands[0].get("command", "").strip() if commands else ""
@@ -1549,7 +1593,9 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 if st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True,
                              help="Collapse/expand this step"):
                     toggle = (f"_sc_{pfx}_{step_id}_open", not _open)
-            with hc_delay:
+            with hcl_delay:
+                st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Delay (s)</div>", unsafe_allow_html=True)
+            with hcv_delay:
                 delay_key = f"_sc_{pfx}_{step_id}_delay"
                 if delay_key not in st.session_state:
                     st.session_state[delay_key] = float(step.get("delay_seconds", 0.0))
@@ -1589,7 +1635,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     cmd_id = cmd["_id"]
 
                     # Single flat row: command | timeout | long-running | enabled | delete
-                    cc1, cc2, cc3, cc4, cc5 = st.columns([5, 1, 1.2, 1, 0.8])
+                    cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
                     with cc1:
                         cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
                         if cmd_key not in st.session_state:
@@ -1621,20 +1667,24 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                                 label_visibility="collapsed",
                             )
                         cmd["command"] = st.session_state.get(cmd_key, "")
-                    with cc2:
+                    with ccl_to:
+                        st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                    with ccv_to:
+                        lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                        is_lr  = st.session_state.get(lr_key, cmd.get("long_running", False))
+                        
                         to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
                         if to_key not in st.session_state:
-                            st.session_state[to_key] = int(cmd.get("timeout_seconds", 60))
+                            st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
                         cmd["timeout_seconds"] = st.number_input(
                             "Timeout (s)",
-                            min_value=1, max_value=3600,
+                            min_value=0.1, max_value=3600.0, step=1.0,
                             key=to_key,
-                            disabled=cmd.get("long_running", False),
+                            disabled=is_lr,
                             label_visibility="collapsed",
                             help="Per-command timeout in seconds.",
                         )
                     with cc3:
-                        lr_key              = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
                         cmd["long_running"] = st.checkbox(
                             "Long-running",
                             value=cmd.get("long_running", False),
@@ -1714,97 +1764,167 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
 
 
 
-def _flatten_validation_set(vset: dict) -> pd.DataFrame:
-    """Flatten steps->commands into a typed DataFrame for st.data_editor."""
-    rows = []
-    for step in vset.get("steps", []):
-        for cmd in step.get("commands", []):
-            rows.append({
-                "_id": cmd.get("_id"),
-                "command": cmd.get("command", ""),
-                "expected_output_type": cmd.get("expected_output_type", "Ignore"),
-                "expected_output": cmd.get("expected_output", ""),
-                "enabled": bool(cmd.get("enabled", True)),
-            })
-    if rows:
-        return pd.DataFrame(rows).astype({"_id": str, "command": str, "expected_output_type": str, "expected_output": str, "enabled": bool})
-    return pd.DataFrame({
-        "_id": pd.Series(dtype=str),
-        "command": pd.Series(dtype=str),
-        "expected_output_type": pd.Series(dtype=str),
-        "expected_output": pd.Series(dtype=str),
-        "enabled": pd.Series(dtype=bool),
-    })
+def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None:
+    raw   = st.session_state.get(state_key, [])
+    steps = _ensure_step_ids(_coerce_steps(raw))
+    st.session_state[state_key] = steps
 
-
-def _reconstruct_validation_set(existing: dict, name: str, desc: str, edited_rows) -> dict:
-    """Reconstruct the nested step structure from editor rows.
-    If the row count matches the original, preserve the original step boundaries.
-    Otherwise, collapse to a single step.
-    """
-    # 1. Analyze original structure
-    original_steps = existing.get("steps", [])
-    original_commands_flat = []
-    step_boundaries = []
-    for step in original_steps:
-        start = len(original_commands_flat)
-        original_commands_flat.extend(step.get("commands", []))
-        step_boundaries.append((start, len(original_commands_flat)))
-
-    # 2. Process edited rows into flat command list
-    new_commands_flat = []
-    if isinstance(edited_rows, pd.DataFrame):
-        _iter = edited_rows.to_dict("records")
-    else:
-        _iter = edited_rows or []
-
-    for row in _iter:
-        if isinstance(row, dict):
-            r = row
-        else:
-            r = row._asdict() if hasattr(row, "_asdict") else dict(row)
-
-        new_commands_flat.append({
-            "_id": r.get("_id") if r.get("_id") else str(uuid.uuid4()),
-            "command": r.get("command", ""),
-            "enabled": bool(r.get("enabled", True)),
-            "timeout_seconds": r.get("timeout_seconds", 60),
-            "expected_output_type": r.get("expected_output_type", "Ignore"),
-            "expected_output": r.get("expected_output", ""),
+    def _val_add_step():
+        st.session_state[state_key].append({
+            "_id": _next_step_id(),
+            "delay_seconds": 0.0,
+            "commands": [{
+                "_id": _next_step_id(),
+                "command": "",
+                "enabled": True,
+                "timeout_seconds": 60,
+                "expected_output_type": "Ignore",
+                "expected_output": ""
+            }],
         })
 
-    # 3. Reconstruct steps
-    if len(new_commands_flat) == len(original_commands_flat) and original_steps:
-        # Preserve structure
-        new_steps = copy.deepcopy(original_steps)
-        for i, (start, end) in enumerate(step_boundaries):
-            new_steps[i]["commands"] = new_commands_flat[start:end]
-    else:
-        # Collapse to single step if structural change or no original steps
-        new_steps = [{
-            "_id": str(uuid.uuid4()),
-            "delay_seconds": 0.0,
-            "commands": new_commands_flat
-        }]
+    def _val_del_step(si):
+        st.session_state[state_key].pop(si)
 
-    return {
-        **existing,
-        "name": name.strip(),
-        "description": desc.strip(),
-        "steps": new_steps
-    }
+    def _val_move_step(si1, si2):
+        s = st.session_state[state_key]
+        s[si1], s[si2] = s[si2], s[si1]
+
+    def _val_add_cmd(si):
+        st.session_state[state_key][si]["commands"].append({
+            "_id": _next_step_id(),
+            "command": "",
+            "enabled": True,
+            "timeout_seconds": 60,
+            "expected_output_type": "Ignore",
+            "expected_output": ""
+        })
+
+    def _val_del_cmd(si, ci):
+        st.session_state[state_key][si]["commands"].pop(ci)
+
+    def _val_toggle(key, val):
+        st.session_state[key] = val
+
+    if not steps:
+        st.caption("No steps configured. Click **+ Add Step** to begin.")
+
+    for si, step in enumerate(steps):
+        step_id  = step["_id"]
+        commands = step.get("commands", [])
+
+        with st.container(border=True):
+            hc1, hcl_delay, hcv_delay, hc2, hc3, hc4 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
+            with hc1:
+                _open_key = f"_sc_{pfx}_{step_id}_open"
+                _open = st.session_state.get(_open_key, True)
+                _first_cmd = commands[0].get("command", "").strip() if commands else ""
+                _preview = (_first_cmd[:35] + "…") if len(_first_cmd) > 35 else _first_cmd
+                _label = f"{'▼' if _open else '▶'} Step {si + 1}{(' — ' + _preview) if _preview else ' — (empty)'}"
+                st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True, help="Collapse/expand this step", on_click=_val_toggle, args=(_open_key, not _open))
+            with hcl_delay:
+                st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Delay (s)</div>", unsafe_allow_html=True)
+            with hcv_delay:
+                delay_key = f"_sc_{pfx}_{step_id}_delay"
+                if delay_key not in st.session_state:
+                    st.session_state[delay_key] = float(step.get("delay_seconds", 0.0))
+                new_delay = st.number_input(
+                    "Delay (s)", min_value=0.0, max_value=3600.0, step=0.5,
+                    key=delay_key, label_visibility="collapsed",
+                )
+                step["delay_seconds"] = st.session_state.get(delay_key, 0.0)
+            with hc2:
+                st.button("↑", key=f"_sc_{pfx}_{step_id}_up", disabled=(si == 0), use_container_width=True, on_click=_val_move_step, args=(si, si - 1))
+            with hc3:
+                st.button("↓", key=f"_sc_{pfx}_{step_id}_dn", disabled=(si == len(steps) - 1), use_container_width=True, on_click=_val_move_step, args=(si, si + 1))
+            with hc4:
+                st.button("✕", key=f"_sc_{pfx}_{step_id}_del", use_container_width=True, on_click=_val_del_step, args=(si,))
+
+            if st.session_state.get(f"_sc_{pfx}_{step_id}_open", True):
+                if not commands:
+                    st.caption("No commands. Click **+ Add Command/Output** below.")
+
+                _is_last_cmd_idx = len(commands) - 1
+
+                for ci, cmd in enumerate(commands):
+                    cmd_id = cmd["_id"]
+
+                    if ci == 0:
+                        hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                        hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
+                        hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
+                        hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
+                        hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
+                        hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
+                        st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+
+                    cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                    
+                    with cc_cmd:
+                        cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                        if cmd_key not in st.session_state:
+                            st.session_state[cmd_key] = cmd.get("command", "")
+
+                        is_disabled = not cmd.get("enabled", True)
+
+                        if ci == _is_last_cmd_idx:
+                            def _on_last_cmd_enter(_ck=cmd_key, _si=si):
+                                if st.session_state.get(_ck, "").strip():
+                                    _val_add_cmd(_si)
+                            st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", on_change=_on_last_cmd_enter, disabled=is_disabled)
+                        else:
+                            st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", disabled=is_disabled)
+                        cmd["command"] = st.session_state.get(cmd_key, "")
+                        
+                    with cc_to:
+                        to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                        if to_key not in st.session_state:
+                            st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                        cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
+                        
+                    with cc_chk:
+                        chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
+                        if chk_key not in st.session_state:
+                            _init_type = cmd.get("expected_output_type", "Ignore")
+                            if _init_type not in ["Regex", "Exact String"]:
+                                _init_type = "Ignore"
+                            st.session_state[chk_key] = _init_type
+                        cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
+                        
+                    with cc_exp:
+                        exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
+                        if exp_key not in st.session_state:
+                            st.session_state[exp_key] = cmd.get("expected_output", "")
+                            
+                        # Disable expected value if row is disabled OR check type is Ignore
+                        chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
+                        exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
+                        
+                        cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
+                        
+                    with cc_en:
+                        en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                        cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                        
+                    with cc_del:
+                        st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
+
+                st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,))
+
+    st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
 
 def _render_bash_runtime(project: dict) -> None:
     """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
 
     with st.expander("Execution Target", expanded=True):
-        target = st.selectbox(
+        target = st.radio(
             "Mode",
-            options=["local", "ssh"],
-            format_func=lambda v: "Local" if v == "local" else "SSH (Remote)",
+            options=["local", "ssh", "pct"],
+            format_func=lambda v: {"local": "Local", "ssh": "SSH (Remote)", "pct": "PCT (Proxmox LXC)"}.get(v, v),
             key="bash_execution_target",
-            help="Run commands on the local machine or via SSH on a remote host.",
+            help="Run commands locally, via SSH, or inside a Proxmox LXC container via pct.",
+            horizontal=True,
         )
         st.checkbox(
             "Run commands with sudo",
@@ -1821,14 +1941,21 @@ def _render_bash_runtime(project: dict) -> None:
                 )
             else:
                 st.caption("SSH password will be reused for sudo.")
-        if target == "ssh":
+        if target == "local":
+            st.divider()
+            _render_test_button("local", "bash")
+        elif target == "pct":
+            st.divider()
+            st.text_input("LXC Container ID (VMID)", key="bash_pct_vmid", placeholder="100")
+            _render_test_button("pct", "bash", "bash_pct_vmid")
+        elif target == "ssh":
             st.divider()
             st.markdown("**SSH Credentials**")
             c_host, c_port = st.columns([4, 1])
             with c_host:
                 st.text_input("Host", key="bash_ssh_host", placeholder="192.168.1.100")
             with c_port:
-                st.number_input("Port", min_value=1, max_value=65535, key="bash_ssh_port")
+                st.number_input("Port", min_value=1, max_value=65535, value=22, key="bash_ssh_port")
             c_user, c_pass = st.columns([1, 1])
             with c_user:
                 st.text_input("Username", key="bash_ssh_user")
@@ -1893,14 +2020,67 @@ def _render_bash_runtime(project: dict) -> None:
                 placeholder="e.g. rm -rf /tmp/test_workdir",
             )
 
-    st.number_input(
-        "Default Timeout (seconds)",
-        min_value=1, max_value=3600,
-        key="bash_timeout",
-        help="Default per-command timeout. Override per individual command inside each step.",
-    )
+
 
     _flush_bash_config(project)
+
+
+def _test_local_connection(result_key: str) -> None:
+    from core.environment import LocalEnvironment
+    try:
+        env = LocalEnvironment()
+        res = env.execute("echo ok")
+        if res["exit_code"] == 0 and "ok" in res["stdout"]:
+            st.session_state[result_key] = {"status": "success", "message": "Local execution working successfully."}
+        else:
+            st.session_state[result_key] = {"status": "warning", "message": f"Unexpected response: {res!r}"}
+    except Exception as exc:
+        st.session_state[result_key] = {"status": "error", "message": f"Local execution failed: {exc}"}
+
+
+def _test_pct_connection(vmid_key: str, result_key: str) -> None:
+    from core.environment import LocalEnvironment, PCTEnvironment
+    vmid = (st.session_state.get(vmid_key) or "").strip()
+    if not vmid:
+        st.session_state[result_key] = {"status": "error", "message": "VMID is required."}
+        return
+    try:
+        env = PCTEnvironment(vmid, LocalEnvironment())
+        res = env.execute("echo ok")
+        if res["exit_code"] == 0 and "ok" in res["stdout"]:
+            st.session_state[result_key] = {"status": "success", "message": f"Connected to PCT container {vmid}"}
+        else:
+            st.session_state[result_key] = {"status": "warning", "message": f"Connected but unexpected response: {res!r}"}
+    except Exception as exc:
+        st.session_state[result_key] = {"status": "error", "message": f"PCT connection failed: {exc}"}
+
+
+def _render_test_button(target_type: str, state_prefix: str, vmid_key: str = "") -> None:
+    result_key = f"{state_prefix}_{target_type}_test_result"
+    _res = st.session_state.get(result_key)
+    is_connected = _res and _res["status"] == "success"
+    is_failed = _res and _res["status"] == "error"
+    
+    col_test, _ = st.columns([2, 1])
+    with col_test:
+        if is_connected:
+            st.success(_res["message"])
+            if st.button("Reset / Test Again", key=f"btn_{state_prefix}_test_{target_type}_reset", type="secondary", use_container_width=True):
+                st.session_state.pop(result_key, None)
+                st.rerun()
+        else:
+            btn_label = "Retry Connection" if is_failed else f"Test {target_type.upper() if target_type == 'pct' else 'Local'} Execution"
+            btn_type = "primary" if is_failed else "secondary"
+            if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", use_container_width=True, type=btn_type):
+                st.session_state.pop(result_key, None)
+                if target_type == "local":
+                    _test_local_connection(result_key)
+                elif target_type == "pct":
+                    _test_pct_connection(vmid_key, result_key)
+                st.rerun()
+    if not is_connected and _res:
+        if is_failed: st.error(_res["message"])
+        elif _res["status"] == "warning": st.warning(_res["message"])
 
 
 def _test_bash_ssh_connection() -> None:
@@ -1949,6 +2129,83 @@ def _test_bash_ssh_connection() -> None:
         _store("error", f"Connection failed: {exc}")
 
 
+@st.dialog("Validation Set", width="large")
+def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, edit_idx: int = None) -> None:
+    is_edit = edit_idx is not None
+    si = edit_idx if is_edit else len(sets)
+    target_set = sets[edit_idx] if is_edit else {}
+    
+    _name_key = f"bash_val_add_name_{si}_{nonce}"
+    _desc_key = f"bash_val_add_desc_{si}_{nonce}"
+    
+    if _name_key not in st.session_state:
+        st.session_state[_name_key] = target_set.get("name", f"Set {si + 1}")
+    if _desc_key not in st.session_state:
+        st.session_state[_desc_key] = target_set.get("description", "")
+        
+    nc1, nc2 = st.columns([1, 2])
+    with nc1:
+        new_name = st.text_input("Name", key=_name_key)
+    with nc2:
+        new_desc = st.text_input("Description", key=_desc_key)
+
+    st.markdown("**Steps & Commands**")
+    
+    _steps_state_key = f"_bash_val_dialog_steps_{si}_{nonce}"
+    if _steps_state_key not in st.session_state:
+        if is_edit:
+            st.session_state[_steps_state_key] = copy.deepcopy(target_set.get("steps", []))
+        else:
+            st.session_state[_steps_state_key] = [{
+                "_id": _next_step_id(),
+                "delay_seconds": 0.0,
+                "commands": [{
+                    "_id": _next_step_id(),
+                    "command": "",
+                    "timeout_seconds": 60,
+                    "expected_output_type": "Ignore",
+                    "expected_output": "",
+                    "enabled": True,
+                }]
+            }]
+
+    _render_validation_steps(_steps_state_key, pfx=f"val_{si}_{nonce}", placeholder="e.g. ls -l")
+    
+    col1, col2 = st.columns([4, 1])
+    with col2:
+        btn_label = "Save Set"
+        if st.button(btn_label, type="primary", use_container_width=True):
+            _push_undo({"desc": f"{'edit' if is_edit else 'add'} validation set", "type": "cmd",
+                        "state_key": "bash_validation_sets", "data": copy.deepcopy(sets)})
+            
+            clean_steps = []
+            for step in st.session_state[_steps_state_key]:
+                step_copy = copy.deepcopy(step)
+                step_copy["commands"] = [c for c in step_copy.get("commands", []) if c.get("command", "").strip()]
+                if step_copy["commands"] or step_copy.get("delay_seconds", 0) > 0:
+                    clean_steps.append(step_copy)
+                    
+            new_set = {
+                **target_set,
+                "name": new_name.strip(),
+                "description": new_desc.strip(),
+                "enabled": target_set.get("enabled", True),
+                "steps": clean_steps
+            }
+            new_set.pop("commands", None)
+            new_set.pop("checks", None)
+            
+            if is_edit:
+                sets[edit_idx] = new_set
+            else:
+                sets.append(new_set)
+                
+            st.session_state["bash_validation_sets"] = sets
+            st.session_state["bash_val_editor_nonce"] = nonce + 1
+            _flush_bash_config(project)
+            st.rerun()
+
+
 def _render_bash_validation(project: dict) -> None:
     """Validation sub-tab for Bash-Bot: Pass/Fail sets using inline data_editor."""
 
@@ -1962,143 +2219,54 @@ def _render_bash_validation(project: dict) -> None:
         if not sets:
             st.info("No validation sets configured. Click **＋ Add Validation Set** below.")
         else:
-            # ── Set selector ──────────────────────────────────────────────────
-            set_names = [s.get("name", f"Set {i}") for i, s in enumerate(sets)]
+            mutation = None
+            for si, active_set in enumerate(sets):
+                _name = active_set.get("name", f"Set {si + 1}")
+                _desc = active_set.get("description", "")
+                
+                with st.container(border=True):
+                    hc_name, hc_desc, hc_enabled, hc_edit, hc_del = st.columns([2.5, 3.5, 1, 1.2, 0.8])
+                    with hc_name:
+                        st.markdown(f"**{_name}**")
+                    with hc_desc:
+                        st.caption(_desc if _desc else "_No description_")
+                    with hc_enabled:
+                        en_key = f"bash_val_en_{si}_{nonce}"
+                        new_enabled = st.checkbox("Enabled", value=active_set.get("enabled", True), key=en_key)
+                        
+                        if active_set.get("enabled", True) != new_enabled:
+                            active_set["enabled"] = new_enabled
+                            st.session_state["bash_validation_sets"] = sets
+                            _flush_bash_config(project)
 
-            # Consume any pending navigation index (set by Add/Delete before
-            # the selectbox is instantiated — writing directly to a widget-bound
-            # key after instantiation raises StreamlitAPIException).
-            if "_bash_val_nav_to" in st.session_state:
-                _stored_idx = st.session_state.pop("_bash_val_nav_to")
-            else:
-                _stored_idx = st.session_state.get("bash_val_active_set_idx", 0)
-            # Clamp in case a delete shrank the list, then always write back so
-            # the keyed selectbox reflects the intended index. Streamlit ignores
-            # index= when the session-state key already exists, so unconditional
-            # assignment is the only reliable way to drive the widget selection
-            # (covers Add → new index, Delete → clamped index, normal → no-op).
-            _clamped_idx = max(0, min(int(_stored_idx), len(sets) - 1))
-            st.session_state["bash_val_active_set_idx"] = _clamped_idx
+                    with hc_edit:
+                        if st.button("View / Edit", key=f"btn_bash_val_edit_{si}", use_container_width=True):
+                            _edit_validation_set_dialog(project, sets, nonce, edit_idx=si)
+                    with hc_del:
+                        if st.button("✕", key=f"btn_bash_val_del_{si}", use_container_width=True, help="Remove validation set"):
+                            mutation = ("delete", si)
 
-            # Selector + delete inline
-            sel_col, del_col = st.columns([4, 1])
-            with sel_col:
-                sel_idx = st.selectbox(
-                    "Active set",
-                    options=range(len(sets)),
-                    format_func=lambda i: set_names[i],
-                    key="bash_val_active_set_idx",
-                    label_visibility="collapsed",
-                )
-            with del_col:
-                _del_set_clicked = st.button(
-                    "✕ Delete", key="btn_del_active_set_bash",
-                    type="secondary", use_container_width=True,
-                )
-
-            active_set = sets[sel_idx]
-
-            # ── Inline name / description (1:2 split) ─────────────────────────
-            # Keys are scoped by sel_idx and nonce so they re-seed on set switch
-            # or structural mutation, preventing name/desc bleed between sets.
-            # Pre-initialize to avoid Streamlit ≥1.38 value= override on every rerun.
-            _name_key = f"bash_val_name_{sel_idx}_{nonce}"
-            _desc_key = f"bash_val_desc_{sel_idx}_{nonce}"
-            if _name_key not in st.session_state:
-                st.session_state[_name_key] = active_set.get("name", "")
-            if _desc_key not in st.session_state:
-                st.session_state[_desc_key] = active_set.get("description", "")
-            nc1, nc2 = st.columns([1, 2])
-            with nc1:
-                new_name = st.text_input("Name", key=_name_key)
-            with nc2:
-                new_desc = st.text_input("Description", key=_desc_key)
-
-            # ── Stable-baseline data_editor ───────────────────────────────────
-            # The baseline is computed once per (sel_idx, nonce) key and then
-            # held constant. data_editor applies its delta on top of the baseline
-            # each render; feeding already-merged data back would double-apply
-            # added rows on every rerun.
-            _editor_key = f"bash_val_editor_{sel_idx}_{nonce}"
-            _baseline_key = f"_bash_val_baseline_{_editor_key}"
-            if _baseline_key not in st.session_state:
-                st.session_state[_baseline_key] = _flatten_validation_set(active_set)
-
-            edited = st.data_editor(
-                st.session_state[_baseline_key],  # STABLE — never updated in-place
-                key=_editor_key,
-                num_rows="dynamic",
-                use_container_width=True,
-                column_config={
-                    "command": st.column_config.TextColumn("Command", width="large"),
-                    "expected_output_type": st.column_config.SelectboxColumn(
-                        "Check Type",
-                        options=["Ignore", "Regex", "Exact String"],
-                        width="medium",
-                    ),
-                    "expected_output": st.column_config.TextColumn("Expected Value", width="medium"),
-                    "enabled": st.column_config.CheckboxColumn("Enabled", width="small"),
-                },
-            )
-
-            # Reconstruct and persist only if changed
-            reconstructed = _reconstruct_validation_set(active_set, new_name, new_desc, edited)
-            if reconstructed != active_set:
-                sets[sel_idx] = reconstructed
-                st.session_state["bash_validation_sets"] = sets
-                _flush_bash_config(project)
-
-            # ── Delete active set (button rendered inline above the grid) ────
-            if _del_set_clicked:
-                _push_undo({"desc": f"delete set '{active_set.get('name', '')}'",
-                            "type": "cmd", "state_key": "bash_validation_sets",
-                            "data": copy.deepcopy(sets)})
-                sets.pop(sel_idx)
-                st.session_state["bash_validation_sets"] = sets
-                st.session_state["bash_val_editor_nonce"] = nonce + 1
-                _flush_bash_config(project)
-                st.rerun()
+            if mutation:
+                op, target_idx = mutation
+                if op == "delete":
+                    _push_undo({"desc": f"delete set '{sets[target_idx].get('name', '')}'",
+                                "type": "cmd", "state_key": "bash_validation_sets",
+                                "data": copy.deepcopy(sets)})
+                    sets.pop(target_idx)
+                    st.session_state["bash_validation_sets"] = sets
+                    st.session_state["bash_val_editor_nonce"] = nonce + 1
+                    _flush_bash_config(project)
+                    st.rerun()
 
     # ── Add Validation Set ────────────────────────────────────────────────────
     if st.button("＋ Add Validation Set", key="btn_add_set_bash", type="primary"):
-        _push_undo({"desc": "add validation set", "type": "cmd",
-                    "state_key": "bash_validation_sets", "data": copy.deepcopy(sets)})
-        sets.append({
-            "name": f"Set {len(sets) + 1}",
-            "description": "",
-            "steps": [{"_id": _next_step_id(), "delay_seconds": 0.0, "commands": []}],
-        })
-        st.session_state["bash_validation_sets"] = sets
-        st.session_state["_bash_val_nav_to"] = len(sets) - 1
-        st.session_state["bash_val_editor_nonce"] = nonce + 1
-        _flush_bash_config(project)
-        st.rerun()
+        _edit_validation_set_dialog(project, sets, nonce)
 
-def _render_project_header(project: dict, type_label: str) -> None:
-    """Compact project header: Options popover (rename/duplicate/export) + Delete side-by-side."""
-    pid = project["id"]
-    _, c_opts, c_del = st.columns([4, 1, 0.8])
-    with c_opts:
-        with st.popover("⚙  Options", use_container_width=True):
-            if st.button("✏ Rename", key=f"btn_ren_{pid}", use_container_width=True):
-                _show_rename_project_dialog(pid)
-            if st.button("⧉ Duplicate", key=f"btn_dup_{pid}", use_container_width=True):
-                _duplicate_project(pid)
-            st.download_button(
-                "⬇ Export JSON", data=_export_project_json(project),
-                file_name=f"{project['name'].replace(' ', '_')}.json",
-                mime="application/json", key=f"btn_export_{pid}",
-                use_container_width=True,
-            )
-    with c_del:
-        if st.button("🗑", key=f"btn_del_{pid}", use_container_width=True,
-                     help="Delete this project", type="secondary"):
-            _show_delete_project_dialog(pid)
+
 
 
 def _render_bash_bot_config(project: dict) -> None:
     """Top-level config renderer for Bash-Bot projects (2 sub-tabs: Runtime, Metrics)."""
-    _render_project_header(project, "Bash-Bot")
     st.divider()
 
     sub_runtime, sub_validation = st.tabs(["🖥  Runtime", "📐  Validation"])
@@ -2242,6 +2410,7 @@ def _flush_llama_cli_config(project: dict) -> None:
 
     project["config"].update({
         "execution_target":    st.session_state.get("llama_cli_execution_target", "local"),
+        "pct_vmid":            st.session_state.get("llama_cli_pct_vmid", ""),
         "ssh_host":            st.session_state.get("llama_cli_ssh_host", ""),
         "ssh_port":            st.session_state.get("llama_cli_ssh_port", 22),
         "ssh_user":            st.session_state.get("llama_cli_ssh_user", "root"),
@@ -2416,26 +2585,34 @@ def _render_llama_cli_runtime(project: dict) -> None:
     """Runtime sub-tab for Llama-CLI-Bot: target, model setup, MCP servers, timeout."""
 
     with st.expander("Execution Target", expanded=True):
-        target = st.selectbox(
+        target = st.radio(
             "Mode",
-            options=["local", "ssh"],
-            format_func=lambda v: "Local" if v == "local" else "SSH (Remote)",
+            options=["local", "ssh", "pct"],
+            format_func=lambda v: {"local": "Local", "ssh": "SSH (Remote)", "pct": "PCT (Proxmox LXC)"}.get(v, v),
             key="llama_cli_execution_target",
-            help="Run on the local machine or connect via SSH.",
+            help="Run locally, via SSH, or inside a Proxmox LXC container via pct.",
+            horizontal=True,
         )
         st.checkbox(
             "Run commands with sudo",
             key="llama_cli_sudo",
             help="Prefix shell commands and the llama-cli invocation with `sudo`.",
         )
-        if target == "ssh":
+        if target == "local":
+            st.divider()
+            _render_test_button("local", "llama_cli")
+        elif target == "pct":
+            st.divider()
+            st.text_input("LXC Container ID (VMID)", key="llama_cli_pct_vmid", placeholder="100")
+            _render_test_button("pct", "llama_cli", "llama_cli_pct_vmid")
+        elif target == "ssh":
             st.divider()
             st.markdown("**SSH Credentials**")
             c_host, c_port = st.columns([4, 1])
             with c_host:
                 st.text_input("Host", key="llama_cli_ssh_host", placeholder="192.168.1.100")
             with c_port:
-                st.number_input("Port", min_value=1, max_value=65535, key="llama_cli_ssh_port")
+                st.number_input("Port", min_value=1, max_value=65535, value=22, key="llama_cli_ssh_port")
             c_user, c_pass = st.columns([1, 1])
             with c_user:
                 st.text_input("Username", key="llama_cli_ssh_user")
@@ -2706,7 +2883,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
 
     st.number_input(
         "Timeout (seconds)",
-        min_value=1, max_value=3600,
+        min_value=0.1, max_value=3600.0, step=1.0,
         key="llama_cli_timeout",
         help="Maximum time (seconds) each command or prompt invocation may run.",
     )
@@ -2825,7 +3002,7 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
                 )
 
                 # Meta row
-                mc1, mc2, mc3 = st.columns([1.2, 1.5, 2.5])
+                mc1, mc2, mcl_to, mcv_to = st.columns([1.2, 1.5, 0.8, 1.7])
                 with mc1:
                     step["enabled"] = st.checkbox(
                         "Enabled",
@@ -2840,12 +3017,15 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
                             key=f"_us_{pfx}_{step_id}_lr",
                             help="Disables per-step timeout.",
                         )
-                    with mc3:
+                    with mcl_to:
+                        st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                    with mcv_to:
                         step["timeout_seconds"] = st.number_input(
                             "Timeout (s)",
-                            min_value=1, max_value=3600,
-                            value=int(step.get("timeout_seconds", 60)),
+                            min_value=0.1, max_value=3600.0, step=1.0,
+                            value=float(step.get("timeout_seconds", 60.0)),
                             key=f"_us_{pfx}_{step_id}_to",
+                            label_visibility="collapsed",
                             disabled=step["long_running"],
                         )
 
@@ -3039,8 +3219,7 @@ def _render_llama_cli_metrics_setup(project: dict) -> None:
 
 
 def _render_llama_cli_bot_config(project: dict) -> None:
-    """Top-level config renderer for Llama-CLI-Bot projects (2 sub-tabs: Runtime, Inputs)."""
-    _render_project_header(project, "Llama-CLI Bot")
+    """Top-level renderer for Llama-CLI bot configuration."""
     st.divider()
 
     sub_runtime, sub_inputs = st.tabs(["🖥  Runtime", "📐  Metrics Setup"])

@@ -350,6 +350,40 @@ class SSHEnvironment(BaseEnvironment):
         except Exception:
             return False
 
+class PCTEnvironment(BaseEnvironment):
+    """Execution environment for Proxmox LXC containers (wraps a base environment)."""
+
+    def __init__(self, vmid: str, base_env: BaseEnvironment) -> None:
+        self.vmid = str(vmid)
+        self.base_env = base_env
+        self.is_remote_caf = base_env.is_remote_caf
+
+    def execute(self, command: str, timeout: int = 15) -> Dict[str, Any]:
+        wrapped = f"pct exec {self.vmid} -- bash -c {shlex.quote(command)}"
+        return self.base_env.execute(wrapped, timeout=timeout)
+
+    def read_file(self, path: str) -> str:
+        res = self.execute(f"cat {shlex.quote(path)}")
+        if res["exit_code"] != 0:
+            raise FileNotFoundError(f"Could not read {path}: {res['stderr']}")
+        return res["stdout"]
+
+    def write_file(self, path: str, content: str) -> Dict[str, Any]:
+        import base64
+        b64_content = base64.b64encode(content.encode()).decode()
+        res = self.execute(f"echo {b64_content} | base64 -d > {shlex.quote(path)}")
+        if res["exit_code"] != 0:
+            return {"error": res["stderr"]}
+        return {"status": "success", "bytes_written": len(content)}
+
+    def delete_file(self, path: str) -> bool:
+        res = self.execute(f"rm -f {shlex.quote(path)}")
+        return res["exit_code"] == 0
+
+    def exists(self, path: str) -> bool:
+        res = self.execute(f"test -e {shlex.quote(path)}")
+        return res["exit_code"] == 0
+
 
 # ── Factory ──────────────────────────────────────────────────────────────────
 
@@ -367,6 +401,7 @@ def create_environment(
     password: Optional[str] = None,
     key_path: Optional[str] = None,
     remote_cwd: str = DEFAULT_REMOTE_CWD,
+    pct_vmid: Optional[str] = None,
 ) -> BaseEnvironment:
     """Return the right :class:`BaseEnvironment` for the requested target.
 
@@ -380,9 +415,10 @@ def create_environment(
         ssh: When True, build an :class:`SSHEnvironment`; otherwise local.
         host/port/username/password/key_path/remote_cwd: SSH connection details
             (ignored for the local environment).
+        pct_vmid: If provided, wraps the environment in a PCTEnvironment for LXC.
     """
     if ssh:
-        return SSHEnvironment(
+        env = SSHEnvironment(
             host=host,
             port=int(port or 22),
             username=username or "root",
@@ -390,4 +426,9 @@ def create_environment(
             key_path=key_path or None,
             remote_cwd=remote_cwd or DEFAULT_REMOTE_CWD,
         )
-    return LocalEnvironment()
+    else:
+        env = LocalEnvironment()
+        
+    if pct_vmid:
+        return PCTEnvironment(pct_vmid, env)
+    return env
