@@ -913,4 +913,4 @@ _SCROLL_JS = """
 
 def inject() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
-    st.html(_SCROLL_JS, unsafe_allow_javascript=True)
+    st.html(_SCROLL_JS)

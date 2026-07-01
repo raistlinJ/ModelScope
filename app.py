@@ -267,7 +267,7 @@ with st.sidebar:
           });
         })();
         </script>
-        """, unsafe_allow_javascript=True)
+        """)
 
     if st.button("💾 Save Settings", key="btn_save_settings", use_container_width=True,
                  help="Save current configuration to ~/.modelscope/settings.json"):

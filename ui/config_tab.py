@@ -1690,14 +1690,16 @@ def _flatten_validation_set(vset: dict) -> pd.DataFrame:
     for step in vset.get("steps", []):
         for cmd in step.get("commands", []):
             rows.append({
+                "_id": cmd.get("_id"),
                 "command": cmd.get("command", ""),
                 "expected_output_type": cmd.get("expected_output_type", "Ignore"),
                 "expected_output": cmd.get("expected_output", ""),
                 "enabled": bool(cmd.get("enabled", True)),
             })
     if rows:
-        return pd.DataFrame(rows).astype({"command": str, "expected_output_type": str, "expected_output": str, "enabled": bool})
+        return pd.DataFrame(rows).astype({"_id": str, "command": str, "expected_output_type": str, "expected_output": str, "enabled": bool})
     return pd.DataFrame({
+        "_id": pd.Series(dtype=str),
         "command": pd.Series(dtype=str),
         "expected_output_type": pd.Series(dtype=str),
         "expected_output": pd.Series(dtype=str),
@@ -1705,34 +1707,62 @@ def _flatten_validation_set(vset: dict) -> pd.DataFrame:
     })
 
 
-def _write_back_validation_set(sets: list, idx: int, name: str, desc: str, edited_rows) -> None:
-    """Write data_editor rows back to the nested step structure."""
-    existing = sets[idx]
-    # Preserve existing step structure if single-step; else collapse to one step
-    if len(existing.get("steps", [])) == 1:
-        base_step = existing["steps"][0]
-    else:
-        base_step = {"_id": str(uuid.uuid4()), "delay_seconds": 0.0, "commands": []}
-    new_commands = []
+def _reconstruct_validation_set(existing: dict, name: str, desc: str, edited_rows) -> dict:
+    """Reconstruct the nested step structure from editor rows.
+    If the row count matches the original, preserve the original step boundaries.
+    Otherwise, collapse to a single step.
+    """
+    # 1. Analyze original structure
+    original_steps = existing.get("steps", [])
+    original_commands_flat = []
+    step_boundaries = []
+    for step in original_steps:
+        start = len(original_commands_flat)
+        original_commands_flat.extend(step.get("commands", []))
+        step_boundaries.append((start, len(original_commands_flat)))
+
+    # 2. Process edited rows into flat command list
+    new_commands_flat = []
     if isinstance(edited_rows, pd.DataFrame):
         _iter = edited_rows.to_dict("records")
     else:
         _iter = edited_rows or []
+
     for row in _iter:
         if isinstance(row, dict):
             r = row
         else:
             r = row._asdict() if hasattr(row, "_asdict") else dict(row)
-        new_commands.append({
-            "_id": str(uuid.uuid4()),
+
+        new_commands_flat.append({
+            "_id": r.get("_id") if r.get("_id") else str(uuid.uuid4()),
             "command": r.get("command", ""),
-            "enabled": r.get("enabled", True),
-            "timeout_seconds": 60,
+            "enabled": bool(r.get("enabled", True)),
+            "timeout_seconds": r.get("timeout_seconds", 60),
             "expected_output_type": r.get("expected_output_type", "Ignore"),
             "expected_output": r.get("expected_output", ""),
         })
-    base_step["commands"] = new_commands
-    sets[idx] = {**existing, "name": name.strip(), "description": desc.strip(), "steps": [base_step]}
+
+    # 3. Reconstruct steps
+    if len(new_commands_flat) == len(original_commands_flat) and original_steps:
+        # Preserve structure
+        new_steps = copy.deepcopy(original_steps)
+        for i, (start, end) in enumerate(step_boundaries):
+            new_steps[i]["commands"] = new_commands_flat[start:end]
+    else:
+        # Collapse to single step if structural change or no original steps
+        new_steps = [{
+            "_id": str(uuid.uuid4()),
+            "delay_seconds": 0.0,
+            "commands": new_commands_flat
+        }]
+
+    return {
+        **existing,
+        "name": name.strip(),
+        "description": desc.strip(),
+        "steps": new_steps
+    }
 
 
 def _render_bash_runtime(project: dict) -> None:
@@ -1972,11 +2002,12 @@ def _render_bash_validation(project: dict) -> None:
                 },
             )
 
-            # Write back on every render (cell edits are not structural mutations
-            # so they do not push undo; that is consistent with the old dialog)
-            _write_back_validation_set(sets, sel_idx, new_name, new_desc, edited)
-            st.session_state["bash_validation_sets"] = sets
-            _flush_bash_config(project)
+            # Reconstruct and persist only if changed
+            reconstructed = _reconstruct_validation_set(active_set, new_name, new_desc, edited)
+            if reconstructed != active_set:
+                sets[sel_idx] = reconstructed
+                st.session_state["bash_validation_sets"] = sets
+                _flush_bash_config(project)
 
             # ── Delete active set (button rendered inline above the grid) ────
             if _del_set_clicked:
