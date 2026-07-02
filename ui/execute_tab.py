@@ -93,6 +93,27 @@ def _get_selected_validation_sets(cfg: dict) -> list:
     return filtered
 
 
+def _phase_label(title: str, phase_key: str) -> str:
+    """Return an expander label with a phase indicator emoji.
+    
+    phase_key: one of 'startup', 'validation', 'completion'
+    """
+    current = st.session_state.get("_exec_phase", "")
+    running = st.session_state.get("_run_in_progress", False)
+    if not running:
+        if current == "done":
+            return f"✅ **{title}**"
+        return f"**{title}**"
+    if current == phase_key:
+        return f"🔄 **{title}** *(running…)*"
+    # Determine ordering to show check vs pending
+    order = ["startup", "validation", "completion"]
+    if phase_key in order and current in order:
+        if order.index(phase_key) < order.index(current):
+            return f"✅ **{title}**"
+    return f"⏳ **{title}**"
+
+
 def _render_step_list_readonly(steps: list, label: str) -> None:
     """Read-only listing of a step/command list (startup or completion)."""
     total_cmds = sum(
@@ -187,6 +208,15 @@ def _run_bash_bot(project: dict) -> None:
     def on_log(msg: str, source: str = "shell") -> None:
         if st.session_state.get("cancel_requested"):
             cancel_ref[0] = True
+        # Track execution phase from log prefixes
+        if msg.startswith("[RUN]") or msg.startswith("[DELAY] Step"):
+            st.session_state["_exec_phase"] = "startup"
+        elif msg.startswith("[VALIDATE"):
+            st.session_state["_exec_phase"] = "validation"
+        elif msg.startswith("[CLEANUP]"):
+            st.session_state["_exec_phase"] = "completion"
+        elif msg.startswith("[COMPLETE]"):
+            st.session_state["_exec_phase"] = "done"
         entry = {"text": msg, "tag": _tag(msg)}
         now = time.monotonic()
         if source == "shell":
@@ -290,10 +320,10 @@ def _render_bash_execute(project: dict) -> None:
                 timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
                 st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
-                with st.expander("**Startup**", expanded=True):
+                with st.expander(_phase_label("Startup", "startup"), expanded=True):
                     _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-                with st.expander("**Validation**", expanded=True):
+                with st.expander(_phase_label("Validation", "validation"), expanded=True):
                     # Validation set list
                     val_sets = cfg.get("validation_sets", [])
                     if not val_sets:
@@ -350,7 +380,7 @@ def _render_bash_execute(project: dict) -> None:
                                             else:
                                                 st.markdown(f"~~`{display}`~~ *(skipped)*")
 
-                with st.expander("**Completion**", expanded=True):
+                with st.expander(_phase_label("Completion", "completion"), expanded=True):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # Run / Cancel / Clear buttons
@@ -377,6 +407,7 @@ def _render_bash_execute(project: dict) -> None:
             st.session_state["telemetry"]        = {}
             st.session_state["_run_in_progress"] = False
             st.session_state["cancel_requested"] = False
+            st.session_state["_exec_phase"]      = ""
             st.rerun()
 
     col_sh, col_ll = st.columns(2)
@@ -394,6 +425,7 @@ def _render_bash_execute(project: dict) -> None:
         st.session_state["telemetry"]        = {}
         st.session_state["cancel_requested"] = False
         st.session_state["_run_in_progress"] = True
+        st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
         with st.spinner("Running…"):
@@ -441,6 +473,15 @@ def _run_llama_cli_bot(project: dict) -> None:
     def on_log(msg: str, source: str = "llama") -> None:
         if st.session_state.get("cancel_requested"):
             cancel_ref[0] = True
+        # Track execution phase from log prefixes
+        if msg.startswith("[RUN]") or msg.startswith("[DELAY] Step"):
+            st.session_state["_exec_phase"] = "startup"
+        elif msg.startswith("[VALIDATE"):
+            st.session_state["_exec_phase"] = "validation"
+        elif msg.startswith("[CLEANUP]"):
+            st.session_state["_exec_phase"] = "completion"
+        elif msg.startswith("[COMPLETE]"):
+            st.session_state["_exec_phase"] = "done"
         entry = {"text": msg, "tag": _tag(msg)}
         now = time.monotonic()
         
@@ -620,10 +661,10 @@ def _render_llama_cli_execute(project: dict) -> None:
                     if enabled_mcps:
                         st.caption(f"MCP: {', '.join(enabled_mcps)}")
 
-                with st.expander("**Startup**", expanded=True):
+                with st.expander(_phase_label("Startup", "startup"), expanded=True):
                     _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-                with st.expander("**Validation**", expanded=True):
+                with st.expander(_phase_label("Validation", "validation"), expanded=True):
                     val_sets = cfg.get("validation_sets", [])
                     if not val_sets:
                         st.caption("No validation sets configured — add them in the Config tab (Validation).")
@@ -679,7 +720,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             else:
                                                 st.markdown(f"~~`{display}`~~ *(skipped)*")
 
-                with st.expander("**Completion**", expanded=True):
+                with st.expander(_phase_label("Completion", "completion"), expanded=True):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # ── Scenario system prompt (editable, persisted) ──────────────────────────
@@ -718,6 +759,7 @@ def _render_llama_cli_execute(project: dict) -> None:
             st.session_state["telemetry"]        = {}
             st.session_state["_run_in_progress"] = False
             st.session_state["cancel_requested"] = False
+            st.session_state["_exec_phase"]      = ""
             st.rerun()
 
     col_sh, col_ll = st.columns(2)
@@ -735,6 +777,7 @@ def _render_llama_cli_execute(project: dict) -> None:
         st.session_state["telemetry"]        = {}
         st.session_state["cancel_requested"] = False
         st.session_state["_run_in_progress"] = True
+        st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
         with st.spinner("Running…"):
