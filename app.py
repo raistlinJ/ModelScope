@@ -134,12 +134,13 @@ def _show_add_project_dialog() -> None:
     name = st.text_input("Project Name", placeholder="My Bash Bot")
     bot_type = st.selectbox(
         "Bot Type",
-        options=["Bash-Bot"],
-        help="Choose the type of bot for this project. Llama-CLI-Bot and AI-Agent are coming soon.",
+        options=["Bash-Bot", "Llama-Server-Bot"],
+        help="Choose the type of bot for this project. AI-Agent is coming soon.",
     )
-    st.caption("Llama-CLI-Bot and AI-Agent are coming soon!")
+    st.caption("AI-Agent is coming soon!")
     _TYPE_MAP = {
         "Bash-Bot": "bash_bot",
+        "Llama-Server-Bot": "llama_cli_bot",
     }
     _CONFIG_DEFAULTS = {
         "bash_bot": {
