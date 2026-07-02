@@ -1774,7 +1774,10 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
         s[si1], s[si2] = s[si2], s[si1]
 
     def _val_add_cmd(si):
-        st.session_state[state_key][si]["commands"].append({
+        cmds = st.session_state[state_key][si]["commands"]
+        if cmds and cmds[-1].get("type", "command") == "command" and not cmds[-1].get("command", "").strip():
+            return
+        cmds.append({
             "_id": _next_step_id(),
             "type": "command",
             "command": "",
@@ -1785,7 +1788,10 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
         })
 
     def _val_add_prompt(si):
-        st.session_state[state_key][si]["commands"].append({
+        cmds = st.session_state[state_key][si]["commands"]
+        if cmds and cmds[-1].get("type") == "prompt" and not cmds[-1].get("system_prompt", "").strip() and not cmds[-1].get("user_prompt", "").strip():
+            return
+        cmds.append({
             "_id": _next_step_id(),
             "type": "prompt",
             "system_prompt": "",
