@@ -1867,7 +1867,13 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
         )
         st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
         
-        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=not _is_enabled):
+        _is_fetching_ollama = st.session_state.get(f"{pfx}_is_fetching_ollama_models", False)
+        _btn_label = "Fetching..." if _is_fetching_ollama else "Fetch Models"
+        if st.button(_btn_label, key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=(not _is_enabled) or _is_fetching_ollama):
+            st.session_state[f"{pfx}_is_fetching_ollama_models"] = True
+            st.rerun()
+
+        if _is_fetching_ollama:
             if _url.strip():
                 from core.models import fetch_ollama_models
                 _found, _err = fetch_ollama_models(_url.strip())
@@ -1878,6 +1884,8 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     st.toast(f"❌ {_err or 'No models returned.'}")
             else:
                 st.toast("⚠️ Enter a valid URL.")
+            st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
+            st.rerun()
         _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
         if _models:
             _model_names = [m["name"] for m in _models]
@@ -1916,7 +1924,13 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
         with col_fetch:
             st.write("")
             st.write("")
-            if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=not _is_enabled):
+            _is_fetching_openai = st.session_state.get(f"{pfx}_is_fetching_openai_models", False)
+            _btn_label = "Fetching..." if _is_fetching_openai else "Fetch"
+            if st.button(_btn_label, key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=(not _is_enabled) or _is_fetching_openai):
+                st.session_state[f"{pfx}_is_fetching_openai_models"] = True
+                st.rerun()
+
+            if _is_fetching_openai:
                 if _url.strip():
                     from core.models import fetch_llama_cpp_models
                     _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
@@ -1927,6 +1941,8 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                         st.toast(f"❌ {_err or 'No models returned.'}")
                 else:
                     st.toast("⚠️ Enter a valid URL.")
+                st.session_state[f"{pfx}_is_fetching_openai_models"] = False
+                st.rerun()
 
         _ssl = st.checkbox(
             "Require SSL Certificate Verification",
