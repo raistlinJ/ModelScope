@@ -3039,7 +3039,9 @@ def _render_llama_cli_runtime(project: dict) -> None:
             else:
                 st.error(_msg)
 
-    with st.expander("MCP Servers", expanded=False):
+    _mcp_en = st.session_state.get("llama_cli_mcp_enabled", False)
+    with st.expander("MCP Servers", expanded=_mcp_en):
+        en_mcp = st.toggle("Enable MCP Servers", key="llama_cli_mcp_enabled", help="Turn on MCP support for this runtime.")
         st.caption("Discover MCP servers available on the target machine.")
         col_path, col_fetch = st.columns([4, 1])
         with col_path:
@@ -3049,9 +3051,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 placeholder="/home/user/.mcp/config.json",
                 help="Path to a mcp_config.json file on the target machine.",
                 label_visibility="collapsed",
+                disabled=not en_mcp,
             )
         with col_fetch:
-            if st.button("Fetch", key="btn_llama_fetch_mcp", use_container_width=True):
+            if st.button("Fetch", key="btn_llama_fetch_mcp", use_container_width=True, disabled=not en_mcp):
                 _fetch_mcp_servers(project)
 
         servers: list = st.session_state.get("llama_cli_mcp_servers", [])
@@ -3062,6 +3065,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     srv["name"],
                     value=srv.get("enabled", True),
                     key=f"llama_mcp_en_{i}",
+                    disabled=not en_mcp,
                 )
                 servers[i]["enabled"] = enabled
             st.session_state["llama_cli_mcp_servers"] = servers
