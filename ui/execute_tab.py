@@ -320,10 +320,10 @@ def _render_bash_execute(project: dict) -> None:
                 timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
                 st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
-                with st.expander(_phase_label("Startup", "startup"), expanded=True):
+                with st.expander(_phase_label("Startup", "startup"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-                with st.expander(_phase_label("Validation", "validation"), expanded=True):
+                with st.expander(_phase_label("Validation", "validation"), expanded=False):
                     # Validation set list
                     val_sets = cfg.get("validation_sets", [])
                     if not val_sets:
@@ -380,7 +380,7 @@ def _render_bash_execute(project: dict) -> None:
                                             else:
                                                 st.markdown(f"~~`{display}`~~ *(skipped)*")
 
-                with st.expander(_phase_label("Completion", "completion"), expanded=True):
+                with st.expander(_phase_label("Completion", "completion"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # Run / Cancel / Clear buttons
@@ -680,10 +680,10 @@ def _render_llama_cli_execute(project: dict) -> None:
                     if enabled_mcps:
                         st.caption(f"MCP: {', '.join(enabled_mcps)}")
 
-                with st.expander(_phase_label("Startup", "startup"), expanded=True):
+                with st.expander(_phase_label("Startup", "startup"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-                with st.expander(_phase_label("Validation", "validation"), expanded=True):
+                with st.expander(_phase_label("Validation", "validation"), expanded=False):
                     val_sets = cfg.get("validation_sets", [])
                     if not val_sets:
                         st.caption("No validation sets configured — add them in the Config tab (Validation).")
@@ -739,7 +739,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             else:
                                                 st.markdown(f"~~`{display}`~~ *(skipped)*")
 
-                with st.expander(_phase_label("Completion", "completion"), expanded=True):
+                with st.expander(_phase_label("Completion", "completion"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # ── Scenario system prompt (editable, persisted) ──────────────────────────
