@@ -2722,7 +2722,7 @@ def _test_llama_cli_run(project: dict) -> None:
             out = res.get("stdout", "").strip()
             import re
             out = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', out)
-            st.session_state["_llama_svc_result"] = ("ok", f"Test successful! Response:\n{out[:200]}", cmd)
+            st.session_state["_llama_svc_result"] = ("ok", "Test successful! (Model loaded and executed correctly)", cmd)
 
     except Exception as exc:
         st.session_state["_llama_svc_result"] = ("error", f"Execution error: {exc}", "")
