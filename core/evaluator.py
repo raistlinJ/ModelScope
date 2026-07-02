@@ -939,7 +939,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     en_threads    = config.get("en_threads", False)
     flash_attn    = config.get("flash_attn", False)
     custom_flags  = config.get("custom_flags", "")
-    sudo_pfx   = "sudo " if config.get("sudo") else ""
+    _use_sudo  = bool(config.get("sudo"))
+    _sudo_pw   = (config.get("sudo_password") or "").strip()
+    sudo_pfx   = "sudo " if _use_sudo else ""
     prompts    = config.get("prompts", [])
     commands   = config.get("commands", [])
     val_cmds   = config.get("validation_commands", [])
@@ -960,6 +962,21 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         "interrupted_by_user":  False,
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
+
+    if _use_sudo:
+        mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
+        on_log(f"[LLAMA-CLI] sudo access enabled — commands will run as root {mode}")
+        
+        # Preflight check for sudo auth
+        _sudo_check_cmd = f"sudo -k; echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -k; sudo -n -v"
+        _check_res = env.execute(_sudo_check_cmd, timeout=10)
+        if _check_res.get("exit_code", -1) != 0:
+            err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")
+            err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
+            on_log(f"[ERROR] Sudo authentication failed: {err_clean}")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = f"Sudo authentication failed: {err_clean}"
+            return telemetry
 
     # If binary_path is a directory, assume llama-cli lives inside it
     if binary and os.path.isdir(binary):
@@ -1116,7 +1133,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
                 custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
                 cmd = (
-                    f"{sudo_pfx}{binary}"
+                    f"{binary}"
                     f" -m {shlex.quote(model_path)}"
                     f" -c {tokens}"
                     f"{f' --temp {temperature}' if en_temp else ''}"
@@ -1125,11 +1142,15 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     f"{' -fa' if flash_attn else ''}"
                     f"{sys_flag}"
                     f"{custom_flag_str}"
-                )
-                cmd += (
                     f" --prompt {safe_prompt}"
                     f" -n 512 --simple-io --no-display-prompt --single-turn"
                 )
+                if _use_sudo:
+                    if _sudo_pw:
+                        cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+                    else:
+                        cmd = f"sudo {cmd}"
+
                 on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
                 res = env.execute(cmd, timeout=timeout)
                 stderr_out = res.get("stderr", "").strip()
@@ -1173,7 +1194,13 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         if cancel_ref[0]:
             telemetry["run_aborted"] = True
             break
-        full_cmd = f"{sudo_pfx}{cmd}"
+        if _use_sudo:
+            if _sudo_pw:
+                full_cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+            else:
+                full_cmd = f"sudo {cmd}"
+        else:
+            full_cmd = cmd
         on_log(f"[CMD] {full_cmd}")
         res = env.execute(full_cmd, timeout=timeout)
         if res.get("stdout"):
@@ -1193,7 +1220,13 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             on_log("[WARN] Run was cancelled or timed out — metrics evaluation still proceeding")
         all_passed = True
         for cmd in val_cmds:
-            val = _run_validation(env, cmd, fail_pats)
+            val_cmd_str = cmd
+            if _use_sudo:
+                if _sudo_pw:
+                    val_cmd_str = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+                else:
+                    val_cmd_str = f"sudo {cmd}"
+            val = _run_validation(env, val_cmd_str, fail_pats)
             status = "PASS ✓" if val["passed"] else "FAIL ✗"
             on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")
             if not val["passed"]:
