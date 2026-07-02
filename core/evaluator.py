@@ -930,7 +930,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     binary     = config.get("binary_path", "") or "llama-cli"
     model_dir  = config.get("model_dir", "")
     model_name = config.get("model_name", "")
-    tokens     = config.get("tokens", 2048)
+    tokens     = config.get("tokens", 32768)
+    custom_flags = config.get("custom_flags", "")
     sudo_pfx   = "sudo " if config.get("sudo") else ""
     prompts    = config.get("prompts", [])
     commands   = config.get("commands", [])
@@ -1106,11 +1107,15 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     break
                 safe_prompt = shlex.quote(prompt)
                 sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
+                custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
                 cmd = (
                     f"{sudo_pfx}{binary}"
                     f" -m {shlex.quote(model_path)}"
                     f" -c {tokens}"
                     f"{sys_flag}"
+                    f"{custom_flag_str}"
+                )
+                cmd += (
                     f" --prompt {safe_prompt}"
                     f" -n 512 --simple-io --no-display-prompt --single-turn"
                 )

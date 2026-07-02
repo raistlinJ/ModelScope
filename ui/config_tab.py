@@ -2448,7 +2448,8 @@ def _flush_llama_cli_config(project: dict) -> None:
         "openai_base_url":     st.session_state.get("llama_cli_openai_base_url", ""),
         "openai_api_key":      st.session_state.get("llama_cli_openai_api_key", ""),
         "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", True),
-        "tokens":              st.session_state.get("llama_cli_tokens", 2048),
+        "tokens":              st.session_state.get("llama_cli_tokens", 32768),
+        "custom_flags":        st.session_state.get("llama_cli_custom_flags", ""),
         "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
         "mcp_servers":         st.session_state.get("llama_cli_mcp_servers", []),
         "steps":               _steps,
@@ -2713,9 +2714,22 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     key="_llama_model_sel_widget",
                 )
                 st.session_state["llama_cli_model_name"] = chosen
+
+                st.text_input(
+                    "Custom Flags",
+                    key="llama_cli_custom_flags",
+                    placeholder="-ngl 99 --temp 0.7",
+                    help="Additional flags to pass to llama-cli.",
+                )
             elif st.session_state.get("llama_cli_model_name"):
                 st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` "
                         "(click Scan to refresh list)")
+                st.text_input(
+                    "Custom Flags",
+                    key="llama_cli_custom_flags",
+                    placeholder="-ngl 99 --temp 0.7",
+                    help="Additional flags to pass to llama-cli.",
+                )
             else:
                 st.caption("Set Model Directory and click **Scan** to discover models.")
         else:
@@ -2836,7 +2850,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                         _mname,  # fallback: use the name as the path
                     )
                     _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip() or "/usr/local/bin/llama-server"
-                    _ctx  = int(st.session_state.get("llama_cli_tokens", 2048))
+                    _ctx  = int(st.session_state.get("llama_cli_tokens", 32768))
                     _cmd  = f"{_bin} --model {_mpath} --ctx-size {_ctx} --host 127.0.0.1 --port 8080 --jinja --parallel 1"
                     if not _mpath:
                         st.session_state["_llama_svc_result"] = (
