@@ -1557,80 +1557,113 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 for ci, cmd in enumerate(commands):
                     cmd_id = cmd["_id"]
 
-                    # Single flat row: command | timeout | long-running | enabled | delete
-                    cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
-                    with cc1:
-                        cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
-                        if cmd_key not in st.session_state:
-                            st.session_state[cmd_key] = cmd.get("command", "")
-
-                        # On the last command row, pressing Enter (on_change) sets a
-                        # flag to add a new command — same action as clicking "+ Add Command".
-                        # on_change fires after the widget commits its value, so
-                        # st.session_state[cmd_key] already holds the new text.
-                        if ci == _is_last_cmd_idx:
-                            def _on_last_cmd_enter(
-                                _ck=cmd_key, _fk=_addcmd_flag_key
-                            ):
-                                if st.session_state.get(_ck, "").strip():
-                                    st.session_state[_fk] = True
-
-                            st.text_input(
-                                f"Command {ci + 1}",
-                                key=cmd_key,
-                                placeholder=placeholder,
-                                label_visibility="collapsed",
-                                on_change=_on_last_cmd_enter,
-                            )
-                        else:
-                            st.text_input(
-                                f"Command {ci + 1}",
-                                key=cmd_key,
-                                placeholder=placeholder,
-                                label_visibility="collapsed",
-                            )
-                        cmd["command"] = st.session_state.get(cmd_key, "")
-                    with ccl_to:
-                        st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
-                    with ccv_to:
-                        lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
-                        is_lr  = st.session_state.get(lr_key, cmd.get("long_running", False))
+                    _cmd_type = cmd.get("type", "command")
+                    if _cmd_type == "prompt":
+                        cc1, cc2, cc3, cc4 = st.columns([6.0, 1.5, 1.0, 0.7])
+                        with cc1:
+                            st.markdown("**LLM Prompt**")
+                        with cc2:
+                            pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
+                            cmd["preserve_context"] = st.checkbox("Preserve Ctx", value=cmd.get("preserve_context", True), key=pc_key)
+                        with cc3:
+                            en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                            cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                        with cc4:
+                            if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
+                                mutation = ("del_cmd", si, ci)
                         
-                        to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
-                        if to_key not in st.session_state:
-                            st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
-                        cmd["timeout_seconds"] = st.number_input(
-                            "Timeout (s)",
-                            min_value=0.1, max_value=3600.0, step=1.0,
-                            key=to_key,
-                            disabled=is_lr,
-                            label_visibility="collapsed",
-                            help="Per-command timeout in seconds.",
-                        )
-                    with cc3:
-                        cmd["long_running"] = st.checkbox(
-                            "Long-running",
-                            value=cmd.get("long_running", False),
-                            key=lr_key,
-                            help="Disables the per-command timeout; allows up to 1 hour.",
-                        )
-                    with cc4:
-                        en_key         = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                        cmd["enabled"] = st.checkbox(
-                            "Enabled",
-                            value=cmd.get("enabled", True),
-                            key=en_key,
-                        )
-                    with cc5:
-                        if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del",
-                                     use_container_width=True):
-                            mutation = ("del_cmd", si, ci)
+                        sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                        if sys_key not in st.session_state:
+                            st.session_state[sys_key] = cmd.get("system_prompt", "")
+                        cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...")
+                        
+                        usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
+                        if usr_key not in st.session_state:
+                            st.session_state[usr_key] = cmd.get("user_prompt", "")
+                        cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...")
+                        st.write("")
+                    else:
+                        # Single flat row: command | timeout | long-running | enabled | delete
+                        cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
+                        with cc1:
+                            cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                            if cmd_key not in st.session_state:
+                                st.session_state[cmd_key] = cmd.get("command", "")
+    
+                            if ci == _is_last_cmd_idx:
+                                def _on_last_cmd_enter(
+                                    _ck=cmd_key, _fk=_addcmd_flag_key
+                                ):
+                                    if st.session_state.get(_ck, "").strip():
+                                        st.session_state[_fk] = True
+    
+                                st.text_input(
+                                    f"Command {ci + 1}",
+                                    key=cmd_key,
+                                    placeholder=placeholder,
+                                    label_visibility="collapsed",
+                                    on_change=_on_last_cmd_enter,
+                                )
+                            else:
+                                st.text_input(
+                                    f"Command {ci + 1}",
+                                    key=cmd_key,
+                                    placeholder=placeholder,
+                                    label_visibility="collapsed",
+                                )
+                            cmd["command"] = st.session_state.get(cmd_key, "")
+                        with ccl_to:
+                            st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                        with ccv_to:
+                            lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                            is_lr  = st.session_state.get(lr_key, cmd.get("long_running", False))
+                            
+                            to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                            if to_key not in st.session_state:
+                                st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                            cmd["timeout_seconds"] = st.number_input(
+                                "Timeout (s)",
+                                min_value=0.1, max_value=3600.0, step=1.0,
+                                key=to_key,
+                                disabled=is_lr,
+                                label_visibility="collapsed",
+                                help="Per-command timeout in seconds.",
+                            )
+                        with cc3:
+                            cmd["long_running"] = st.checkbox(
+                                "Long-running",
+                                value=cmd.get("long_running", False),
+                                key=lr_key,
+                                help="Disables the per-command timeout; allows up to 1 hour.",
+                            )
+                        with cc4:
+                            en_key         = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                            cmd["enabled"] = st.checkbox(
+                                "Enabled",
+                                value=cmd.get("enabled", True),
+                                key=en_key,
+                            )
+                        with cc5:
+                            if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del",
+                                         use_container_width=True):
+                                mutation = ("del_cmd", si, ci)
 
                 # Add Command: either button click or Enter in the last command field.
                 if st.session_state.pop(_addcmd_flag_key, False):
                     mutation = ("add_cmd", si)
-                elif st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
-                    mutation = ("add_cmd", si)
+                else:
+                    _llm_enabled = st.session_state.get(f"{pfx}_llm_helper_enabled", False)
+                    if _llm_enabled:
+                        ca, cb, _ = st.columns([1.5, 1.5, 7.0])
+                        with ca:
+                            if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
+                                mutation = ("add_cmd", si)
+                        with cb:
+                            if st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                                mutation = ("add_prompt", si)
+                    else:
+                        if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                            mutation = ("add_cmd", si)
 
     # Add Step button
     if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
@@ -1666,10 +1699,20 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
         elif m[0] == "add_cmd":
             steps[m[1]]["commands"].append({
                 "_id":             _next_step_id(),
+                "type":            "command",
                 "command":         "",
                 "enabled":         True,
                 "long_running":    False,
                 "timeout_seconds": 60,
+            })
+        elif m[0] == "add_prompt":
+            steps[m[1]]["commands"].append({
+                "_id":             _next_step_id(),
+                "type":            "prompt",
+                "system_prompt":   "",
+                "user_prompt":     "",
+                "preserve_context": True,
+                "enabled":         True,
             })
         elif m[0] == "del_cmd":
             steps[m[1]]["commands"].pop(m[2])

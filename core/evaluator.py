@@ -731,10 +731,29 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def execute_helper_prompt(prompt_text: str, config: dict, on_log: Callable) -> dict:
+def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_log: Callable) -> dict:
     import requests
     backend = config.get("llm_helper_backend", "OpenAI-Compatible")
     model = config.get("llm_helper_model", "")
+    
+    # Handle both new cmd_obj dicts and legacy string prompts
+    if isinstance(cmd_obj, str):
+        system_prompt = ""
+        user_prompt = cmd_obj
+        preserve = False
+    else:
+        system_prompt = cmd_obj.get("system_prompt", "")
+        user_prompt = cmd_obj.get("user_prompt", "")
+        preserve = cmd_obj.get("preserve_context", True)
+        
+    messages = []
+    if preserve and context_list:
+        messages.extend(context_list)
+        
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if user_prompt:
+        messages.append({"role": "user", "content": user_prompt})
     
     if backend == "OpenAI-Compatible":
         url = config.get("llm_helper_openai_url", "").rstrip("/")
@@ -746,7 +765,7 @@ def execute_helper_prompt(prompt_text: str, config: dict, on_log: Callable) -> d
             headers["Authorization"] = f"Bearer {apikey}"
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt_text}],
+            "messages": messages,
             "temperature": 0.2
         }
         verify_ssl = config.get("llm_helper_openai_verify_ssl", True)
@@ -758,6 +777,12 @@ def execute_helper_prompt(prompt_text: str, config: dict, on_log: Callable) -> d
             data = resp.json()
             response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            if preserve:
+                if system_prompt:
+                    context_list.append({"role": "system", "content": system_prompt})
+                if user_prompt:
+                    context_list.append({"role": "user", "content": user_prompt})
+                context_list.append({"role": "assistant", "content": response_text})
             return {"stdout": response_text, "exit_code": 0}
         except Exception as e:
             on_log(f"[ERROR] LLM Helper failed: {e}", "llama")
@@ -769,17 +794,23 @@ def execute_helper_prompt(prompt_text: str, config: dict, on_log: Callable) -> d
             return {"exit_code": 1, "stderr": "No URL configured for Ollama Helper."}
         payload = {
             "model": model,
-            "prompt": prompt_text,
+            "messages": messages,
             "stream": False,
             "options": {"temperature": 0.2}
         }
-        on_log(f"[PROMPT HELPER] Sending to {url}/api/generate", "llama")
+        on_log(f"[PROMPT HELPER] Sending to {url}/api/chat", "llama")
         try:
-            resp = requests.post(f"{url}/api/generate", json=payload, timeout=120)
+            resp = requests.post(f"{url}/api/chat", json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
-            response_text = data.get("response", "")
+            response_text = data.get("message", {}).get("content", "")
             on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            if preserve:
+                if system_prompt:
+                    context_list.append({"role": "system", "content": system_prompt})
+                if user_prompt:
+                    context_list.append({"role": "user", "content": user_prompt})
+                context_list.append({"role": "assistant", "content": response_text})
             return {"stdout": response_text, "exit_code": 0}
         except Exception as e:
             on_log(f"[ERROR] LLM Helper failed: {e}", "llama")
@@ -854,6 +885,8 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
             on_log(f"[STDERR] {res['stderr'][:400]}")
         return res
 
+    helper_context = []
+
     def _run_step_list(steps: list, label: str = "RUN") -> bool:
         """
         Execute a step-format or legacy string list.
@@ -899,15 +932,13 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
                     if not config.get("llm_helper_enabled", False):
                         on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.")
                         continue
-                    prompt_text = (cmd_obj.get("prompt", "") or cmd_obj.get("command", "")).strip()
-                    if prompt_text:
-                        res = execute_helper_prompt(prompt_text, config, on_log)
-                        telemetry["tool_calls"].append({
-                            "tool":      "llm_helper",
-                            "args":      {"prompt": prompt_text},
-                            "result":    res,
-                            "exit_code": res.get("exit_code", -1),
-                        })
+                    res = execute_helper_prompt(cmd_obj, config, helper_context, on_log)
+                    telemetry["tool_calls"].append({
+                        "tool":      "llm_helper",
+                        "args":      {"prompt": cmd_obj},
+                        "result":    res,
+                        "exit_code": res.get("exit_code", -1),
+                    })
                 else:
                     cmd_text = cmd_obj.get("command", "").strip()
                     if not cmd_text:
@@ -1196,6 +1227,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 })
             return res
 
+    helper_context = []
+
     def _run_step_list(steps: list, label: str = "RUN") -> bool:
         for step_idx, step in enumerate(steps):
             if cancel_ref[0]:
@@ -1234,15 +1267,13 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     if not config.get("llm_helper_enabled", False):
                         on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.", "shell")
                         continue
-                    prompt_text = (cmd_obj.get("prompt", "") or cmd_obj.get("command", "")).strip()
-                    if prompt_text:
-                        res = execute_helper_prompt(prompt_text, config, lambda m, src="shell": on_log(m, src))
-                        telemetry["tool_calls"].append({
-                            "tool":      "llm_helper",
-                            "args":      {"prompt": prompt_text},
-                            "result":    res,
-                            "exit_code": res.get("exit_code", -1),
-                        })
+                    res = execute_helper_prompt(cmd_obj, config, helper_context, lambda m, src="shell": on_log(m, src))
+                    telemetry["tool_calls"].append({
+                        "tool":      "llm_helper",
+                        "args":      {"prompt": cmd_obj},
+                        "result":    res,
+                        "exit_code": res.get("exit_code", -1),
+                    })
                 else:
                     cmd_text = cmd_obj.get("command", "").strip()
                     if not cmd_text:
