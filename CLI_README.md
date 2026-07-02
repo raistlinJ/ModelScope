@@ -48,14 +48,11 @@ modelscope run [options]
 | `--system-prompt TEXT` | scenario default | Override the scenario's system prompt |
 | `--user-prompt TEXT` | scenario default | Override the scenario's user prompt |
 | `--mcp-url URL` | _(empty)_ | MCP tool server URL |
-| `--ssh-host HOST` | _(none)_ | Remote SSH host; enables SSH/CAF mode |
+| `--ssh-host HOST` | _(none)_ | Remote SSH host; enables remote SSH execution |
 | `--ssh-port PORT` | `22` | Remote SSH port |
 | `--ssh-user USER` | `root` | Remote SSH username |
 | `--ssh-password PASS` | _(none)_ | Remote SSH password |
 | `--ssh-key-path PATH` | _(none)_ | Path to SSH private key file |
-| `--ssh-caf-dir PATH` | `~/cyber-agent-flow` | Remote directory where CAF is installed |
-| `--caf-scope {Narrow,Broad}` | scenario default | CAF evaluation scope |
-| `--caf-urgency {Speed,Stealth}` | scenario default | CAF timing mode |
 | `--json` | off | Print full telemetry dict as JSON on completion |
 | `-v`, `--verbose` | off | Enable DEBUG-level logging |
 | `--dry-run` | off | Print assembled config (redacting password) and exit |

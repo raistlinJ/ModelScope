@@ -68,9 +68,8 @@ _TAG_COLORS: dict[str, str] = {
     "[TOOL CALL]":  _YELLOW,
     "[TOOL RESULT]":_YELLOW,
     "[ERROR]":      _RED,
-    "[DONE]":       _GREEN,
-    "[VALIDATE]":   _BLUE,
-    "[INIT]":       _DIM,
+    "[INIT]":       _GREEN,
+    "[SETUP]":      _GREEN,
     "[SESSION]":    _DIM,
     "[COMPLETE]":   _GREEN,
     "[ABORTED]":    _RED,
@@ -228,9 +227,9 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     # ── MCP ───────────────────────────────────────────────────────────────────
     parser.add_argument("--mcp-url", dest="mcp_url", default="", help="MCP tool server URL.")
 
-    # ── SSH / remote CAF target ───────────────────────────────────────────────
+    # ── SSH / remote target ───────────────────────────────────────────────
     parser.add_argument("--ssh-host", dest="ssh_host", default=None,
-                        help="Remote SSH host (enables SSH/CAF mode).")
+                        help="Remote SSH host (enables SSH execution).")
     parser.add_argument("--ssh-port", dest="ssh_port", type=int, default=22,
                         help="Remote SSH port.")
     parser.add_argument("--ssh-user", dest="ssh_user", default="root",
@@ -241,18 +240,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
                         help="Path to SSH private key.")
     parser.add_argument("--pct-vmid", dest="pct_vmid", default=None,
                         help="Proxmox container VMID (enables PCT execution mode).")
-    parser.add_argument(
-        "--ssh-caf-dir",
-        dest="ssh_caf_dir",
-        default="~/cyber-agent-flow",
-        help="Remote working directory where CyberAgentFlow is installed.",
-    )
 
-    # ── CAF runtime ───────────────────────────────────────────────────────────
-    parser.add_argument("--caf-scope", dest="caf_scope", default=None,
-                        help="CAF scope (e.g. Narrow/Broad).")
-    parser.add_argument("--caf-urgency", dest="caf_urgency", default=None,
-                        help="CAF urgency (e.g. Speed/Stealth).")
 
     # ── Output / control ──────────────────────────────────────────────────────
     parser.add_argument(
@@ -488,11 +476,7 @@ def _build_config(args: argparse.Namespace) -> dict:
         "expected_stdout":     "",
         "pre_run_cleanup":     [],
         "cancel_requested_ref": [False],
-        "caf_scope":           args.caf_scope or "Narrow",
-        "caf_urgency":         args.caf_urgency or "Speed",
-        "caf_allowed_subnets": [],
-        "caf_target_credentials": [],
-        "execution_mode":      "caf_ssh" if is_ssh else "local",
+        "execution_mode":      "ssh" if is_ssh else "local",
     }
     return config
 
@@ -509,7 +493,7 @@ def _make_env(args: argparse.Namespace, on_log):
             username=args.ssh_user,
             password=args.ssh_password,
             key_path=args.ssh_key_path,
-            remote_cwd=args.ssh_caf_dir,
+            remote_cwd=None,
         )
         on_log(f"[INIT] Target: SSH ({args.ssh_user}@{args.ssh_host})")
         return env
@@ -729,7 +713,7 @@ def _cmd_project(args: argparse.Namespace) -> int:
             username=config.get("ssh_user", "root"),
             password=config.get("ssh_password"),
             key_path=config.get("ssh_key_path"),
-            remote_cwd=config.get("ssh_caf_dir") or "",
+            remote_cwd="",
             pct_vmid=config.get("pct_vmid") if is_pct else None,
         )
         if is_pct:
@@ -806,7 +790,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "user":     args.ssh_user,
                 "password": "***REDACTED***" if args.ssh_password else None,
                 "key_path": args.ssh_key_path,
-                "caf_dir":  args.ssh_caf_dir,
             }
         print(_c("Dry-run config (no evaluation will run):", _BOLD))
         print(json.dumps(safe_config, indent=2, default=str))
@@ -903,8 +886,6 @@ def _cmd_batch(args: argparse.Namespace) -> int:
             "mcp_server_url": spec.get("mcp_server_url", ""),
             "mcp_tools":      spec.get("mcp_tools", {}),
             "mcp_running":    bool(spec.get("mcp_url", "")),
-            "caf_scope":      spec.get("caf_scope"),
-            "caf_urgency":    spec.get("caf_urgency"),
         }
 
         job = BatchJob(
@@ -1147,8 +1128,7 @@ def _maybe_inject_run_subcommand(argv: list[str]) -> list[str]:
         "--model", "--backend", "--llm-url", "--context-size",
         "--system-prompt", "--user-prompt", "--mcp-url",
         "--ssh-host", "--ssh-port", "--ssh-user", "--ssh-password",
-        "--ssh-key-path", "--ssh-caf-dir",
-        "--caf-scope", "--caf-urgency", "--session-dir",
+        "--ssh-key-path", "--session-dir",
         # short forms
         "-v",
     }
