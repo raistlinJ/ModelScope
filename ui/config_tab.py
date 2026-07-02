@@ -2450,8 +2450,11 @@ def _flush_llama_cli_config(project: dict) -> None:
         "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", True),
         "tokens":              st.session_state.get("llama_cli_tokens", 32768),
         "temperature":         st.session_state.get("llama_cli_temperature", 0.8),
+        "en_temp":             st.session_state.get("llama_cli_en_temp", False),
         "gpu_layers":          st.session_state.get("llama_cli_gpu_layers", 99),
+        "en_gpu_layers":       st.session_state.get("llama_cli_en_gpu_layers", False),
         "threads":             st.session_state.get("llama_cli_threads", 4),
+        "en_threads":          st.session_state.get("llama_cli_en_threads", False),
         "flash_attn":          st.session_state.get("llama_cli_flash_attn", False),
         "custom_flags":        st.session_state.get("llama_cli_custom_flags", ""),
         "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
@@ -2819,20 +2822,27 @@ def _render_llama_cli_runtime(project: dict) -> None:
             help="Maximum context length passed to llama-cli via -c.",
         )
 
-        _col1, _col2 = st.columns(2)
-        with _col1:
-            st.session_state.setdefault("llama_cli_temperature", 0.8)
-            st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, key="llama_cli_temperature", help="Higher values = more random, lower values = more focused (--temp).")
+        with st.expander("Advanced Options", expanded=False):
+            _col1, _col2 = st.columns(2)
+            with _col1:
+                st.session_state.setdefault("llama_cli_en_temp", False)
+                _en_temp = st.checkbox("Enable Temperature", key="llama_cli_en_temp")
+                st.session_state.setdefault("llama_cli_temperature", 0.8)
+                st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, key="llama_cli_temperature", disabled=not _en_temp, help="Higher values = more random, lower values = more focused (--temp).")
 
-            st.session_state.setdefault("llama_cli_gpu_layers", 99)
-            st.number_input("GPU Layers", min_value=0, max_value=999, step=1, key="llama_cli_gpu_layers", help="Number of layers to offload to GPU (-ngl). Use 99 or higher for full offload.")
-        with _col2:
-            st.session_state.setdefault("llama_cli_threads", 4)
-            st.number_input("Threads", min_value=1, max_value=256, step=1, key="llama_cli_threads", help="Number of CPU threads to use during generation (-t).")
-            
-            st.session_state.setdefault("llama_cli_flash_attn", False)
-            st.write("") # Spacer
-            st.checkbox("Enable Flash Attention", key="llama_cli_flash_attn", help="Use Flash Attention for faster generation and lower memory usage (-fa).")
+                st.session_state.setdefault("llama_cli_en_gpu_layers", False)
+                _en_gpu = st.checkbox("Enable GPU Layers", key="llama_cli_en_gpu_layers")
+                st.session_state.setdefault("llama_cli_gpu_layers", 99)
+                st.number_input("GPU Layers", min_value=0, max_value=999, step=1, key="llama_cli_gpu_layers", disabled=not _en_gpu, help="Number of layers to offload to GPU (-ngl). Use 99 or higher for full offload.")
+            with _col2:
+                st.session_state.setdefault("llama_cli_en_threads", False)
+                _en_threads = st.checkbox("Enable Threads", key="llama_cli_en_threads")
+                st.session_state.setdefault("llama_cli_threads", 4)
+                st.number_input("Threads", min_value=1, max_value=256, step=1, key="llama_cli_threads", disabled=not _en_threads, help="Number of CPU threads to use during generation (-t).")
+                
+                st.session_state.setdefault("llama_cli_flash_attn", False)
+                st.write("") # Spacer
+                st.checkbox("Enable Flash Attention", key="llama_cli_flash_attn", help="Use Flash Attention for faster generation and lower memory usage (-fa).")
 
         st.divider()
         _col_svc, _col_status = st.columns([1, 2])

@@ -928,14 +928,17 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             break
     backend    = config.get("backend", "llama.cpp")
     binary     = config.get("binary_path", "") or "llama-cli"
-    model_dir  = config.get("model_dir", "")
-    model_name = config.get("model_name", "")
-    tokens       = config.get("tokens", 32768)
-    temperature  = config.get("temperature", 0.8)
-    gpu_layers   = config.get("gpu_layers", 99)
-    threads      = config.get("threads", 4)
-    flash_attn   = config.get("flash_attn", False)
-    custom_flags = config.get("custom_flags", "")
+    model_dir     = config.get("model_dir", "")
+    model_name    = config.get("model_name", "")
+    tokens        = config.get("tokens", 32768)
+    temperature   = config.get("temperature", 0.8)
+    en_temp       = config.get("en_temp", False)
+    gpu_layers    = config.get("gpu_layers", 99)
+    en_gpu_layers = config.get("en_gpu_layers", False)
+    threads       = config.get("threads", 4)
+    en_threads    = config.get("en_threads", False)
+    flash_attn    = config.get("flash_attn", False)
+    custom_flags  = config.get("custom_flags", "")
     sudo_pfx   = "sudo " if config.get("sudo") else ""
     prompts    = config.get("prompts", [])
     commands   = config.get("commands", [])
@@ -1116,9 +1119,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     f"{sudo_pfx}{binary}"
                     f" -m {shlex.quote(model_path)}"
                     f" -c {tokens}"
-                    f" --temp {temperature}"
-                    f" -ngl {gpu_layers}"
-                    f" -t {threads}"
+                    f"{f' --temp {temperature}' if en_temp else ''}"
+                    f"{f' -ngl {gpu_layers}' if en_gpu_layers else ''}"
+                    f"{f' -t {threads}' if en_threads else ''}"
                     f"{' -fa' if flash_attn else ''}"
                     f"{sys_flag}"
                     f"{custom_flag_str}"
