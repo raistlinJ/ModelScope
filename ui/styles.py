@@ -321,6 +321,11 @@ h3 {
 [data-testid="stSelectbox"] > div > div:focus-within {
     border-color: var(--accent) !important;
 }
+/* Prevent typing/editing in selectboxes (make them select-only) */
+[data-testid="stSelectbox"] [data-baseweb="select"] input {
+    caret-color: transparent !important;
+    pointer-events: none !important;
+}
 
 /* ─ Buttons ──────────────────────────────────────────────────────── */
 div.stButton > button {
