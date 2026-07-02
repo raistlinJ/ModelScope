@@ -2826,19 +2826,34 @@ def _render_llama_cli_runtime(project: dict) -> None:
             _col1, _col2 = st.columns(2)
             with _col1:
                 st.session_state.setdefault("llama_cli_en_temp", False)
-                _en_temp = st.checkbox("Enable Temperature", key="llama_cli_en_temp")
                 st.session_state.setdefault("llama_cli_temperature", 0.8)
-                st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, key="llama_cli_temperature", disabled=not _en_temp, help="Higher values = more random, lower values = more focused (--temp).")
+                c1, c2 = st.columns([1, 6])
+                with c1:
+                    st.write("")
+                    st.write("")
+                    _en_temp = st.checkbox("en_temp", key="llama_cli_en_temp", label_visibility="collapsed", help="Enable Temperature")
+                with c2:
+                    st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, key="llama_cli_temperature", disabled=not _en_temp, help="Higher values = more random, lower values = more focused (--temp).")
 
                 st.session_state.setdefault("llama_cli_en_gpu_layers", False)
-                _en_gpu = st.checkbox("Enable GPU Layers", key="llama_cli_en_gpu_layers")
                 st.session_state.setdefault("llama_cli_gpu_layers", 99)
-                st.number_input("GPU Layers", min_value=0, max_value=999, step=1, key="llama_cli_gpu_layers", disabled=not _en_gpu, help="Number of layers to offload to GPU (-ngl). Use 99 or higher for full offload.")
+                c3, c4 = st.columns([1, 6])
+                with c3:
+                    st.write("")
+                    st.write("")
+                    _en_gpu = st.checkbox("en_gpu", key="llama_cli_en_gpu_layers", label_visibility="collapsed", help="Enable GPU Layers")
+                with c4:
+                    st.number_input("GPU Layers", min_value=0, max_value=999, step=1, key="llama_cli_gpu_layers", disabled=not _en_gpu, help="Number of layers to offload to GPU (-ngl). Use 99 or higher for full offload.")
             with _col2:
                 st.session_state.setdefault("llama_cli_en_threads", False)
-                _en_threads = st.checkbox("Enable Threads", key="llama_cli_en_threads")
                 st.session_state.setdefault("llama_cli_threads", 4)
-                st.number_input("Threads", min_value=1, max_value=256, step=1, key="llama_cli_threads", disabled=not _en_threads, help="Number of CPU threads to use during generation (-t).")
+                c5, c6 = st.columns([1, 6])
+                with c5:
+                    st.write("")
+                    st.write("")
+                    _en_threads = st.checkbox("en_threads", key="llama_cli_en_threads", label_visibility="collapsed", help="Enable Threads")
+                with c6:
+                    st.number_input("Threads", min_value=1, max_value=256, step=1, key="llama_cli_threads", disabled=not _en_threads, help="Number of CPU threads to use during generation (-t).")
                 
                 st.session_state.setdefault("llama_cli_flash_attn", False)
                 st.write("") # Spacer
