@@ -2793,10 +2793,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 else:
                     st.warning("Enter an Instance URL first.")
 
+        st.session_state.setdefault("llama_cli_tokens", 32768)
         st.number_input(
             "Context Window (tokens)",
             min_value=128, max_value=131072, step=256,
-            value=32768,
             key="llama_cli_tokens",
             help="Maximum context length passed to llama-cli via -c.",
         )
