@@ -930,7 +930,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
                 cmd_type = cmd_obj.get("type", "command")
                 if cmd_type == "prompt":
                     if not config.get("llm_helper_enabled", False):
-                        on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.")
+                        on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.")
                         continue
                     res = execute_helper_prompt(cmd_obj, config, helper_context, on_log)
                     telemetry["tool_calls"].append({
@@ -1265,7 +1265,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 cmd_type = cmd_obj.get("type", "command")
                 if cmd_type == "prompt":
                     if not config.get("llm_helper_enabled", False):
-                        on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.", "shell")
+                        on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.", "shell")
                         continue
                     res = execute_helper_prompt(cmd_obj, config, helper_context, lambda m, src="shell": on_log(m, src))
                     telemetry["tool_calls"].append({

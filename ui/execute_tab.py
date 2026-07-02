@@ -119,7 +119,7 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
                         with st.container(border=True):
                             pc_icon = "🔗" if cmd_obj.get("preserve_context", True) else "🚫"
                             en_str = "" if enabled else " &nbsp; *(disabled)*"
-                            st.markdown(f"💬 **LLM Prompt** &nbsp; | &nbsp; {pc_icon} **Context** {en_str}")
+                            st.markdown(f"💬 **LLM Judge** &nbsp; | &nbsp; {pc_icon} **Context** {en_str}")
                             
                             sys_text = cmd_obj.get("system_prompt", "")
                             if sys_text:
@@ -128,7 +128,7 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
                                     
                             usr_text = cmd_obj.get("user_prompt", "")
                             if usr_text:
-                                with st.expander("User Prompt", expanded=True):
+                                with st.expander("User Prompt", expanded=False):
                                     st.code(usr_text, language="text")
                     else:
                         text = cmd_obj.get("command", "")

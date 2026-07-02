@@ -1574,7 +1574,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             with cc0:
                                 st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                             with cc1:
-                                st.markdown("**LLM Prompt**")
+                                st.markdown("**LLM Judge**")
                             with cc2:
                                 pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
                                 cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
@@ -1594,7 +1594,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
                             if usr_key not in st.session_state:
                                 st.session_state[usr_key] = cmd.get("user_prompt", "")
-                            with st.expander("User Prompt", expanded=True):
+                            with st.expander("User Prompt", expanded=False):
                                 cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
                     else:
                         # Single flat row: indicator | command | timeout | long-running | enabled | delete
@@ -1676,7 +1676,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
                                 mutation = ("add_cmd", si)
                         with cb:
-                            if st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                            if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
                                 mutation = ("add_prompt", si)
                     else:
                         if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
@@ -1898,13 +1898,13 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
 
 
 def _render_llm_prompt_helper_tab(pfx: str) -> None:
-    """Render the connection settings for the LLM Prompt Helper."""
+    """Render the connection settings for the LLM Judge."""
     st.caption(
         "Configure an LLM connection here to assist with generating commands or prompts "
         "for your tasks."
     )
     _is_enabled = st.toggle(
-        "Enable LLM Prompt Helper",
+        "Enable LLM Judge",
         key=f"{pfx}_llm_helper_enabled_widget",
         value=st.session_state.get(f"{pfx}_llm_helper_enabled", False),
         help="When enabled, 'prompt' type steps in Startup/Completion will be executed by this helper backend.",
@@ -2115,7 +2115,7 @@ def _render_bash_runtime(project: dict) -> None:
 
     with st.expander("Commands", expanded=True):
         tab_llm, tab_startup, tab_completion = st.tabs(
-            ["🤖 LLM Prompt Helper", "▶  Startup", "⏹  Completion"]
+            ["🤖 LLM Judge", "▶  Startup", "⏹  Completion"]
         )
         with tab_llm:
             _render_llm_prompt_helper_tab("bash")
@@ -3193,7 +3193,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
 
     with st.expander("Commands", expanded=True):
         tab_llm, tab_startup, tab_completion = st.tabs(
-            ["🤖 LLM Prompt Helper", "▶  Startup", "⏹  Completion"]
+            ["🤖 LLM Judge", "▶  Startup", "⏹  Completion"]
         )
         with tab_llm:
             _render_llm_prompt_helper_tab("llama_cli")
