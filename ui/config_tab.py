@@ -2703,7 +2703,7 @@ def _test_llama_cli_run(project: dict) -> None:
             _bin = os.path.join(_bin, "llama-cli")
         
         _mpath_quoted = f'\"$HOME/\"{shlex.quote(_mpath[2:])}' if _mpath.startswith("~/") else shlex.quote(_mpath)
-        cmd = f"{_bin} -m {_mpath_quoted} --prompt \"Hello, world!\" -n 1 --simple-io --no-display-prompt --single-turn"
+        cmd = f"{_bin} -m {_mpath_quoted} --prompt \"Hello, world!\" -n 1 --simple-io --no-display-prompt --single-turn --log-disable"
         
         if use_sudo:
             if sudo_pw:
@@ -2715,9 +2715,13 @@ def _test_llama_cli_run(project: dict) -> None:
         
         if res["exit_code"] != 0:
             err = res.get("stderr", "").strip() or res.get("stdout", "").strip()
+            import re
+            err = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', err)
             st.session_state["_llama_svc_result"] = ("error", f"Test failed (exit {res['exit_code']}): {err[:400]}", cmd)
         else:
             out = res.get("stdout", "").strip()
+            import re
+            out = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', out)
             st.session_state["_llama_svc_result"] = ("ok", f"Test successful! Response:\n{out[:200]}", cmd)
 
     except Exception as exc:
@@ -2999,7 +3003,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
 
             if _is_testing:
                 st.session_state.pop("_llama_svc_result", None)
-                with st.spinner("Testing..."):
+                with st.spinner("Testing model execution... (Loading the model into memory may take a few minutes)"):
                     if _backend.lower().startswith("openai"):
                         _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
                         if not _base:
