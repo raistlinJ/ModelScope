@@ -1891,7 +1891,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
 
     else:
         # OpenAI-Compatible
-        col_url, col_fetch = st.columns([5, 1])
+        col_url, col_api, col_fetch = st.columns([4, 3, 1])
         with col_url:
             _url = st.text_input(
                 "Instance URL",
@@ -1902,14 +1902,16 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 disabled=not _is_enabled,
             )
             st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
-        _ssl = st.checkbox(
-            "Require SSL Certificate Verification",
-            key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
-            value=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True),
-            help="Uncheck for self-signed certs or plain HTTP servers.",
-            disabled=not _is_enabled,
-        )
-        st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
+        
+        with col_api:
+            _apikey = st.text_input(
+                "API Key (optional)",
+                key=f"{pfx}_llm_helper_openai_apikey_widget",
+                type="password",
+                value=st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""),
+                disabled=not _is_enabled,
+            )
+            st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
 
         with col_fetch:
             st.write("")
@@ -1917,7 +1919,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=not _is_enabled):
                 if _url.strip():
                     from core.models import fetch_llama_cpp_models
-                    _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=_ssl)
+                    _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
                     if _found:
                         st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
                         st.success(f"Found {len(_found)} models.")
@@ -1926,14 +1928,14 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 else:
                     st.warning("Enter a valid URL.")
 
-        _apikey = st.text_input(
-            "API Key (optional)",
-            key=f"{pfx}_llm_helper_openai_apikey_widget",
-            type="password",
-            value=st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""),
+        _ssl = st.checkbox(
+            "Require SSL Certificate Verification",
+            key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
+            value=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True),
+            help="Uncheck for self-signed certs or plain HTTP servers.",
             disabled=not _is_enabled,
         )
-        st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
+        st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
         _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
         if _models:
             _model_names = [m["name"] for m in _models]
