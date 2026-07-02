@@ -373,7 +373,12 @@ def _run_validation_sets(
                     on_log(f"[VALIDATE CMD] Running Configured LLM: {cmd_text}")
                     
                     use_main = (config.get("type") == "llama_cli_bot")
-                    res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=use_main)
+                    cb = config.get("execute_prompt_callback")
+                    if use_main and cb:
+                        prompt_str = f"{sys_p}\n\n{usr_p}" if sys_p else usr_p
+                        res = cb(prompt_str, "VALIDATE CMD")
+                    else:
+                        res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=use_main)
                     stdout = res.get("stdout", "")
                     stderr = res.get("stderr", "")
                     exit_code = res.get("exit_code", -1)
@@ -1385,6 +1390,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     if val_sets:
         if telemetry["run_aborted"]:
             on_log("[WARN] Run was cancelled or timed out — validation still proceeding")
+        config["execute_prompt_callback"] = _exec_llama_prompt
         all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref, config, [])
         telemetry["validation_passed"] = all_passed
         telemetry["validation_sets_results"] = set_results
