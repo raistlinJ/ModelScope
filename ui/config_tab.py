@@ -317,7 +317,7 @@ def _model_setup() -> None:
                 info = llama_server.get_server_info(url)
                 if info and info["n_ctx"] is not None and info["n_ctx"] != ctx:
                     st.warning(
-                        f"Running server n_ctx = **{info['n_ctx']}** — "
+                        f"Running server Context Window Length = **{info['n_ctx']}** — "
                         f"slider is **{ctx}**. Restart server to apply."
                     )
 
@@ -438,7 +438,7 @@ def _llama_server_controls() -> None:
         st.markdown(
             f'<div class="service-active-box">'
             f'<div class="service-label">Running &amp; ready</div>'
-            f'<div class="service-cmd">model: {model_name}  |  n_ctx: {n_ctx}</div>'
+            f'<div class="service-cmd">model: {model_name}  |  Context Window Length: {n_ctx}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -985,7 +985,7 @@ def _remote_model_section_inline() -> None:
                 if info:
                     st.success(
                         f"Online  |  model: `{(info.get('model_path') or '').split('/')[-1]}`"
-                        f"  |  n_ctx: `{info.get('n_ctx', '?')}`"
+                        f"  |  Context Window Length: `{info.get('n_ctx', '?')}`"
                     )
                 else:
                     st.error("Could not reach server. Check the URL and server status.")
@@ -997,7 +997,7 @@ def _remote_model_section_inline() -> None:
         max_value=MAX_CONTEXT_SIZE,
         step=CONTEXT_STEP,
         key="context_size",
-        help="Tokens sent per request. Remote server's actual n_ctx is shown via Check Status.",
+        help="Tokens sent per request. Remote server's actual Context Window Length is shown via Check Status.",
     )
 
 
@@ -1971,7 +1971,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 _info = get_server_info(_url.strip(), verify_ssl=_ssl)
                 if _info:
                     _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                    st.success(f"Online  |  model: `{_mname}`  |  n_ctx: `{_info.get('n_ctx', '?')}`")
+                    st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
                 else:
                     st.error("Could not reach server.")
             else:
@@ -3030,7 +3030,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     _info = llama_server.get_server_info(_base)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                        st.success(f"Online  |  model: `{_mname}`  |  n_ctx: `{_info.get('n_ctx', '?')}`")
+                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
                     else:
                         st.error("Could not reach server.")
                 else:
@@ -3106,7 +3106,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                                 _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
                                 st.session_state["_llama_svc_result"] = (
                                     "ok",
-                                    f"Online  |  model: `{_mn}`  |  n_ctx: `{_info.get('n_ctx', '?')}`",
+                                    f"Online  |  model: `{_mn}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`",
                                     "",
                                 )
                             else:
