@@ -150,6 +150,7 @@ def _show_add_project_dialog() -> None:
             "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
             "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
             "llm_helper_enabled": False,
+            "llm_helper_openai_models": [], "llm_helper_ollama_models": [],
         },
         "llama_cli_bot": {
             "execution_target": "local",
@@ -165,6 +166,7 @@ def _show_add_project_dialog() -> None:
             "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
             "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
             "llm_helper_enabled": False,
+            "llm_helper_openai_models": [], "llm_helper_ollama_models": [],
         },
         "ai_agent": {},
     }

@@ -1341,6 +1341,8 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("bash_llm_helper_model", ""),
         "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
+        "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", []),
+        "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", []),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -2559,6 +2561,8 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", ""),
         "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
+        "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", []),
+        "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", []),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)

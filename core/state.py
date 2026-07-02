@@ -227,6 +227,15 @@ _BASH_DEFAULTS: dict = {
     "bash_metrics_matrix":      [],
     "bash_validation_sets":     [],
     "bash_sudo":                False,
+    "bash_llm_helper_backend":  "OpenAI-Compatible",
+    "bash_llm_helper_openai_url": "",
+    "bash_llm_helper_openai_apikey": "",
+    "bash_llm_helper_openai_verify_ssl": True,
+    "bash_llm_helper_ollama_url": "http://localhost:11434",
+    "bash_llm_helper_model":    "",
+    "bash_llm_helper_enabled":  False,
+    "bash_llm_helper_openai_models": [],
+    "bash_llm_helper_ollama_models": [],
     # UI-only state — not in _BASH_KEY_MAP (not persisted to project config)
     "bash_val_editor_nonce":    0,   # bumped on add/delete/reset to invalidate data_editor baseline
     "bash_val_active_set_idx":  0,   # persists set selection; reset to 0 on project switch
@@ -247,6 +256,15 @@ _BASH_KEY_MAP: dict = {
     "bash_metrics_matrix":      "metrics_matrix",
     "bash_validation_sets":     "validation_sets",
     "bash_sudo":                "sudo",
+    "bash_llm_helper_backend":  "llm_helper_backend",
+    "bash_llm_helper_openai_url": "llm_helper_openai_url",
+    "bash_llm_helper_openai_apikey": "llm_helper_openai_apikey",
+    "bash_llm_helper_openai_verify_ssl": "llm_helper_openai_verify_ssl",
+    "bash_llm_helper_ollama_url": "llm_helper_ollama_url",
+    "bash_llm_helper_model":    "llm_helper_model",
+    "bash_llm_helper_enabled":  "llm_helper_enabled",
+    "bash_llm_helper_openai_models": "llm_helper_openai_models",
+    "bash_llm_helper_ollama_models": "llm_helper_ollama_models",
 }
 
 _LLAMA_DEFAULTS: dict = {
@@ -299,6 +317,15 @@ _LLAMA_DEFAULTS: dict = {
     "llama_cli_metrics_matrix":      [],
     "llama_cli_validation_sets":     [],
     "llama_cli_system_prompt":       "",
+    "llama_cli_llm_helper_backend":  "OpenAI-Compatible",
+    "llama_cli_llm_helper_openai_url": "",
+    "llama_cli_llm_helper_openai_apikey": "",
+    "llama_cli_llm_helper_openai_verify_ssl": True,
+    "llama_cli_llm_helper_ollama_url": "http://localhost:11434",
+    "llama_cli_llm_helper_model":    "",
+    "llama_cli_llm_helper_enabled":  False,
+    "llama_cli_llm_helper_openai_models": [],
+    "llama_cli_llm_helper_ollama_models": [],
 }
 
 _LLAMA_KEY_MAP: dict = {
@@ -351,6 +378,15 @@ _LLAMA_KEY_MAP: dict = {
     "llama_cli_metrics_matrix":      "metrics_matrix",
     "llama_cli_validation_sets":     "validation_sets",
     "llama_cli_system_prompt":       "system_prompt",
+    "llama_cli_llm_helper_backend":  "llm_helper_backend",
+    "llama_cli_llm_helper_openai_url": "llm_helper_openai_url",
+    "llama_cli_llm_helper_openai_apikey": "llm_helper_openai_apikey",
+    "llama_cli_llm_helper_openai_verify_ssl": "llm_helper_openai_verify_ssl",
+    "llama_cli_llm_helper_ollama_url": "llm_helper_ollama_url",
+    "llama_cli_llm_helper_model":    "llm_helper_model",
+    "llama_cli_llm_helper_enabled":  "llm_helper_enabled",
+    "llama_cli_llm_helper_openai_models": "llm_helper_openai_models",
+    "llama_cli_llm_helper_ollama_models": "llm_helper_ollama_models",
 }
 
 # Streamlit widget keys that carry their own session-state entry independent of
