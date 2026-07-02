@@ -462,11 +462,39 @@ def _run_llama_cli_bot(project: dict) -> None:
         "mcp_servers":         [s for s in cfg.get("mcp_servers", []) if s.get("enabled")],
         "prompts":             cfg.get("prompts", []),
         "commands":            cfg.get("commands", []),
+        "startup_commands":    cfg.get("startup_commands", []),
+        "completion_commands": cfg.get("completion_commands", []),
         "timeout":             cfg.get("timeout", 60),
         "validation_commands": cfg.get("validation_commands", []),
+        "validation_sets":     _get_llama_selected_validation_sets(cfg),
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
         "sudo":                cfg.get("sudo", False),
+        "sudo_password":       cfg.get("sudo_password", ""),
+        "system_prompt":       cfg.get("system_prompt", ""),
+        "execution_target":    tgt,
+        "custom_flags":        cfg.get("custom_flags", ""),
+        "en_temp":             cfg.get("en_temp", False),
+        "temperature":         cfg.get("temperature", 0.8),
+        "en_gpu_layers":       cfg.get("en_gpu_layers", False),
+        "gpu_layers":          cfg.get("gpu_layers", 99),
+        "en_threads":          cfg.get("en_threads", False),
+        "threads":             cfg.get("threads", 4),
+        "flash_attn":          cfg.get("flash_attn", False),
+        "en_top_k":            cfg.get("en_top_k", False),
+        "top_k":               cfg.get("top_k", 40),
+        "en_top_p":            cfg.get("en_top_p", False),
+        "top_p":               cfg.get("top_p", 0.9),
+        "en_min_p":            cfg.get("en_min_p", False),
+        "min_p":               cfg.get("min_p", 0.1),
+        "en_repeat_penalty":   cfg.get("en_repeat_penalty", False),
+        "repeat_penalty":      cfg.get("repeat_penalty", 1.1),
+        "en_freq_penalty":     cfg.get("en_freq_penalty", False),
+        "freq_penalty":        cfg.get("freq_penalty", 0.0),
+        "en_predict":          cfg.get("en_predict", False),
+        "predict":             cfg.get("predict", 512),
+        "en_seed":             cfg.get("en_seed", False),
+        "seed":                cfg.get("seed", 42),
         "cancel_requested_ref": cancel_ref,
         "active_project_id":   project.get("id"),
     }
@@ -506,64 +534,166 @@ def _run_llama_cli_bot(project: dict) -> None:
     st.rerun()
 
 
+def _get_llama_selected_validation_sets(cfg: dict) -> list:
+    """Return a filtered deep-copy of cfg['validation_sets'] based on llama execute-tab checkboxes."""
+    import copy
+    filtered = []
+    for idx, vset in enumerate(cfg.get("validation_sets", [])):
+        if not st.session_state.get(f"llama_exec_vset_{idx}_selected", True):
+            continue
+        vset_copy = copy.deepcopy(vset)
+        vset_copy["steps"] = _clean_steps(vset_copy.get("steps", []))
+        for sidx, step in enumerate(vset_copy.get("steps", [])):
+            for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                key = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                cmd_obj["enabled"] = st.session_state.get(key, cmd_obj.get("enabled", True))
+        filtered.append(vset_copy)
+    return filtered
+
+
 def _render_llama_cli_execute(project: dict) -> None:
-    """Execute view for Llama-CLI-Bot: config summary + Execute button + log."""
+    """Execute view for Llama-CLI-Bot: collapsible config sub-blocks + Execute button + log."""
     cfg = project.get("config", {})
 
     st.markdown(f"### {project['name']}")
 
-    with st.expander("Run Configuration", expanded=True):
-        backend = cfg.get("backend", "llama.cpp")
-        target  = cfg.get("execution_target", "local")
-        st.write(f"**Backend:** {backend}")
-        st.write(f"**Target:** {target.upper()}")
-        if target == "ssh":
-            _user = cfg.get("ssh_user", "root")
-            _host = cfg.get("ssh_host", "?")
-            _port = cfg.get("ssh_port", 22)
-            st.write(f"**SSH:** `{_user}@{_host}:{_port}`")
-        if backend == "llama.cpp":
-            model = cfg.get("model_name", "") or "not selected"
-            st.write(f"**Model:** `{model}`")
-            st.write(f"**Binary:** `{cfg.get('binary_path', 'llama-cli')}`")
-        elif backend.lower().startswith("openai"):
-            base_url    = cfg.get("openai_base_url", "") or "not configured"
-            model_label = cfg.get("model_name", "") or "server default"
-            st.write(f"**Base URL:** `{base_url}`")
-            st.write(f"**Model:** `{model_label}` *(server will use its default if blank)*")
+    # ── Two-column configuration panel ───────────────────────────────────────
+    _cfg_open = st.session_state.get("llama_exec_config_expanded", True)
+    with st.container(border=True):
+        col_hdr_outer, col_tog_outer = st.columns([9, 1])
+        with col_hdr_outer:
+            st.markdown("**⚙️ Run Configuration**")
+        with col_tog_outer:
+            if st.button("▼" if _cfg_open else "▶",
+                         key="btn_llama_exec_outer_toggle", use_container_width=True,
+                         help="Expand/collapse all"):
+                st.session_state["llama_exec_config_expanded"] = not _cfg_open
+                st.rerun()
 
-        enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
-        if enabled_mcps:
-            st.write(f"**MCP servers ({len(enabled_mcps)}):** {', '.join(enabled_mcps)}")
+        if _cfg_open:
+            col_a, col_b = st.columns(2)
 
-        prompts = cfg.get("prompts", [])
-        if prompts:
-            st.write(f"**Prompts ({len(prompts)}):**")
-            st.caption(prompts[0][:120] + ("…" if len(prompts[0]) > 120 else ""))
+            # ── Left: Startup & Completion ─────────────────────────────────
+            with col_a:
+                with st.container(border=True):
+                    _startup_open = st.session_state.get("llama_exec_startup_expanded", True)
+                    col_title_a, col_tog_a = st.columns([9, 1])
+                    with col_title_a:
+                        target = cfg.get("execution_target", "local")
+                        ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
+                        target_str = f"Target: {target.upper()}{ssh_info}"
+                        model_name = cfg.get("model_name", "") or "not selected"
+                        timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
+                        st.markdown(f"**Startup & Completion** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
+                    with col_tog_a:
+                        if st.button("▼" if _startup_open else "▶",
+                                     key="btn_llama_exec_startup_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["llama_exec_startup_expanded"] = not _startup_open
+                            st.rerun()
+                    if _startup_open:
+                        # Model info summary
+                        backend = cfg.get("backend", "llama-cli")
+                        with st.expander("**Model Info**", expanded=True):
+                            st.caption(f"Backend: **{backend}**")
+                            st.caption(f"Model: **{model_name}**")
+                            if backend == "llama-cli":
+                                st.caption(f"Binary: `{cfg.get('binary_path', 'llama-cli')}`")
+                            else:
+                                st.caption(f"URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
+                            enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
+                            if enabled_mcps:
+                                st.caption(f"MCP: {', '.join(enabled_mcps)}")
 
-        commands = cfg.get("commands", [])
-        if commands:
-            st.write(f"**Commands ({len(commands)}):**")
-            for cmd in commands:
-                st.code(cmd, language="bash")
+                        with st.expander("**Startup**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
+                        with st.expander("**Completion**", expanded=True):
+                            _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
-        st.write(f"**Timeout:** {cfg.get('timeout', 60)}s")
+            # ── Right: Validation Steps ────────────────────────────────────
+            with col_b:
+                with st.container(border=True):
+                    _val_open = st.session_state.get("llama_exec_validation_expanded", True)
+                    col_title_b, col_tog_b = st.columns([9, 1])
+                    with col_title_b:
+                        st.markdown("**Validation Steps**")
+                    with col_tog_b:
+                        if st.button("▼" if _val_open else "▶",
+                                     key="btn_llama_exec_val_toggle",
+                                     use_container_width=True, help="Expand/collapse"):
+                            st.session_state["llama_exec_validation_expanded"] = not _val_open
+                            st.rerun()
+                    if _val_open:
+                        val_sets = cfg.get("validation_sets", [])
+                        if not val_sets:
+                            st.caption("No validation sets configured — add them in the Config tab (Validation).")
+                        else:
+                            for idx, vset in enumerate(val_sets):
+                                set_sel_key = f"llama_exec_vset_{idx}_selected"
+                                set_selected = st.session_state.get(set_sel_key, True)
 
-    # Bug 7: Scenario system prompt display (read-only, auto-populated from selected scenario)
-    active_sc = st.session_state.get("active_scenario", "")
-    sc_data = SCENARIOS.get(active_sc, {})
-    sc_sys_prompt = sc_data.get("system_prompt", "") or sc_data.get("sys_prompt", "")
-    if active_sc or sc_sys_prompt:
-        st.markdown("**Scenario System Prompt**")
-        displayed = sc_sys_prompt or f"No system prompt defined for scenario: {active_sc or 'none'}"
-        st.text_area(
-            "Scenario System Prompt",
-            value=displayed,
-            height=100,
-            key="llama_exec_sys_prompt_display",
-            disabled=True,
-        )
+                                desc = vset.get("description", "")
+                                label_md = f"**{idx + 1}. {vset['name']}**"
+                                if desc:
+                                    label_md += f" — {desc}"
 
+                                with st.expander(label_md, expanded=set_selected):
+                                    new_sel = st.checkbox(
+                                        "Enable this Validation Set", value=set_selected,
+                                        key=f"llama_exec_vset_{idx}_chk",
+                                    )
+                                    if new_sel != set_selected:
+                                        st.session_state[set_sel_key] = new_sel
+                                        st.rerun()
+
+                                    for sidx, step in enumerate(vset.get("steps", [])):
+                                        delay = step.get("delay_seconds", 0)
+                                        dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                        st.caption(f"Step {sidx + 1}{dstr}:")
+                                        for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                            cmd_text = cmd_obj.get("command", "")
+                                            if not cmd_text:
+                                                continue
+                                            cmd_key  = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                            cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                            exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                            exp_out  = cmd_obj.get("expected_output", "")
+                                            hint = ""
+                                            if exp_type != "Ignore" and exp_out:
+                                                short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                                hint = f"  # expect {exp_type.lower()}: {short}"
+
+                                            col_cc, col_cl = st.columns([1, 10])
+                                            with col_cc:
+                                                new_cmd_sel = st.checkbox(
+                                                    f"Enable command {cidx+1} in step {sidx+1}", value=cmd_sel,
+                                                    key=f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                    label_visibility="collapsed",
+                                                    disabled=not set_selected,
+                                                )
+                                                if new_cmd_sel != cmd_sel:
+                                                    st.session_state[cmd_key] = new_cmd_sel
+                                            with col_cl:
+                                                display = cmd_text + hint if hint else cmd_text
+                                                if cmd_sel and set_selected:
+                                                    st.code(display, language="bash")
+                                                else:
+                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
+
+    # ── Scenario system prompt (editable, persisted) ──────────────────────────
+    st.session_state.setdefault("llama_cli_system_prompt", cfg.get("system_prompt", ""))
+    sys_prompt = st.text_area(
+        "System Prompt",
+        key="llama_cli_system_prompt",
+        height=100,
+        placeholder="Optional system prompt sent to the model before evaluation prompts.",
+        help="Custom system prompt. Leave empty for no system prompt.",
+    )
+    # Persist back to config
+    project["config"]["system_prompt"] = sys_prompt
+    _flush_llama_cli_config(project)
+
+    # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
     col_run, col_cancel, col_clear = st.columns([3, 1, 1])
     with col_run:
@@ -591,6 +721,7 @@ def _render_llama_cli_execute(project: dict) -> None:
     st.session_state["_llama_log_placeholder"] = log_placeholder
     _render_terminal(log_placeholder, st.session_state.get("run_logs", []))
 
+    # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
         tel = st.session_state["telemetry"]
         if tel.get("run_aborted"):

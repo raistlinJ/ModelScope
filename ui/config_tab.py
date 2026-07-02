@@ -2489,6 +2489,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "timeout":             st.session_state.get("llama_cli_timeout", 120),
         "validation_sets":     st.session_state.get("llama_cli_validation_sets", []),
         "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
+        "system_prompt":       st.session_state.get("llama_cli_system_prompt", ""),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)

@@ -324,6 +324,7 @@ _LLAMA_DEFAULTS: dict = {
     "llama_cli_validation_commands": [],
     "llama_cli_fail_patterns":       [],
     "llama_cli_metrics_matrix":      [],
+    "llama_cli_system_prompt":       "",
 }
 
 _LLAMA_KEY_MAP: dict = {
@@ -374,6 +375,7 @@ _LLAMA_KEY_MAP: dict = {
     "llama_cli_validation_commands": "validation_commands",
     "llama_cli_fail_patterns":       "fail_patterns",
     "llama_cli_metrics_matrix":      "metrics_matrix",
+    "llama_cli_system_prompt":       "system_prompt",
 }
 
 # Streamlit widget keys that carry their own session-state entry independent of
