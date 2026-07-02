@@ -760,9 +760,8 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
     if telemetry:
         session_log.save_telemetry(telemetry)
-        if bot_type != "bash_bot":
-            print()
-            _print_run_summary(telemetry)
+        print()
+        _print_run_summary(telemetry)
 
     return 0
 
