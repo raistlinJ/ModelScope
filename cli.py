@@ -175,7 +175,6 @@ from config.defaults import (
     LLAMA_CPP_DEFAULT_URL,
     OLLAMA_DEFAULT_URL,
 )
-from config.scenarios import SCENARIOS, DEFAULT_SCENARIO
 from core.evaluator import run_evaluation
 from core.logsetup import configure_logging, logged_on_log
 from core.session_log import SessionLog
@@ -207,23 +206,18 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         help="Context window size in tokens.",
     )
 
-    # ── Scenario / prompts ────────────────────────────────────────────────────
-    parser.add_argument(
-        "--scenario",
-        default=DEFAULT_SCENARIO,
-        help="Scenario name (see: modelscope scenarios).",
-    )
+    # ── System/User prompts ───────────────────────────────────────────────────
     parser.add_argument(
         "--system-prompt",
         dest="system_prompt",
         default=None,
-        help="Override the scenario's system prompt.",
+        help="Override the system prompt.",
     )
     parser.add_argument(
         "--user-prompt",
         dest="user_prompt",
         default=None,
-        help="Override the scenario's user prompt.",
+        help="Override the user prompt.",
     )
 
     # ── MCP ───────────────────────────────────────────────────────────────────
@@ -295,12 +289,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
   run        Run a single evaluation (default when --model is given)
   batch      Execute a queue of jobs from a JSON file
   sessions   Browse past session logs
-  scenarios  List and describe evaluation scenarios
 
 examples:
-  modelscope --list-scenarios
-  modelscope scenarios
-  modelscope run --model qwen2.5 --scenario "Scenario 1 – File Creation"
+  modelscope --model qwen2.5
   modelscope run --model qwen2.5 --dry-run
   modelscope batch --jobs-file jobs.json --parallel 2
   modelscope sessions list
@@ -309,11 +300,7 @@ examples:
     )
 
     # ── Legacy top-level flags (backward compat) ──────────────────────────────
-    parser.add_argument(
-        "--list-scenarios",
-        action="store_true",
-        help="List available scenario names and exit (legacy; prefer: modelscope scenarios).",
-    )
+    # --list-scenarios removed - scenarios concept deleted
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -460,17 +447,7 @@ examples:
         help="Override the sessions root directory.",
     )
 
-    # ── scenarios subcommand ──────────────────────────────────────────────────
-    scenarios_p = subparsers.add_parser(
-        "scenarios",
-        help="List and describe available evaluation scenarios.",
-    )
-    scenarios_p.add_argument(
-        "--describe",
-        metavar="NAME",
-        default=None,
-        help="Print the full config for a named scenario.",
-    )
+    # --scenarios subcommand removed - scenarios concept deleted
 
     return parser
 
@@ -479,21 +456,11 @@ examples:
 
 def _build_config(args: argparse.Namespace) -> dict:
     """Assemble the evaluator config dict from parsed args."""
-    scenario = SCENARIOS.get(args.scenario, {})
-
     default_url = LLAMA_CPP_DEFAULT_URL if args.backend == "llama.cpp" else OLLAMA_DEFAULT_URL
     llm_url = (args.llm_url or default_url).strip()
 
-    sys_prompt = (
-        args.system_prompt
-        if args.system_prompt is not None
-        else scenario.get("system_prompt", "")
-    )
-    user_prompt = (
-        args.user_prompt
-        if args.user_prompt is not None
-        else scenario.get("user_prompt", "")
-    )
+    sys_prompt = args.system_prompt or ""
+    user_prompt = args.user_prompt or ""
 
     is_ssh = bool(args.ssh_host)
 
@@ -508,19 +475,19 @@ def _build_config(args: argparse.Namespace) -> dict:
         "mcp_server_url":      "",
         "mcp_tools":           {},
         "mcp_running":         bool(args.mcp_url),
-        "validation_command":  scenario.get("validation_command", ""),
-        "fail_patterns":       scenario.get("fail_patterns", []),
-        "active_scenario":     args.scenario,
-        "tool_focus":          scenario.get("related_tool", ""),
-        "metrics_matrix":      scenario.get("default_metrics", []),
-        "expected_stdout":     scenario.get("expected_stdout", ""),
-        "pre_run_cleanup":     scenario.get("pre_run_cleanup", []),
+        "validation_command":  "",
+        "fail_patterns":       [],
+        "active_scenario":     "",
+        "tool_focus":          "",
+        "metrics_matrix":      [],
+        "expected_stdout":     "",
+        "pre_run_cleanup":     [],
         "cancel_requested_ref": [False],
-        "caf_scope":              args.caf_scope or scenario.get("caf_scope", "Narrow"),
-        "caf_urgency":            args.caf_urgency or scenario.get("caf_urgency", "Speed"),
-        "caf_allowed_subnets":    scenario.get("caf_allowed_subnets", []),
-        "caf_target_credentials": scenario.get("caf_target_credentials", []),
-        "execution_mode":         "caf_ssh" if is_ssh else "local",
+        "caf_scope":           args.caf_scope or "Narrow",
+        "caf_urgency":         args.caf_urgency or "Speed",
+        "caf_allowed_subnets": [],
+        "caf_target_credentials": [],
+        "execution_mode":      "caf_ssh" if is_ssh else "local",
     }
     return config
 
@@ -820,7 +787,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if not args.model:
         print(_c("error: --model is required.", _RED), file=sys.stderr)
-        print("       Run 'modelscope scenarios' to see available scenarios.", file=sys.stderr)
         return 2
 
     # Dry-run: print config and exit
@@ -906,10 +872,9 @@ def _cmd_batch(args: argparse.Namespace) -> int:
             logger.warning("Job #%d is not a dict — skipping.", i)
             continue
 
-        scenario = spec.get("scenario") or spec.get("scenario_key", DEFAULT_SCENARIO)
-        if scenario not in SCENARIOS:
-            logger.warning("Job #%d: unknown scenario %r — skipping.", i, scenario)
-            continue
+        # scenario_key is no longer validated against SCENARIOS
+        # Using "manual" as the default if not specified
+        scenario = spec.get("scenario") or spec.get("scenario_key", "manual")
 
         # Warn about SSH jobs — BatchRunner only supports local execution
         if spec.get("ssh_host"):
@@ -1152,54 +1117,10 @@ def _cmd_sessions_show(args: argparse.Namespace) -> int:
 # ── `scenarios` subcommand ────────────────────────────────────────────────────
 
 def _cmd_scenarios(args: argparse.Namespace) -> int:
-    """List or describe scenarios."""
-    describe = getattr(args, "describe", None)
-
-    if describe:
-        if describe not in SCENARIOS:
-            print(_c(f"error: unknown scenario: {describe!r}", _RED), file=sys.stderr)
-            print("Run 'modelscope scenarios' to see available scenarios.", file=sys.stderr)
-            return 2
-        sc = SCENARIOS[describe]
-        print(_c(f"Scenario: {describe}", _BOLD))
-        print()
-        # Show key fields without dumping the full metrics matrix
-        fields = [
-            ("System Prompt", sc.get("system_prompt", "")[:300]),
-            ("User Prompt",   sc.get("user_prompt",   "")[:300]),
-            ("Validation",    sc.get("validation_command", "(none)")),
-            ("Related Tool",  sc.get("related_tool", "(none)")),
-            ("CAF Scope",     sc.get("caf_scope", "—")),
-            ("CAF Urgency",   sc.get("caf_urgency", "—")),
-            ("Metrics",       f"{len(sc.get('default_metrics', []))} configured"),
-        ]
-        for label, value in fields:
-            print(f"  {_c(label + ':', _BOLD)} {value}")
-        return 0
-
-    # List all scenarios
-    print(_c("Available scenarios:", _BOLD))
-    print()
-
-    # Group by scenario_type prefix
-    rows = []
-    for i, name in enumerate(SCENARIOS, 1):
-        sc = SCENARIOS[name]
-        sc_type = sc.get("scenario_type", "agent")
-        tool = sc.get("related_tool") or "—"
-        metrics_count = len(sc.get("default_metrics", []))
-        rows.append({
-            "#":       str(i),
-            "Name":    name,
-            "Type":    sc_type,
-            "Tool":    tool[:25],
-            "Metrics": str(metrics_count),
-        })
-
-    print(_box_table(rows, title=f"Scenarios  ({len(rows)} total)"))
-    print()
-    print(_c("  Tip: ", _DIM) + "Use 'modelscope scenarios --describe <name>' for details.")
-    return 0
+    """List or describe scenarios (DEPRECATED)."""
+    print("Error: 'scenarios' command has been removed. The scenarios concept is no longer supported.")
+    print("Please configure evaluations directly using the Configuration tab.")
+    return 1
 
 
 # ── Argument dispatch + backward compat ──────────────────────────────────────
@@ -1208,19 +1129,19 @@ def _maybe_inject_run_subcommand(argv: list[str]) -> list[str]:
     """If no recognized subcommand is present, inject 'run' for backward compat.
 
     Handles: cli.py --model qwen ...  => cli.py run --model qwen ...
-    Does not touch: cli.py --list-scenarios, cli.py -h/--help, cli.py run/batch/...
+    Does not touch: cli.py -h/--help, cli.py run/batch/...
 
     The walk correctly skips flag values (--model VALUE) so VALUE is not
     mistaken for an unrecognized positional subcommand.
     """
-    subcommands = {"run", "batch", "sessions", "scenarios"}
-    help_flags  = {"-h", "--help", "--list-scenarios"}
+    subcommands = {"run", "batch", "sessions"}
+    help_flags  = {"-h", "--help"}
 
     # Flags that consume the next token as a value (so skip VALUE).
     # These are the long-form run-subcommand flags that take arguments.
     value_flags = {
         "--model", "--backend", "--llm-url", "--context-size",
-        "--scenario", "--system-prompt", "--user-prompt", "--mcp-url",
+        "--system-prompt", "--user-prompt", "--mcp-url",
         "--ssh-host", "--ssh-port", "--ssh-user", "--ssh-password",
         "--ssh-key-path", "--ssh-caf-dir",
         "--caf-scope", "--caf-urgency", "--session-dir",
@@ -1262,7 +1183,7 @@ def _maybe_inject_run_subcommand(argv: list[str]) -> list[str]:
 
     # Reached the end: every token was a flag or its value.
     # Looks like the old flat invocation style — inject 'run'.
-    run_indicators = {"--model", "--scenario", "--backend", "--llm-url",
+    run_indicators = {"--model", "--backend", "--llm-url",
                       "--ssh-host", "--dry-run", "--json"}
     if any(a.split("=")[0] in run_indicators for a in argv):
         return ["run"] + list(argv)
@@ -1273,12 +1194,11 @@ def _maybe_inject_run_subcommand(argv: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
 
-    # ── Legacy --list-scenarios flag (before subparser dispatch) ──────────────
+    # ── Legacy --list-scenarios flag removed - scenarios concept deleted ──────
     if "--list-scenarios" in raw_argv:
-        print(_c("Available scenarios:", _BOLD))
-        for name in SCENARIOS:
-            print(f"  - {name}")
-        return 0
+        print("Error: --list-scenarios has been removed.")
+        print("The scenarios concept is no longer supported.")
+        return 1
 
     # ── Inject 'run' for backward compat ──────────────────────────────────────
     raw_argv = _maybe_inject_run_subcommand(raw_argv)
@@ -1304,7 +1224,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_batch(args)
 
     elif args.subcommand == "scenarios":
-        return _cmd_scenarios(args)
+        # --scenarios command removed - provide helpful error
+        print("Error: 'scenarios' command has been removed. The scenarios concept is no longer supported.")
+        print("Please configure evaluations directly using the Configuration tab.")
+        return 1
 
     elif args.subcommand == "sessions":
         action = getattr(args, "sessions_action", None)

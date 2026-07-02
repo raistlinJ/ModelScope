@@ -46,9 +46,8 @@ PERSIST_KEYS: frozenset[str] = frozenset({
     "mcp_url",
     "mcp_server_url",
 
-    # Metrics / scenario
-    "tool_focus",
-    "active_scenario",
+     # Metrics
+     "tool_focus",
 
     # Prompt / validation
     "sys_prompt",

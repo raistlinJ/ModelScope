@@ -44,6 +44,8 @@ _STREAM_INNER_TAGS = {
     "[timeout]":   "decision",
 }
 
+# Scenario concept removed - CAF no longer uses scenario presets
+
 
 def _tag(line: str) -> str:
     if line.startswith("[STREAM]"):
@@ -86,27 +88,8 @@ def _prompt_list_editor() -> None:
         "Drag to reorder — or add / remove entries below."
     )
 
-    # ── Load presets from active scenario ──────────────────────────────────────
-    _active_sc = st.session_state.get("active_scenario", "")
-    if not _active_sc.startswith("CAF"):
-        _active_sc = _CAF_DEFAULT_SCENARIO
-    from config.scenarios import SCENARIOS
-    _sc_data = SCENARIOS.get(_active_sc, {})
-    _presets = _sc_data.get("default_prompts", [])
-    if _presets:
-        col_preset, col_info = st.columns([3, 7])
-        with col_preset:
-            if st.button(
-                "⟳ Load scenario presets",
-                key="btn_load_caf_presets",
-                use_container_width=True,
-                help=f"Replace current prompts with the {len(_presets)} default prompt(s) from the {_active_sc} scenario",
-            ):
-                st.session_state["caf_prompts"] = list(_presets)
-                st.rerun()
-        with col_info:
-            st.caption(f"Scenario **{_active_sc}** has {len(_presets)} preset prompt(s).")
-    # ──────────────────────────────────────────────────────────────────────────
+    # Scenario concept removed - no more CAF scenario presets
+    # CAF prompts are now managed directly by the user
 
     to_remove: int | None = None
     for i, p in enumerate(prompts):

@@ -72,13 +72,10 @@ def build_config_from_state(state: dict) -> dict:
     use this function so they can't diverge.
     """
     from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
-    from config.scenarios import SCENARIOS
-
     backend    = state.get("backend_type", "llama.cpp")
     def_url    = LLAMA_CPP_DEFAULT_URL if backend == "llama.cpp" else OLLAMA_DEFAULT_URL
     url        = (state.get("llm_url") or def_url).strip()
     active     = state.get("active_scenario", "")
-    scenario   = SCENARIOS.get(active, {})
 
     return {
         "backend_type":         backend,
@@ -94,8 +91,8 @@ def build_config_from_state(state: dict) -> dict:
         "validation_command":   state.get("validation_command", ""),
         "fail_patterns":        list(state.get("fail_patterns", [])),
         "active_scenario":      active,
-        "expected_stdout":      scenario.get("expected_stdout", ""),
-        "pre_run_cleanup":      list(scenario.get("pre_run_cleanup", [])),
+        "expected_stdout":      "",
+        "pre_run_cleanup":      [],
         "cancel_requested_ref": [False],
     }
 
@@ -308,7 +305,7 @@ def _make_good_telemetry(scenario_name: str = "") -> dict:
     response = (
         "I scanned 127.0.0.1 and found open port 22 (SSH) and port 80 (HTTP)."
         if is_network else
-        "I have created the file at /tmp/test with numbers 1 through 10."
+        ""
     )
 
     tool_args = (

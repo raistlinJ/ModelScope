@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from config.metrics import evaluate_metric
-from config.scenarios import SCENARIOS
 from core.environment import LocalEnvironment
 from core.evaluator import run_evaluation
 
@@ -66,7 +65,7 @@ class BatchRunner:
         return list(self.queue)
 
     def _build_config(self, job: BatchJob) -> dict:
-        scenario_data = SCENARIOS.get(job.scenario_key, {})
+        # Scenario concept removed - use empty defaults
         mc = job.model_config
         config = {
             "backend_type":       mc.get("backend_type", "llama.cpp"),
@@ -77,20 +76,20 @@ class BatchRunner:
             "mcp_server_url":     mc.get("mcp_server_url", ""),
             "mcp_tools":          mc.get("mcp_tools", {}),
             "mcp_running":        mc.get("mcp_running", False),
-            "sys_prompt":         scenario_data.get("system_prompt", ""),
-            "user_prompt":        scenario_data.get("user_prompt", ""),
-            "validation_command": scenario_data.get("validation_command", ""),
-            "fail_patterns":      list(scenario_data.get("fail_patterns", [])),
-            "metrics_matrix":     list(scenario_data.get("default_metrics", [])),
+            "sys_prompt":         "",
+            "user_prompt":        "",
+            "validation_command": "",
+            "fail_patterns":      [],
+            "metrics_matrix":     [],
             "active_scenario":    job.scenario_key,
-            "tool_focus":         scenario_data.get("related_tool", ""),
-            "expected_stdout":    scenario_data.get("expected_stdout", ""),
-            "pre_run_cleanup":    list(scenario_data.get("pre_run_cleanup", [])),
+            "tool_focus":         "",
+            "expected_stdout":    "",
+            "pre_run_cleanup":    [],
             "cancel_requested_ref": [False],
-            "caf_scope":              scenario_data.get("caf_scope", "Narrow"),
-            "caf_urgency":            scenario_data.get("caf_urgency", "Speed"),
-            "caf_allowed_subnets":    list(scenario_data.get("caf_allowed_subnets", [])),
-            "caf_target_credentials": list(scenario_data.get("caf_target_credentials", [])),
+            "caf_scope":              mc.get("caf_scope", "Narrow"),
+            "caf_urgency":            mc.get("caf_urgency", "Speed"),
+            "caf_allowed_subnets":    mc.get("caf_allowed_subnets", []),
+            "caf_target_credentials": mc.get("caf_target_credentials", []),
         }
         if job.prompt_variant:
             config["sys_prompt"]  = job.prompt_variant.get("sys_prompt",  config["sys_prompt"])

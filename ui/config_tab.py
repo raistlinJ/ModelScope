@@ -13,65 +13,13 @@ from config.defaults import (
     EXTERNAL_LLAMA_CPP_URL, EXTERNAL_LLAMA_CPP_MODEL,
 )
 from config.metrics import METRIC_TYPES, CATEGORIES, format_criterion
-from config.scenarios import SCENARIOS
 from core.models import scan_gguf_models, fetch_ollama_models, fetch_llama_cpp_models, compile_gguf, get_ollama_status, get_ollama_running_models, pull_ollama_model, delete_ollama_model
 from core.mcp_manager import start_mcp, stop_mcp, discover_tools, poll_mcp_process
 from core import llama_server
-from core.state import sync_scenario
 from ui.components import badge, type_badge, CAT_COLOUR
 from ui.workflow_config import render_workflow_config
 
-import pathlib as _pathlib
-import json as _json_mod
 
-
-def _load_llama_cli_presets() -> dict:
-    """Load all *.json presets from config/presets/ and return {name: preset_dict}."""
-    preset_dir = _pathlib.Path(__file__).parent.parent / "config" / "presets"
-    presets = {}
-    if preset_dir.exists():
-        for f in sorted(preset_dir.glob("*.json")):
-            try:
-                data = _json_mod.loads(f.read_text())
-                presets[data.get("name", f.stem)] = data
-            except Exception:
-                pass
-    return presets
-
-
-# Tool focus → scenario mapping (CAF-specific entries commented out — re-enable with CAF bot type)
-_TOOL_SCENARIOS = {
-    # Local tools
-    "file_creator":               "Scenario 1 – File Creation",
-    "run_nmap_scan":              "Scenario 2 – Network Scan",
-    # CAF general scenarios — hidden until CyberAgentFlow bot type is implemented
-    # "mcp_kali_run_command":       "CAF – Reconnaissance",
-    # "msf_run":                    "CAF – Exploitation",
-    # "caf_guardrail_test":         "CAF – Guardrail Test",
-    # CAF per-tool scenarios — hidden until CyberAgentFlow bot type is implemented
-    # "shell":                      "CAF – Shell Command Execution",
-    # "shell_extended":             "CAF – Extended Shell Execution",
-    # "shell_dangerous":            "CAF – Dangerous Command Audit",
-    # "shell_sequence":             "CAF – Command Sequence",
-    # "interactive_session_write":  "CAF – Interactive Session",
-    # "ospf_sniff":                 "CAF – OSPF Sniffing",
-    # "RIPv2":                      "CAF – RIPv2 Analysis",
-}
-_TOOL_LABELS = {
-    "file_creator":               "file_creator — File Creation",
-    "run_nmap_scan":              "run_nmap_scan — Network Scanner",
-    # CAF tools — hidden until CyberAgentFlow bot type is implemented
-    # "mcp_kali_run_command":       "mcp_kali_run_command — CAF Reconnaissance",
-    # "msf_run":                    "msf_run — CAF Exploitation (Metasploit)",
-    # "caf_guardrail_test":         "caf_guardrail_test — CAF Guardrail Test",
-    # "shell":                      "shell — CAF Shell Command Execution",
-    # "shell_extended":             "shell_extended — CAF Extended Shell (long-running)",
-    # "shell_dangerous":            "shell_dangerous — CAF Dangerous Command Audit",
-    # "shell_sequence":             "shell_sequence — CAF Command Sequence Chain",
-    # "interactive_session_write":  "interactive_session_write — CAF Interactive Session",
-    # "ospf_sniff":                 "ospf_sniff — CAF OSPF Protocol Analysis",
-    # "RIPv2":                      "RIPv2 — CAF RIPv2 Protocol Analysis",
-}
 
 
 def _push_undo(snapshot: dict) -> None:
@@ -1140,52 +1088,34 @@ def _ollama_model_selector() -> None:
 
 # ── Metrics Setup ──────────────────────────────────────────────────────────────
 
-def _on_tool_focus_change() -> None:
-    """Callback: sync scenario, prompts, validation, metrics, and CAF config when tool changes."""
-    tool     = st.session_state.get("tool_focus", "file_creator")
-    scenario = _TOOL_SCENARIOS.get(tool, "Scenario 1 – File Creation")
-    st.session_state["active_scenario"]      = scenario
-    st.session_state["_prompts_user_edited"] = False
-    sync_scenario(scenario)
+# _on_tool_focus_change callback removed - scenarios concept deleted
 
 
 def _metrics_setup() -> None:
-    # ── Workflow-specific configuration ────────────────────────────────────────
-    _active_sc_key = st.session_state.get("active_scenario", "")
-    _active_sc     = SCENARIOS.get(_active_sc_key, {})
-    _stype         = _active_sc.get("scenario_type", "")
-    if _stype and _stype not in ("tool_use", ""):
-        render_workflow_config()
-        st.divider()
+    # ── Workflow-specific configuration (hidden for now) ───────────────────────
+    # Scenario concept removed - no more scenario-based configuration
 
     # ── Tool Focus Selector ────────────────────────────────────────────────────
     st.subheader("Evaluation Tool")
     st.caption(
         "Select the MCP tool this evaluation will focus on. "
-        "Validation command, fail patterns, and metrics matrix are automatically configured."
+        "You can manually configure validation command, fail patterns, and metrics below."
     )
     st.selectbox(
         "Focus Tool",
         options=list(_TOOL_LABELS.keys()),
         format_func=lambda k: _TOOL_LABELS[k],
         key="tool_focus",
-        on_change=_on_tool_focus_change,
-        help="The tool the AI agent is expected to use in this evaluation scenario.",
+        help="The tool the AI agent is expected to use in this evaluation.",
     )
 
     st.divider()
 
     # ── Validation command ─────────────────────────────────────────────────────
     st.subheader("Validation")
-    _tool  = st.session_state.get("tool_focus", "file_creator")
-    _vhelp = (
-        "Command run after evaluation to verify the task completed. "
-        "For nmap: 'nmap 127.0.0.1'. For file creation: 'cat /tmp/test'."
-    )
     st.text_input(
         "Validation Command",
         key="validation_command",
-        help=_vhelp,
         placeholder="e.g. cat /tmp/test",
     )
 
@@ -1243,24 +1173,7 @@ def _metrics_setup() -> None:
 
     matrix: list = st.session_state.get("metrics_matrix", [])
 
-    if st.session_state.get("_confirm_reset_metrics"):
-        st.warning("Reset metrics to scenario defaults? All custom metrics will be lost.")
-        cr1, cr2, _ = st.columns([1, 1, 5])
-        if cr1.button("Yes, reset", key="btn_confirm_reset_yes"):
-            active   = st.session_state.get("active_scenario", "")
-            defaults = SCENARIOS.get(active, {}).get("default_metrics", [])
-            st.session_state["metrics_matrix"] = list(defaults)
-            st.session_state["_confirm_reset_metrics"] = False
-            st.rerun()
-        if cr2.button("Cancel", key="btn_confirm_reset_no"):
-            st.session_state["_confirm_reset_metrics"] = False
-            st.rerun()
-    else:
-        col_rst, _ = st.columns([2, 5])
-        with col_rst:
-            if st.button("Reset to scenario defaults", key="btn_reset_metrics"):
-                st.session_state["_confirm_reset_metrics"] = True
-                st.rerun()
+    # Reset metrics removed - no more scenario defaults
 
     # ── Add metric expander ────────────────────────────────────────────────────
     with st.expander("+ Add metric"):

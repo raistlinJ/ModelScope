@@ -1,12 +1,11 @@
-"""ModelScope configuration: static constants, metric definitions, scenarios.
+"""ModelScope configuration: static constants, metric definitions.
 
 Unlike :mod:`core`, these modules are pure (stdlib only, no Streamlit), so the
 public names are re-exported here for convenience — ``from config import
-SCENARIOS, evaluate_metric`` works alongside the fully-qualified imports.
+evaluate_metric`` works alongside the fully-qualified imports.
 
   defaults   — URLs, paths and tunable limits (single source of truth)
   metrics    — typed metric registry, evaluator dispatch, criterion formatting
-  scenarios  — built-in named evaluation presets
 """
 
 from config.defaults import (
@@ -23,11 +22,6 @@ from config.metrics import (
     format_criterion,
     evaluate_metric,
 )
-from config.scenarios import (
-    SCENARIOS,
-    DEFAULT_SCENARIO,
-    validate_scenarios,
-)
 
 __all__ = [
     # defaults
@@ -42,8 +36,4 @@ __all__ = [
     "make_metric",
     "format_criterion",
     "evaluate_metric",
-    # scenarios
-    "SCENARIOS",
-    "DEFAULT_SCENARIO",
-    "validate_scenarios",
 ]

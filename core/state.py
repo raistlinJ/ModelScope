@@ -1,8 +1,7 @@
-"""Streamlit session-state initialisation and scenario synchronisation.
+"""Streamlit session-state initialisation.
 
-Defines the default values for every key the UI stores in ``st.session_state``
-and keeps scenario-derived keys (prompts, validation command, CAF settings) in
-sync when the active scenario changes. UI-only — never imported by the CLI.
+Defines the default values for every key the UI stores in ``st.session_state``.
+UI-only — never imported by the CLI.
 """
 import streamlit as st
 from config.defaults import (
@@ -12,10 +11,7 @@ from config.defaults import (
     EXTERNAL_LLAMA_CPP_URL, EXTERNAL_LLAMA_CPP_MODEL,
     LLAMA_QUANTIZE_BIN, CONVERT_HF_TO_GGUF_PY, GGUF_MODELS_DIR as _GGUF_DIR,
 )
-from config.scenarios import SCENARIOS, DEFAULT_SCENARIO
 
-
-_SCENARIO = SCENARIOS[DEFAULT_SCENARIO]
 
 _DEFAULTS: dict = {
     # Model / backend
@@ -140,16 +136,15 @@ _DEFAULTS: dict = {
     "llama_cli_validation_sets":     [],
     "llama_cli_metrics_matrix":      [],
 
-    # Metrics setup
-    "active_scenario":    DEFAULT_SCENARIO,
-    "tool_focus":         _SCENARIO.get("related_tool", "file_creator"),
-    "validation_command": _SCENARIO["validation_command"],
-    "fail_patterns":      list(_SCENARIO["fail_patterns"]),
-    "metrics_matrix":     list(_SCENARIO["default_metrics"]),
+    # Metrics setup - no scenario dependency
+    "tool_focus":         "file_creator",
+    "validation_command": "",
+    "fail_patterns":      [],
+    "metrics_matrix":     [],
 
     # Execute
-    "sys_prompt":        _SCENARIO["system_prompt"],
-    "user_prompt":       _SCENARIO["user_prompt"],
+    "sys_prompt":        "",
+    "user_prompt":       "",
     "run_logs":          [],
     "run_completed":     False,
     "cancel_requested":  False,
@@ -163,7 +158,6 @@ _DEFAULTS: dict = {
 
     # Internal trackers
     "_last_backend":           "llama.cpp",
-    "_last_exec_scenario":     DEFAULT_SCENARIO,
     "_prompts_user_edited":    False,
     "_last_active_project_id": None,
     "_undo_stack":             [],
@@ -191,7 +185,6 @@ _DEFAULTS: dict = {
     # Model comparison
     "comparison_models":   [],
     "comparison_result":   None,
-    "comparison_scenario": "",
 
     # RAG configuration
     "rag_corpus_path":          "",
@@ -215,26 +208,6 @@ _DEFAULTS: dict = {
 def init_state() -> None:
     for key, default in _DEFAULTS.items():
         st.session_state.setdefault(key, default)
-
-
-def sync_scenario(scenario_key: str) -> None:
-    """
-    Sync all scenario-derived session state when the active scenario changes.
-    Preserves user-edited prompts; always updates validation, metrics, and CAF config.
-    """
-    _s = SCENARIOS.get(scenario_key, SCENARIOS[DEFAULT_SCENARIO])
-    if not st.session_state.get("_prompts_user_edited"):
-        st.session_state["sys_prompt"]  = _s["system_prompt"]
-        st.session_state["user_prompt"] = _s["user_prompt"]
-    st.session_state["validation_command"]  = _s["validation_command"]
-    st.session_state["fail_patterns"]       = list(_s["fail_patterns"])
-    st.session_state["metrics_matrix"]      = list(_s["default_metrics"])
-    st.session_state["_last_exec_scenario"] = scenario_key
-    if "caf_scope" in _s:
-        st.session_state["caf_scope"]              = _s["caf_scope"]
-        st.session_state["caf_urgency"]            = _s["caf_urgency"]
-        st.session_state["caf_allowed_subnets"]    = list(_s.get("caf_allowed_subnets", []))
-        st.session_state["caf_target_credentials"] = list(_s.get("caf_target_credentials", []))
 
 
 # ── Per-bot-type default values used by sync_project to guarantee a clean reset ──

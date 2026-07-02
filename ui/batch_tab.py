@@ -11,7 +11,6 @@ import uuid
 import streamlit as st
 
 from config.defaults import LLAMA_CPP_DEFAULT_URL
-from config.scenarios import SCENARIOS
 from core.batch_runner import BatchJob, BatchRunner
 from core.environment import LocalEnvironment
 
@@ -150,12 +149,6 @@ def render() -> None:
         col_left, col_right = st.columns(2)
 
         with col_left:
-            scenario_key = st.selectbox(
-                "Scenario",
-                options=list(SCENARIOS.keys()),
-                key="_bq_scenario",
-                help="Evaluation scenario to run",
-            )
             model_label = st.text_input(
                 "Model label",
                 value="Llama-3.1-8B",
@@ -240,7 +233,7 @@ def render() -> None:
                 }
 
             job = BatchJob(
-                scenario_key=scenario_key,
+                scenario_key="manual",
                 model_config=model_config,
                 job_label=model_label.strip() or "",
                 prompt_variant=prompt_variant,
@@ -253,7 +246,6 @@ def render() -> None:
                 "job_id":       job.job_id,
                 "priority":     job.priority,
                 "job_label":    job.job_label,
-                "scenario_key": scenario_key,
                 "model_label":  model_label.strip(),
                 "status":       "queued",
             })

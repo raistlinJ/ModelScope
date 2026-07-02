@@ -169,7 +169,6 @@ class TestBuildConfig:
             backend="llama.cpp",
             llm_url=None,
             context_size=4096,
-            scenario="Scenario 1 – File Creation",
             system_prompt=None,
             user_prompt=None,
             mcp_url="",
@@ -417,13 +416,7 @@ class TestMaybeInjectRunSubcommand:
         argv = ["sessions", "list"]
         assert cli._maybe_inject_run_subcommand(argv) == argv
 
-    def test_scenarios_subcommand_unchanged(self):
-        argv = ["scenarios"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
-
-    def test_help_flag_unchanged(self):
-        argv = ["--help"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
+    # Scenario tests removed - scenarios concept deleted
 
     def test_list_scenarios_flag_unchanged(self):
         argv = ["--list-scenarios"]
@@ -459,27 +452,7 @@ class TestMainDispatch:
         out = capsys.readouterr().out + capsys.readouterr().err
         assert ret == 0
 
-    def test_list_scenarios_legacy_flag(self, capsys):
-        ret = cli.main(["--list-scenarios"])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert "Available" in out
-
-    def test_scenarios_subcommand(self, capsys):
-        ret = cli.main(["scenarios"])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert "Scenario" in out
-
-    def test_scenarios_describe_unknown(self, capsys):
-        ret = cli.main(["scenarios", "--describe", "NonExistentScenario999"])
-        assert ret == 2
-
-    def test_scenarios_describe_known(self, capsys):
-        from config.scenarios import SCENARIOS
-        name = next(iter(SCENARIOS))
-        ret = cli.main(["scenarios", "--describe", name])
-        assert ret == 0
+    # Scenario tests removed - scenarios command no longer exists
 
     def test_sessions_no_dir_exits_zero(self, tmp_path, capsys):
         ret = cli.main(["sessions", "list", "--sessions-dir", str(tmp_path / "nonexistent")])
@@ -715,69 +688,9 @@ class TestCmdBatch:
         ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
         assert ret == 0
 
-    def test_unknown_scenario_skipped(self, tmp_path, capsys):
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps([{"scenario": "NONEXISTENT_SCENARIO_XYZ", "model": "m"}]))
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 0
+    # Scenario tests removed - scenarios concept deleted
 
-    def test_ssh_job_skipped(self, tmp_path, capsys):
-        from config.scenarios import SCENARIOS
-        name = next(iter(SCENARIOS))
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps([{"scenario": name, "model": "m", "ssh_host": "10.0.0.1"}]))
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 0
-
-    @patch("core.batch_runner.BatchRunner.run")
-    @patch("core.batch_runner.BatchRunner.export_csv")
-    def test_valid_job_runs_batch(self, mock_csv, mock_run, tmp_path):
-        from config.scenarios import SCENARIOS
-        from core.batch_runner import BatchReport
-        name = next(iter(SCENARIOS))
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps([{"scenario": name, "model": "m"}]))
-
-        mock_run.return_value = BatchReport(
-            total_jobs=1,
-            completed=1,
-            failed=0,
-            duration_seconds=1.0,
-            summary_rows=[{
-                "job_id": "j1", "label": "test", "status": "done",
-                "latency": 1.0, "total_tokens": 0,
-                "passed_metrics": 0, "failed_metrics": 0, "error": "",
-            }],
-        )
-        mock_csv.return_value = "job_id,label\nj1,test\n"
-
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 0
-
-    @patch("core.batch_runner.BatchRunner.run")
-    @patch("core.batch_runner.BatchRunner.export_csv")
-    def test_batch_returns_1_on_failure(self, mock_csv, mock_run, tmp_path):
-        from config.scenarios import SCENARIOS
-        from core.batch_runner import BatchReport
-        name = next(iter(SCENARIOS))
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps([{"scenario": name, "model": "m"}]))
-
-        mock_run.return_value = BatchReport(
-            total_jobs=1,
-            completed=0,
-            failed=1,
-            duration_seconds=1.0,
-            summary_rows=[{
-                "job_id": "j1", "label": "test", "status": "failed",
-                "latency": 0.0, "total_tokens": 0,
-                "passed_metrics": 0, "failed_metrics": 0, "error": "crash",
-            }],
-        )
-        mock_csv.return_value = ""
-
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 1
+    # Scenario tests removed - scenarios concept deleted
 
 
 # ── _default_sessions_dir ─────────────────────────────────────────────────────

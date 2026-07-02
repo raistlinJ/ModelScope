@@ -1,8 +1,7 @@
-"""Model comparison UI tab — run one scenario across multiple models side-by-side."""
+"""Model comparison UI tab — run one evaluation across multiple models side-by-side."""
 import json
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL
-from config.scenarios import SCENARIOS
 from core.comparison import ComparisonConfig, run_comparison
 from core.environment import LocalEnvironment
 from ui.components import badge_pass, badge_fail, badge_na
@@ -11,7 +10,7 @@ from ui.components import badge_pass, badge_fail, badge_na
 def render() -> None:
     st.header("Model Comparison")
     st.caption(
-        "Run the same scenario across multiple models and compare results "
+        "Run evaluations across multiple models and compare results "
         "in a side-by-side metrics table."
     )
 
@@ -24,14 +23,12 @@ def render() -> None:
             "SSH mode is not supported for model comparison."
         )
 
-    # ── Scenario selector ──────────────────────────────────────────────────────
-    scenario_key = st.selectbox(
-        "Scenario",
-        options=list(SCENARIOS.keys()),
-        key="comparison_scenario",
-        help="All models will run this same scenario.",
-    )
-    scenario_data = SCENARIOS.get(scenario_key, {})
+    # ── Configuration values ─────────────────────────────────────────────────────
+    sys_prompt = st.session_state.get("sys_prompt", "")
+    user_prompt = st.session_state.get("user_prompt", "")
+    validation_command = st.session_state.get("validation_command", "")
+    fail_patterns = st.session_state.get("fail_patterns", [])
+    metrics_matrix = st.session_state.get("metrics_matrix", [])
 
     # ── Add Model ──────────────────────────────────────────────────────────────
     with st.expander("Add Model", expanded=not bool(st.session_state.get("comparison_models"))):
@@ -116,13 +113,13 @@ def render() -> None:
             disabled=len(models) < 2,
         ):
             config = ComparisonConfig(
-                scenario_key=scenario_key,
+                scenario_key="manual",
                 models=models,
-                sys_prompt=scenario_data.get("system_prompt", ""),
-                user_prompt=scenario_data.get("user_prompt", ""),
-                validation_command=scenario_data.get("validation_command", ""),
-                fail_patterns=list(scenario_data.get("fail_patterns", [])),
-                metrics_matrix=list(scenario_data.get("default_metrics", [])),
+                sys_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                validation_command=validation_command,
+                fail_patterns=fail_patterns,
+                metrics_matrix=metrics_matrix,
             )
             logs: list[str] = []
             with st.spinner("Running comparison across all models (sequential)…"):

@@ -10,9 +10,23 @@ Imported by app.py to populate the "Template" selectbox in the New Project dialo
 
 BASH_BOT_TEMPLATES: dict[str, dict] = {
 
-    # ── File Creator ───────────────────────────────────────────────────────────
-    # Mirrors the file_creator llama-cli tool:
-    #   Creates /tmp/test containing the integers 1-10, one per line.
+    # ── Blank Template ───────────────────────────────────────────────────────────
+    # A clean starting point with no pre-configured commands
+    "blank": {
+        "execution_target": "local",
+        "ssh_host": "", "ssh_port": 22, "ssh_user": "root",
+        "ssh_password": "", "ssh_key_path": "", "sudo": False, "sudo_password": "",
+        "bash_timeout": 60,
+        "startup_commands": [],
+        "completion_commands": [],
+        "validation_commands": [],
+        "fail_patterns": [],
+        "metrics_matrix": [],
+        "validation_sets": [],
+    },
+
+    # ── Example: File Creator ────────────────────────────────────────────────────
+    # Creates /tmp/test containing the integers 1-10, one per line.
     "file_creator": {
         "execution_target": "local",
         "ssh_host": "", "ssh_port": 22, "ssh_user": "root",
@@ -83,9 +97,8 @@ BASH_BOT_TEMPLATES: dict[str, dict] = {
         "metrics_matrix": [], "validation_presets": {},
     },
 
-    # ── Nmap Scanner ───────────────────────────────────────────────────────────
-    # Mirrors the run_nmap_scan llama-cli tool:
-    #   Runs nmap -F 127.0.0.1 and verifies the output contains scan results.
+    # ── Example: Nmap Scanner ────────────────────────────────────────────────────
+    # Runs nmap -F 127.0.0.1 and verifies the output contains scan results.
     "nmap_scanner": {
         "execution_target": "local",
         "ssh_host": "", "ssh_port": 22, "ssh_user": "root",

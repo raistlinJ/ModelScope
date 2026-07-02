@@ -2,8 +2,7 @@ import copy
 import uuid
 import streamlit as st
 from config.defaults import DEFAULT_CONTEXT_SIZE, MIN_CONTEXT_SIZE
-from config.scenarios import DEFAULT_SCENARIO
-from core.state import init_state, sync_scenario, sync_project
+from core.state import init_state, sync_project
 from core.models import scan_gguf_models
 from core import llama_server
 from core.logsetup import configure_logging
@@ -42,8 +41,11 @@ if not st.session_state.get("_settings_loaded"):
     # Normalise: settings written by 2.0 stored 'projects' as a dict; 2.1 uses a list.
     if not isinstance(st.session_state.get("projects"), list):
         st.session_state["projects"] = []
-    if "active_scenario" in _saved:
-        st.session_state["_last_exec_scenario"] = _saved["active_scenario"]
+    
+    # Clear scenario-related session state keys (scenarios concept removed)
+    st.session_state.pop("active_scenario", None)
+    st.session_state.pop("_last_exec_scenario", None)
+    
     # Initialise the step-ID counter above any IDs already saved in projects,
     # so that new steps/commands never get an ID that already exists in the data.
     _max_id = 0
@@ -59,11 +61,6 @@ if not st.session_state.get("_settings_loaded"):
     if _max_id:
         st.session_state["_step_id_counter"] = _max_id
     st.session_state["_settings_loaded"] = True
-
-# ── Scenario state sync ────────────────────────────────────────────────────────
-_active = st.session_state.get("active_scenario", DEFAULT_SCENARIO)
-if st.session_state.get("_last_exec_scenario") != _active:
-    sync_scenario(_active)
 
 # ── Auto-bootstrap: create a default Bash-Bot project if the list is empty ────
 def _make_default_project() -> dict:
@@ -262,7 +259,7 @@ with st.sidebar:
 st.markdown(
     "<div class='brand-block'>"
     "<h1 class='spark-title'>ModelScope</h1>"
-    "<span class='app-subtitle'>LLM &amp; MCP Tool Evaluation Platform</span>"
+    "<span class='app-subtitle'>LLM & MCP Tool Evaluation Platform</span>"
     "</div>",
     unsafe_allow_html=True,
 )

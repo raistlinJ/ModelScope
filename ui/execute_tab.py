@@ -2,7 +2,6 @@ import os
 import time
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
-from config.scenarios import SCENARIOS
 from core.evaluator import run_evaluation
 from core.logsetup import logged_on_log
 from core.session_log import SessionLog
@@ -851,15 +850,9 @@ def render() -> None:
                             st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
                         st.rerun()
 
-    # ── Active scenario / tool info ────────────────────────────────────────────
-    _active_sc  = st.session_state.get("active_scenario", "")
-    _tool_f     = st.session_state.get("tool_focus", "")
-    _sc_caption = (
-        f"**Active:** {_active_sc}" + (f"  |  **Tool:** `{_tool_f}`" if _tool_f else "")
-        if _active_sc else
-        "⚠️ No scenario selected — configure in **Configuration → Metrics Setup**."
-    )
-    st.caption(_sc_caption)
+    # ── Tool focus info ────────────────────────────────────────────────────────
+    _tool_f = st.session_state.get("tool_focus", "")
+    st.caption(f"**Tool:** `{_tool_f}`" if _tool_f else "")
     # Track when user edits the prompt fields (fix #10)
 
     # ── Prompt editors ────────────────────────────────────────────────────────
@@ -876,10 +869,8 @@ def render() -> None:
             )
         with _sp_reset:
             if st.button("↺ Reset", key="btn_reset_sys_prompt",
-                         help="Reset to scenario default", use_container_width=True):
+                         help="Reset to system prompt default", use_container_width=True):
                 st.session_state["_prompts_user_edited"] = False
-                from core.state import sync_scenario
-                sync_scenario(st.session_state.get("active_scenario", ""))
                 st.rerun()
         prev_sys = st.session_state.get("sys_prompt", "")
         new_sys  = st.text_area(
@@ -905,7 +896,6 @@ def render() -> None:
         _model_disp    = _esc_pipe(st.session_state.get("selected_model") or "not selected")
         _ctx_disp      = st.session_state.get("context_size", 4096)
         _target_disp   = _esc_pipe(st.session_state.get("target_env_type", "local"))
-        _scenario_disp = _esc_pipe(st.session_state.get("active_scenario", "") or "none")
         _val_cmd_disp  = _esc_pipe(st.session_state.get("validation_command", "") or "none")[:60]
         st.markdown(
             f"| Setting | Value |\n"
@@ -914,7 +904,6 @@ def render() -> None:
             f"| Model | `{_model_disp}` |\n"
             f"| Context | `{_ctx_disp}` tokens |\n"
             f"| Target | `{_target_disp}` |\n"
-            f"| Scenario | {_scenario_disp} |\n"
             f"| Validation | `{_val_cmd_disp}` |",
         )
         st.markdown(
@@ -1013,7 +1002,6 @@ def render() -> None:
         _url_val   = (st.session_state.get("llm_url") or _def_url).strip()
 
         _active_scenario = st.session_state.get("active_scenario", "")
-        _scenario_data   = SCENARIOS.get(_active_scenario, {})
         config = {
             "backend_type":        _backend,
             "llm_url":             _url_val,
@@ -1031,8 +1019,6 @@ def render() -> None:
             "active_scenario":     _active_scenario,
             "tool_focus":          st.session_state.get("tool_focus", ""),
             "metrics_matrix":      st.session_state.get("metrics_matrix", []),
-            "expected_stdout":     _scenario_data.get("expected_stdout", ""),
-            "pre_run_cleanup":     _scenario_data.get("pre_run_cleanup", []),
             "cancel_requested_ref": cancel_ref,
             # CAF 4-Pillar runtime config
             "caf_scope":              st.session_state.get("caf_scope", "Narrow"),
