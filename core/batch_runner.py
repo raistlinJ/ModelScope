@@ -98,7 +98,7 @@ class BatchRunner:
 
     def _run_single(self, job: BatchJob, on_log: Optional[Callable] = None) -> dict:
         job.status = "running"
-        logger = on_log or (lambda _: None)
+        logger = on_log or (lambda *a, **kw: None)
         env = LocalEnvironment()
         try:
             config = self._build_config(job)

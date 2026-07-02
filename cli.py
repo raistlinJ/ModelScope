@@ -711,7 +711,7 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
     session_log = SessionLog()
 
-    def _base_on_log(msg: str) -> None:
+    def _base_on_log(msg: str, *args, **kwargs) -> None:
         session_log.log(msg)
 
     on_log = logged_on_log(inner=_base_on_log)
@@ -815,7 +815,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     session_log = SessionLog(base_dir=args.session_dir)
 
-    def _base_on_log(msg: str) -> None:
+    def _base_on_log(msg: str, *args, **kwargs) -> None:
         session_log.log(msg)
 
     on_log = logged_on_log(inner=_base_on_log)

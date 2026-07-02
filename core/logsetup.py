@@ -74,9 +74,9 @@ def _level_for(msg: str) -> int:
 
 
 def logged_on_log(
-    inner: Callable[[str], None] | None = None,
+    inner: Callable[..., None] | None = None,
     logger: logging.Logger | None = None,
-) -> Callable[[str], None]:
+) -> Callable[..., None]:
     """Wrap an ``on_log`` callback so each message is also sent to the logger.
 
     If ``inner`` is ``None`` the returned callback only logs (useful for the CLI
@@ -85,9 +85,9 @@ def logged_on_log(
     """
     log = logger if logger is not None else logging.getLogger(LOGGER_NAME)
 
-    def _on_log(msg: str) -> None:
+    def _on_log(msg: str, *args, **kwargs) -> None:
         if inner is not None:
-            inner(msg)
+            inner(msg, *args, **kwargs)
         try:
             log.log(_level_for(msg), "%s", msg)
         except Exception:
