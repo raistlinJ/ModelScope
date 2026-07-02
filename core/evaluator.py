@@ -317,6 +317,8 @@ def _run_validation_sets(
     validation_sets: list,
     on_log: Callable[[str], None],
     cancel_ref: list[bool] = [False],
+    config: dict = None,
+    prompt_context_list: list = None,
 ) -> tuple[bool, list]:
     """
     Execute all validation sets.
@@ -358,17 +360,34 @@ def _run_validation_sets(
                 if not cmd_obj.get("enabled", True):
                     continue
 
-                cmd_text = cmd_obj.get("command", "").strip()
-                if not cmd_text:
-                    continue
-
-                timeout = int(cmd_obj.get("timeout_seconds", 60))
-                on_log(f"[VALIDATE CMD] Running: {cmd_text}")
-
-                res = env.execute(cmd_text, timeout=timeout)
-                stdout = res.get("stdout", "")
-                stderr = res.get("stderr", "")
-                exit_code = res.get("exit_code", -1)
+                _type = cmd_obj.get("type", "command")
+                if _type == "prompt":
+                    if config is None:
+                        config = {}
+                    if prompt_context_list is None:
+                        prompt_context_list = []
+                    
+                    sys_p = cmd_obj.get("system_prompt", "")
+                    usr_p = cmd_obj.get("user_prompt", "")
+                    cmd_text = f"Prompt: {sys_p[:20]}... | {usr_p[:20]}..."
+                    on_log(f"[VALIDATE CMD] Running LLM Judge: {cmd_text}")
+                    
+                    res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log)
+                    stdout = res.get("stdout", "")
+                    stderr = res.get("stderr", "")
+                    exit_code = res.get("exit_code", -1)
+                else:
+                    cmd_text = cmd_obj.get("command", "").strip()
+                    if not cmd_text:
+                        continue
+    
+                    timeout = int(cmd_obj.get("timeout_seconds", 60))
+                    on_log(f"[VALIDATE CMD] Running: {cmd_text}")
+    
+                    res = env.execute(cmd_text, timeout=timeout)
+                    stdout = res.get("stdout", "")
+                    stderr = res.get("stderr", "")
+                    exit_code = res.get("exit_code", -1)
 
                 # Verify output
                 out_type = cmd_obj.get("expected_output_type", "Ignore")
@@ -960,7 +979,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     # Validation
     val_sets = config.get("validation_sets", [])
     if not telemetry["run_aborted"] and val_sets:
-        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref)
+        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref, config, [])
         telemetry["validation_passed"] = all_passed
         telemetry["validation_sets_results"] = set_results
         # Backwards compatibility: populate stdout/stderr
@@ -1341,7 +1360,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     if val_sets:
         if telemetry["run_aborted"]:
             on_log("[WARN] Run was cancelled or timed out — validation still proceeding")
-        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref)
+        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref, config, [])
         telemetry["validation_passed"] = all_passed
         telemetry["validation_sets_results"] = set_results
         telemetry["validation_stdout"] = "\n".join(

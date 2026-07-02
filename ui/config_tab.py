@@ -1776,9 +1776,22 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
     def _val_add_cmd(si):
         st.session_state[state_key][si]["commands"].append({
             "_id": _next_step_id(),
+            "type": "command",
             "command": "",
             "enabled": True,
             "timeout_seconds": 60,
+            "expected_output_type": "Ignore",
+            "expected_output": ""
+        })
+
+    def _val_add_prompt(si):
+        st.session_state[state_key][si]["commands"].append({
+            "_id": _next_step_id(),
+            "type": "prompt",
+            "system_prompt": "",
+            "user_prompt": "",
+            "preserve_context": True,
+            "enabled": True,
             "expected_output_type": "Ignore",
             "expected_output": ""
         })
@@ -1829,70 +1842,126 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
 
                 _is_last_cmd_idx = len(commands) - 1
 
+                first_cmd_seen = False
+
                 for ci, cmd in enumerate(commands):
                     cmd_id = cmd["_id"]
+                    _cmd_type = cmd.get("type", "command")
 
-                    if ci == 0:
-                        hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
-                        hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
-                        hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
-                        hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
-                        hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
-                        hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
-                        st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
-
-                    cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
-                    
-                    with cc_cmd:
-                        cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
-                        if cmd_key not in st.session_state:
-                            st.session_state[cmd_key] = cmd.get("command", "")
-
-                        is_disabled = not cmd.get("enabled", True)
-
-                        if ci == _is_last_cmd_idx:
-                            def _on_last_cmd_enter(_ck=cmd_key, _si=si):
-                                if st.session_state.get(_ck, "").strip():
-                                    _val_add_cmd(_si)
-                            st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", on_change=_on_last_cmd_enter, disabled=is_disabled)
-                        else:
-                            st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", disabled=is_disabled)
-                        cmd["command"] = st.session_state.get(cmd_key, "")
-                        
-                    with cc_to:
-                        to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
-                        if to_key not in st.session_state:
-                            st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
-                        cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
-                        
-                    with cc_chk:
-                        chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
-                        if chk_key not in st.session_state:
-                            _init_type = cmd.get("expected_output_type", "Ignore")
-                            if _init_type not in ["Regex", "Exact String"]:
-                                _init_type = "Ignore"
-                            st.session_state[chk_key] = _init_type
-                        cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
-                        
-                    with cc_exp:
-                        exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
-                        if exp_key not in st.session_state:
-                            st.session_state[exp_key] = cmd.get("expected_output", "")
+                    if _cmd_type == "prompt":
+                        with st.container(border=True):
+                            cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                            with cc0:
+                                st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
+                            with cc1:
+                                st.markdown("**LLM Judge**")
+                            with cc2:
+                                pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
+                                cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
+                            with cc3:
+                                en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                                cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                            with cc4:
+                                if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
+                                    _val_del_cmd(si, ci)
+                                    st.rerun()
                             
-                        # Disable expected value if row is disabled OR check type is Ignore
-                        chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
-                        exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
-                        
-                        cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
-                        
-                    with cc_en:
-                        en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                        cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
-                        
-                    with cc_del:
-                        st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
+                            sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                            if sys_key not in st.session_state:
+                                st.session_state[sys_key] = cmd.get("system_prompt", "")
+                            with st.expander("System Prompt", expanded=False):
+                                cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                            
+                            usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
+                            if usr_key not in st.session_state:
+                                st.session_state[usr_key] = cmd.get("user_prompt", "")
+                            with st.expander("User Prompt", expanded=False):
+                                cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
+                                
+                            # Validation Checks for Prompts
+                            cv_chk, cv_exp = st.columns([1.5, 4.0])
+                            with cv_chk:
+                                chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
+                                if chk_key not in st.session_state:
+                                    _init_type = cmd.get("expected_output_type", "Ignore")
+                                    if _init_type not in ["Regex", "Exact String"]:
+                                        _init_type = "Ignore"
+                                    st.session_state[chk_key] = _init_type
+                                cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key)
+                            with cv_exp:
+                                exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
+                                if exp_key not in st.session_state:
+                                    st.session_state[exp_key] = cmd.get("expected_output", "")
+                                chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
+                                exp_disabled = not cmd.get("enabled", True) or (chk_type in ("Ignore", "No output"))
+                                cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", disabled=exp_disabled)
+                    else:
+                        if not first_cmd_seen:
+                            hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                            hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
+                            hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
+                            hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
+                            hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
+                            hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
+                            st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+                            first_cmd_seen = True
 
-                st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,))
+                        cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                        
+                        with cc_cmd:
+                            cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                            if cmd_key not in st.session_state:
+                                st.session_state[cmd_key] = cmd.get("command", "")
+
+                            is_disabled = not cmd.get("enabled", True)
+
+                            if ci == _is_last_cmd_idx:
+                                def _on_last_cmd_enter(_ck=cmd_key, _si=si):
+                                    if st.session_state.get(_ck, "").strip():
+                                        _val_add_cmd(_si)
+                                st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", on_change=_on_last_cmd_enter, disabled=is_disabled)
+                            else:
+                                st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", disabled=is_disabled)
+                            cmd["command"] = st.session_state.get(cmd_key, "")
+                            
+                        with cc_to:
+                            to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                            if to_key not in st.session_state:
+                                st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                            cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
+                            
+                        with cc_chk:
+                            chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
+                            if chk_key not in st.session_state:
+                                _init_type = cmd.get("expected_output_type", "Ignore")
+                                if _init_type not in ["Regex", "Exact String"]:
+                                    _init_type = "Ignore"
+                                st.session_state[chk_key] = _init_type
+                            cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
+                            
+                        with cc_exp:
+                            exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
+                            if exp_key not in st.session_state:
+                                st.session_state[exp_key] = cmd.get("expected_output", "")
+                                
+                            # Disable expected value if row is disabled OR check type is Ignore
+                            chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
+                            exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
+                            
+                            cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
+                            
+                        with cc_en:
+                            en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                            cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                            
+                        with cc_del:
+                            st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
+
+                bc1, bc2 = st.columns([1, 1])
+                with bc1:
+                    st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,))
+                with bc2:
+                    st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,))
 
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
