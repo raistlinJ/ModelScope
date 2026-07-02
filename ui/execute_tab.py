@@ -360,7 +360,7 @@ def _render_bash_execute(project: dict) -> None:
                                             short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
                                             hint = f"  # expect {exp_type.lower()}: {short}"
 
-                                        col_cc, col_cl = st.columns([1, 10])
+                                        col_cc, col_cl = st.columns([0.3, 10.7])
                                         with col_cc:
                                             st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
                                             new_cmd_sel = st.checkbox(
@@ -753,7 +753,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
                                             hint = f"  # expect {exp_type.lower()}: {short}"
 
-                                        col_cc, col_cl = st.columns([1, 10])
+                                        col_cc, col_cl = st.columns([0.3, 10.7])
                                         with col_cc:
                                             st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
                                             new_cmd_sel = st.checkbox(
