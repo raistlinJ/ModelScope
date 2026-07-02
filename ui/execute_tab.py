@@ -371,11 +371,21 @@ def _render_bash_execute(project: dict) -> None:
                                             )
                                             cmd_sel = new_cmd_sel
                                         with col_cl:
-                                            display = cmd_text + hint if hint else cmd_text
-                                            if cmd_sel and set_selected:
-                                                st.code(display, language="bash")
+                                            if _type == "prompt":
+                                                with st.container(border=True):
+                                                    st.markdown(f"💬 **Configured LLM**")
+                                                    if sys_p:
+                                                        with st.expander("System Prompt", expanded=False):
+                                                            st.code(sys_p, language="text")
+                                                    if usr_p:
+                                                        with st.expander("User Prompt", expanded=False):
+                                                            st.code(usr_p, language="text")
                                             else:
-                                                st.markdown(f"~~`{display}`~~ *(skipped)*")
+                                                display = cmd_text + hint if hint else cmd_text
+                                                if cmd_sel and set_selected:
+                                                    st.code(display, language="bash")
+                                                else:
+                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
 
                 with st.expander(_phase_label("Completion", "completion"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
@@ -754,11 +764,21 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             )
                                             cmd_sel = new_cmd_sel
                                         with col_cl:
-                                            display = cmd_text + hint if hint else cmd_text
-                                            if cmd_sel and set_selected:
-                                                st.code(display, language="bash")
+                                            if _type == "prompt":
+                                                with st.container(border=True):
+                                                    st.markdown(f"💬 **Configured LLAMA-CLI LLM**")
+                                                    if sys_p:
+                                                        with st.expander("System Prompt", expanded=False):
+                                                            st.code(sys_p, language="text")
+                                                    if usr_p:
+                                                        with st.expander("User Prompt", expanded=False):
+                                                            st.code(usr_p, language="text")
                                             else:
-                                                st.markdown(f"~~`{display}`~~ *(skipped)*")
+                                                display = cmd_text + hint if hint else cmd_text
+                                                if cmd_sel and set_selected:
+                                                    st.code(display, language="bash")
+                                                else:
+                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
 
                 with st.expander(_phase_label("Completion", "completion"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
