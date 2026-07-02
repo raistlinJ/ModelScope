@@ -1932,7 +1932,7 @@ def _render_bash_runtime(project: dict) -> None:
             help="Run every startup, validation, and completion command as root via `sudo bash -c`.",
         )
         if st.session_state.get("bash_sudo"):
-            if target == "local":
+            if target in ("local", "pct"):
                 st.text_input(
                     "Sudo password",
                     key="bash_sudo_password",
@@ -2622,6 +2622,16 @@ def _render_llama_cli_runtime(project: dict) -> None:
             key="llama_cli_sudo",
             help="Prefix shell commands and the llama-cli invocation with `sudo`.",
         )
+        if st.session_state.get("llama_cli_sudo"):
+            if target in ("local", "pct"):
+                st.text_input(
+                    "Sudo password",
+                    key="llama_cli_sudo_password",
+                    type="password",
+                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
+                )
+            else:
+                st.caption("SSH password will be reused for sudo.")
         if target == "local":
             st.divider()
             _render_test_button("local", "llama_cli")
