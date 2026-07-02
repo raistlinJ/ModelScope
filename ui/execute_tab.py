@@ -361,7 +361,7 @@ def _render_bash_execute(project: dict) -> None:
             disabled=run_in_progress,
         )
     with col_cancel:
-        if st.button("⏹  Cancel", key="btn_bash_exec_cancel",
+        if st.button("⏹  Stop", key="btn_bash_exec_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
     with col_clear:
@@ -702,7 +702,7 @@ def _render_llama_cli_execute(project: dict) -> None:
             disabled=run_in_progress,
         )
     with col_cancel:
-        if st.button("⏹  Cancel", key="btn_llama_exec_cancel",
+        if st.button("⏹  Stop", key="btn_llama_exec_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
     with col_clear:
@@ -945,8 +945,8 @@ def render() -> None:
             disabled=run_in_progress or not model_chosen or not ssh_ready,
         )
     with col_cancel:
-        # Cancel button (fix #16)
-        if st.button("⏹  Cancel", key="btn_exec_cancel", use_container_width=True, disabled=not run_in_progress):
+        # Stop button
+        if st.button("⏹  Stop", key="btn_exec_cancel", use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
     with col_clear:
         if st.button("Clear Log", key="btn_exec_clear_log", use_container_width=True):
