@@ -1967,9 +1967,11 @@ def _render_bash_runtime(project: dict) -> None:
                           placeholder="~/.ssh/id_rsa",
                           help="Path to private key file. Leave empty if using password auth.")
             _is_testing = st.session_state.get("testing_bash_ssh", False)
-            if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", disabled=_is_testing):
-                st.session_state["testing_bash_ssh"] = True
-                st.rerun()
+            _, col_test, _ = st.columns([1, 2, 1])
+            with col_test:
+                if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing):
+                    st.session_state["testing_bash_ssh"] = True
+                    st.rerun()
             
             if _is_testing:
                 st.session_state.pop("bash_ssh_test_result", None)
@@ -2083,7 +2085,7 @@ def _render_test_button(target_type: str, state_prefix: str, vmid_key: str = "")
     
     btn_label = f"Test {target_type.upper() if target_type == 'pct' else 'Local'} Execution"
     
-    col_test, _ = st.columns([2, 1])
+    _, col_test, _ = st.columns([1, 2, 1])
     with col_test:
         if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True, disabled=_is_testing):
             st.session_state[testing_key] = True
@@ -2778,9 +2780,11 @@ def _render_llama_cli_runtime(project: dict) -> None:
             st.text_input("Key Path", key="llama_cli_ssh_key_path",
                           placeholder="~/.ssh/id_rsa")
             _is_testing_llama = st.session_state.get("testing_llama_cli_ssh", False)
-            if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", disabled=_is_testing_llama):
-                st.session_state["testing_llama_cli_ssh"] = True
-                st.rerun()
+            _, col_test, _ = st.columns([1, 2, 1])
+            with col_test:
+                if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing_llama):
+                    st.session_state["testing_llama_cli_ssh"] = True
+                    st.rerun()
                 
             if _is_testing_llama:
                 st.session_state.pop("llama_cli_ssh_test_result", None)
@@ -2977,8 +2981,9 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 st.checkbox("Flash Attn", key="llama_cli_flash_attn", help="Use Flash Attention (-fa).")
 
         st.divider()
-        _col_svc, _col_status = st.columns([1, 2])
         _backend = st.session_state.get("llama_cli_backend", "llama.cpp")
+        
+        _, _col_svc, _ = st.columns([1, 2, 1])
         with _col_svc:
             _is_testing = st.session_state.get("_llama_cli_testing", False)
             if st.button("Test Run", key="btn_llama_test_run",
@@ -3015,16 +3020,15 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 st.rerun()
 
         # ── Test Run status display (always shown) ─────────────────────────────
-        with _col_status:
-            _svc_result = st.session_state.get("_llama_svc_result")
-            if _svc_result:
-                _level, _msg, _cmd = _svc_result
-                if _level == "ok":
-                    st.success(_msg)
-                    if _cmd:
-                        st.code(_cmd, language="bash")
-                else:
-                    st.error(_msg)
+        _svc_result = st.session_state.get("_llama_svc_result")
+        if _svc_result:
+            _level, _msg, _cmd = _svc_result
+            if _level == "ok":
+                st.success(_msg)
+                if _cmd:
+                    st.code(_cmd, language="bash")
+            else:
+                st.error(_msg)
 
     with st.expander("MCP Servers", expanded=False):
         st.caption("Discover MCP servers available on the target machine.")
