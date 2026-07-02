@@ -186,8 +186,13 @@ def _load_bash_validation_validation_set(project: dict, validation_set_name: str
     st.rerun()
 
 
-def _run_bash_bot(project: dict) -> None:
-    """Build the environment and run the bash evaluation."""
+def _run_bash_bot(project: dict, shared: dict) -> None:
+    """Build the environment and run the bash evaluation.
+
+    ``shared`` is a plain dict visible to both this thread and the main
+    Streamlit thread.  We never touch ``st.session_state`` here — the
+    polling loop in the main thread mirrors ``shared`` → session_state.
+    """
     from core.environment import LocalEnvironment, SSHEnvironment
     from core.evaluator import run_bash_evaluation
     from core.session_log import SessionLog
@@ -195,49 +200,33 @@ def _run_bash_bot(project: dict) -> None:
     _flush_bash_config(project)
     cfg = project["config"]
 
-    logs_shell: list[dict]       = []
-    logs_llama: list[dict]       = []
     cancel_ref: list[bool] = [False]
-    _last_render_shell: list[float] = [0.0]
-    _last_render_llama: list[float] = [0.0]
-    
-    log_placeholder_shell = st.session_state.get("_bash_log_placeholder_shell")
-    log_placeholder_llama = st.session_state.get("_bash_log_placeholder_llama")
 
     session_log = SessionLog()
 
     def on_log(msg: str, source: str = "shell") -> None:
-        if st.session_state.get("cancel_requested"):
+        if shared.get("cancel_requested"):
             cancel_ref[0] = True
         # Track execution phase from log prefixes
         if msg.startswith("[RUN]") or msg.startswith("[DELAY] Step"):
-            st.session_state["_exec_phase"] = "startup"
+            shared["phase"] = "startup"
         elif msg.startswith("[VALIDATE"):
-            st.session_state["_exec_phase"] = "validation"
+            shared["phase"] = "validation"
         elif msg.startswith("[CLEANUP]"):
-            st.session_state["_exec_phase"] = "completion"
+            shared["phase"] = "completion"
         elif msg.startswith("[COMPLETE]"):
-            st.session_state["_exec_phase"] = "done"
+            shared["phase"] = "done"
         entry = {"text": msg, "tag": _tag(msg)}
-        now = time.monotonic()
         if source == "shell":
-            logs_shell.append(entry)
-            st.session_state["run_logs_shell"] = list(logs_shell)
-            if log_placeholder_shell and (now - _last_render_shell[0]) >= 0.5:
-                _render_terminal(log_placeholder_shell, logs_shell)
-                _last_render_shell[0] = now
+            shared["logs_shell"].append(entry)
         else:
-            logs_llama.append(entry)
-            st.session_state["run_logs_llama"] = list(logs_llama)
-            if log_placeholder_llama and (now - _last_render_llama[0]) >= 0.5:
-                _render_terminal(log_placeholder_llama, logs_llama)
-                _last_render_llama[0] = now
+            shared["logs_llama"].append(entry)
         session_log.log(msg)
 
     from core.environment import create_environment
     tgt = cfg.get("execution_target", "local")
     is_ssh = tgt == "ssh"
-    
+
     env = create_environment(
         ssh=is_ssh,
         host=cfg.get("ssh_host", ""),
@@ -280,17 +269,9 @@ def _run_bash_bot(project: dict) -> None:
     session_log.save_config(bash_config)
     session_log.close()
 
-    st.session_state["telemetry"]        = telemetry or {}
-    st.session_state["run_completed"]    = True
-    st.session_state["_run_in_progress"] = False
-    st.session_state["cancel_requested"] = False
-
-    from config.defaults import MAX_RUN_HISTORY
-    # Per-project history — isolated so switching projects shows only that project's runs
-    history_key = f"run_history_{project['id']}"
-    history: list = st.session_state.get(history_key, [])
-    history.append(telemetry or {})
-    st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+    shared["telemetry"]  = telemetry or {}
+    shared["completed"]  = True
+    shared["project_id"] = project.get("id")
 
 
 def _render_bash_execute(project: dict) -> None:
@@ -430,23 +411,56 @@ def _render_bash_execute(project: dict) -> None:
         shell_placeholder.empty()
         llama_placeholder.empty()
         # Launch in background thread so the UI stays responsive
-        thread = threading.Thread(target=_run_bash_bot, args=(project,), daemon=True)
+        shared_state = {
+            "cancel_requested": False,
+            "phase": "",
+            "logs_shell": [],
+            "logs_llama": [],
+            "completed": False,
+            "telemetry": {},
+        }
+        st.session_state["_run_shared"] = shared_state
+        thread = threading.Thread(target=_run_bash_bot, args=(project, shared_state), daemon=True)
         thread.start()
         st.session_state["_run_thread"] = thread
         st.rerun()
 
     # Polling: if a run is in progress, refresh the UI periodically
     if run_in_progress:
+        shared = st.session_state.get("_run_shared", {})
+        
+        # Sync shared state to session state for UI to render
+        st.session_state["run_logs_shell"] = shared.get("logs_shell", [])
+        st.session_state["run_logs_llama"] = shared.get("logs_llama", [])
+        if shared.get("phase"):
+            st.session_state["_exec_phase"] = shared["phase"]
+            
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
         thread = st.session_state.get("_run_thread")
+        
         if thread and thread.is_alive():
+            # If user clicked Stop in UI, push it to shared dict
+            if st.session_state.get("cancel_requested"):
+                shared["cancel_requested"] = True
             time.sleep(0.5)
             st.rerun()
         else:
             # Thread finished — ensure state is clean
             st.session_state["_run_in_progress"] = False
             st.session_state.pop("_run_thread", None)
+            
+            # Save telemetry to history if completed
+            if shared.get("completed"):
+                st.session_state["telemetry"] = shared.get("telemetry", {})
+                st.session_state["run_completed"] = True
+                
+                from config.defaults import MAX_RUN_HISTORY
+                history_key = f"run_history_{project['id']}"
+                history: list = st.session_state.get(history_key, [])
+                history.append(shared.get("telemetry", {}))
+                st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+                
             if st.session_state.get("_exec_phase") != "done":
                 st.session_state["_exec_phase"] = "done"
             st.rerun()
@@ -470,8 +484,12 @@ def _render_bash_execute(project: dict) -> None:
 
 # ── Llama-CLI Bot execute ──────────────────────────────────────────────────────
 
-def _run_llama_cli_bot(project: dict) -> None:
-    """Build environment and run llama_cli evaluation."""
+def _run_llama_cli_bot(project: dict, shared: dict) -> None:
+    """Build environment and run llama_cli evaluation.
+
+    ``shared`` is a plain dict visible to both this thread and the main
+    Streamlit thread.  We never touch ``st.session_state`` here.
+    """
     import shlex
     from core.environment import LocalEnvironment, SSHEnvironment
     from core.evaluator import run_llama_cli_evaluation
@@ -480,44 +498,27 @@ def _run_llama_cli_bot(project: dict) -> None:
     _flush_llama_cli_config(project)
     cfg = project["config"]
 
-    logs_shell: list[dict]       = []
-    logs_llama: list[dict]       = []
     cancel_ref: list[bool] = [False]
-    _last_render_shell: list[float] = [0.0]
-    _last_render_llama: list[float] = [0.0]
-    log_placeholder_shell = st.session_state.get("_llama_log_placeholder_shell")
-    log_placeholder_llama = st.session_state.get("_llama_log_placeholder_llama")
 
     session_log = SessionLog()
 
     def on_log(msg: str, source: str = "llama") -> None:
-        if st.session_state.get("cancel_requested"):
+        if shared.get("cancel_requested"):
             cancel_ref[0] = True
         # Track execution phase from log prefixes
         if msg.startswith("[RUN]") or msg.startswith("[DELAY] Step"):
-            st.session_state["_exec_phase"] = "startup"
+            shared["phase"] = "startup"
         elif msg.startswith("[VALIDATE"):
-            st.session_state["_exec_phase"] = "validation"
+            shared["phase"] = "validation"
         elif msg.startswith("[CLEANUP]"):
-            st.session_state["_exec_phase"] = "completion"
+            shared["phase"] = "completion"
         elif msg.startswith("[COMPLETE]"):
-            st.session_state["_exec_phase"] = "done"
+            shared["phase"] = "done"
         entry = {"text": msg, "tag": _tag(msg)}
-        now = time.monotonic()
-        
         if source == "shell":
-            logs_shell.append(entry)
-            st.session_state["run_logs_shell"] = list(logs_shell)
-            if log_placeholder_shell and (now - _last_render_shell[0]) >= 0.5:
-                _render_terminal(log_placeholder_shell, logs_shell)
-                _last_render_shell[0] = now
+            shared["logs_shell"].append(entry)
         else:
-            logs_llama.append(entry)
-            st.session_state["run_logs_llama"] = list(logs_llama)
-            if log_placeholder_llama and (now - _last_render_llama[0]) >= 0.5:
-                _render_terminal(log_placeholder_llama, logs_llama)
-                _last_render_llama[0] = now
-                
+            shared["logs_llama"].append(entry)
         session_log.log(msg)
 
     from core.environment import create_environment
@@ -599,27 +600,16 @@ def _run_llama_cli_bot(project: dict) -> None:
             env.close()
 
     # Mark whether an explicit user cancellation caused the abort (vs timeout).
-    # cancel_requested is set only by the Cancel button — the timeout path never
-    # touches it — so it cleanly discriminates the two early-exit cases.
     if isinstance(telemetry, dict) and telemetry.get("run_aborted"):
-        telemetry["interrupted_by_user"] = bool(
-            st.session_state.get("cancel_requested")
-        )
+        telemetry["interrupted_by_user"] = bool(shared.get("cancel_requested"))
 
     session_log.save_telemetry(telemetry or {})
     session_log.save_config(llama_config)
     session_log.close()
 
-    st.session_state["telemetry"]        = telemetry or {}
-    st.session_state["run_completed"]    = True
-    st.session_state["_run_in_progress"] = False
-    st.session_state["cancel_requested"] = False
-
-    from config.defaults import MAX_RUN_HISTORY
-    history_key = f"run_history_{project['id']}"
-    history: list = st.session_state.get(history_key, [])
-    history.append(telemetry or {})
-    st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+    shared["telemetry"]  = telemetry or {}
+    shared["completed"]  = True
+    shared["project_id"] = project.get("id")
 
 
 def _get_llama_selected_validation_sets(cfg: dict) -> list:
@@ -801,23 +791,56 @@ def _render_llama_cli_execute(project: dict) -> None:
         shell_placeholder.empty()
         llama_placeholder.empty()
         # Launch in background thread so the UI stays responsive
-        thread = threading.Thread(target=_run_llama_cli_bot, args=(project,), daemon=True)
+        shared_state = {
+            "cancel_requested": False,
+            "phase": "",
+            "logs_shell": [],
+            "logs_llama": [],
+            "completed": False,
+            "telemetry": {},
+        }
+        st.session_state["_run_shared"] = shared_state
+        thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state), daemon=True)
         thread.start()
         st.session_state["_run_thread"] = thread
         st.rerun()
 
     # Polling: if a run is in progress, refresh the UI periodically
     if run_in_progress:
+        shared = st.session_state.get("_run_shared", {})
+        
+        # Sync shared state to session state for UI to render
+        st.session_state["run_logs_shell"] = shared.get("logs_shell", [])
+        st.session_state["run_logs_llama"] = shared.get("logs_llama", [])
+        if shared.get("phase"):
+            st.session_state["_exec_phase"] = shared["phase"]
+            
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
         thread = st.session_state.get("_run_thread")
+        
         if thread and thread.is_alive():
+            # If user clicked Stop in UI, push it to shared dict
+            if st.session_state.get("cancel_requested"):
+                shared["cancel_requested"] = True
             time.sleep(0.5)
             st.rerun()
         else:
             # Thread finished — ensure state is clean
             st.session_state["_run_in_progress"] = False
             st.session_state.pop("_run_thread", None)
+            
+            # Save telemetry to history if completed
+            if shared.get("completed"):
+                st.session_state["telemetry"] = shared.get("telemetry", {})
+                st.session_state["run_completed"] = True
+                
+                from config.defaults import MAX_RUN_HISTORY
+                history_key = f"run_history_{project['id']}"
+                history: list = st.session_state.get(history_key, [])
+                history.append(shared.get("telemetry", {}))
+                st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
+                
             if st.session_state.get("_exec_phase") != "done":
                 st.session_state["_exec_phase"] = "done"
             st.rerun()
