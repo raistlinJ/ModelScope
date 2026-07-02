@@ -393,7 +393,7 @@ def _render_bash_execute(project: dict) -> None:
 
     col_sh, col_ll = st.columns(2)
     col_sh.markdown("**Shell Execution Log**")
-    col_ll.markdown("**LLM Interaction Log**")
+    col_ll.markdown("**LLM Judge Log**")
     shell_placeholder = col_sh.empty()
     llama_placeholder = col_ll.empty()
     st.session_state["_bash_log_placeholder_shell"] = shell_placeholder
@@ -778,7 +778,7 @@ def _render_llama_cli_execute(project: dict) -> None:
 
     col_sh, col_ll = st.columns(2)
     col_sh.markdown("**Shell Execution Log**")
-    col_ll.markdown("**LLM Interaction Log**")
+    col_ll.markdown("**LLM Judge Log**")
     shell_placeholder = col_sh.empty()
     llama_placeholder = col_ll.empty()
     st.session_state["_llama_log_placeholder_shell"] = shell_placeholder
