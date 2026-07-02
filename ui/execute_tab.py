@@ -232,6 +232,8 @@ def _run_bash_bot(project: dict) -> None:
         "execution_mode": "bash",
         "active_project_id":   project.get("id"),
     }
+    # Inherit LLM Judge configurations
+    bash_config.update({k: v for k, v in cfg.items() if k.startswith("llm_helper_")})
 
     telemetry: dict | None = None
     try:
@@ -549,6 +551,8 @@ def _run_llama_cli_bot(project: dict) -> None:
         "cancel_requested_ref": cancel_ref,
         "active_project_id":   project.get("id"),
     }
+    # Inherit LLM Judge configurations
+    llama_config.update({k: v for k, v in cfg.items() if k.startswith("llm_helper_")})
 
     telemetry: dict | None = None
     try:
