@@ -1305,7 +1305,10 @@ def _clean_steps(steps_list):
         if not isinstance(step, dict):
             continue
         new_step = copy.deepcopy(step)
-        new_step["commands"] = [c for c in new_step.get("commands", []) if isinstance(c, dict) and c.get("command", "").strip()]
+        new_step["commands"] = [
+            c for c in new_step.get("commands", []) 
+            if isinstance(c, dict) and (c.get("command", "").strip() or c.get("type") == "prompt")
+        ]
         if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
             cleaned.append(new_step)
     return cleaned
