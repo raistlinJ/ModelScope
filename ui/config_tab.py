@@ -1340,6 +1340,7 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_openai_verify_ssl": st.session_state.get("bash_llm_helper_openai_verify_ssl", True),
         "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("bash_llm_helper_model", ""),
+        "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1840,11 +1841,20 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
         "Configure an LLM connection here to assist with generating commands or prompts "
         "for your tasks."
     )
+    _is_enabled = st.toggle(
+        "Enable LLM Prompt Helper",
+        key=f"{pfx}_llm_helper_enabled_widget",
+        value=st.session_state.get(f"{pfx}_llm_helper_enabled", False),
+        help="When enabled, 'prompt' type steps in Startup/Completion will be executed by this helper backend.",
+    )
+    st.session_state[f"{pfx}_llm_helper_enabled"] = _is_enabled
+
     backend = st.selectbox(
         "LLM Backend",
         options=["OpenAI-Compatible", "Ollama"],
         index=0 if st.session_state.get(f"{pfx}_llm_helper_backend", "OpenAI-Compatible") == "OpenAI-Compatible" else 1,
         key=f"{pfx}_llm_helper_backend_sel",
+        disabled=not _is_enabled,
     )
     st.session_state[f"{pfx}_llm_helper_backend"] = backend
 
@@ -1853,10 +1863,11 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             "Ollama Server URL",
             key=f"{pfx}_llm_helper_ollama_url_widget",
             value=st.session_state.get(f"{pfx}_llm_helper_ollama_url", "http://localhost:11434"),
+            disabled=not _is_enabled,
         )
         st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
         
-        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True):
+        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=not _is_enabled):
             if _url.strip():
                 from core.models import fetch_ollama_models
                 _found, _err = fetch_ollama_models(_url.strip())
@@ -1872,10 +1883,10 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             _model_names = [m["name"] for m in _models]
             _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
             _idx = _model_names.index(_cur) if _cur in _model_names else 0
-            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_ollama_model_sel")
+            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_ollama_model_sel", disabled=not _is_enabled)
             st.session_state[f"{pfx}_llm_helper_model"] = _chosen
         else:
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""), disabled=not _is_enabled)
             st.session_state[f"{pfx}_llm_helper_model"] = _man
 
     else:
@@ -1888,6 +1899,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 value=st.session_state.get(f"{pfx}_llm_helper_openai_url", ""),
                 placeholder="http://localhost:8080",
                 help="Base URL of any OpenAI-compatible server. Do not include /v1.",
+                disabled=not _is_enabled,
             )
             st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
         _ssl = st.checkbox(
@@ -1895,13 +1907,14 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
             value=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True),
             help="Uncheck for self-signed certs or plain HTTP servers.",
+            disabled=not _is_enabled,
         )
         st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
 
         with col_fetch:
             st.write("")
             st.write("")
-            if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True):
+            if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=not _is_enabled):
                 if _url.strip():
                     from core.models import fetch_llama_cpp_models
                     _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=_ssl)
@@ -1918,6 +1931,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             key=f"{pfx}_llm_helper_openai_apikey_widget",
             type="password",
             value=st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""),
+            disabled=not _is_enabled,
         )
         st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
         _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
@@ -1925,13 +1939,13 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             _model_names = [m["name"] for m in _models]
             _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
             _idx = _model_names.index(_cur) if _cur in _model_names else 0
-            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_openai_model_sel")
+            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_openai_model_sel", disabled=not _is_enabled)
             st.session_state[f"{pfx}_llm_helper_model"] = _chosen
         else:
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""), disabled=not _is_enabled)
             st.session_state[f"{pfx}_llm_helper_model"] = _man
 
-        if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
+        if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True, disabled=not _is_enabled):
             if _url.strip():
                 from core.llama_server import get_server_info
                 _info = get_server_info(_url.strip(), verify_ssl=_ssl)
@@ -2526,6 +2540,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_openai_verify_ssl": st.session_state.get("llama_cli_llm_helper_openai_verify_ssl", True),
         "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", ""),
+        "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)

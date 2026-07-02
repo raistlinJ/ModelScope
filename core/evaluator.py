@@ -731,6 +731,60 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def execute_helper_prompt(prompt_text: str, config: dict, on_log: Callable) -> dict:
+    import requests
+    backend = config.get("llm_helper_backend", "OpenAI-Compatible")
+    model = config.get("llm_helper_model", "")
+    
+    if backend == "OpenAI-Compatible":
+        url = config.get("llm_helper_openai_url", "").rstrip("/")
+        if not url:
+            return {"exit_code": 1, "stderr": "No URL configured for LLM Helper."}
+        headers = {"Content-Type": "application/json"}
+        apikey = config.get("llm_helper_openai_apikey")
+        if apikey:
+            headers["Authorization"] = f"Bearer {apikey}"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt_text}],
+            "temperature": 0.2
+        }
+        verify_ssl = config.get("llm_helper_openai_verify_ssl", True)
+        
+        on_log(f"[PROMPT HELPER] Sending to {url}/v1/chat/completions", "llama")
+        try:
+            resp = requests.post(f"{url}/v1/chat/completions", json=payload, headers=headers, verify=verify_ssl, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            return {"stdout": response_text, "exit_code": 0}
+        except Exception as e:
+            on_log(f"[ERROR] LLM Helper failed: {e}", "llama")
+            return {"exit_code": 1, "stderr": str(e)}
+            
+    else: # Ollama
+        url = config.get("llm_helper_ollama_url", "").rstrip("/")
+        if not url:
+            return {"exit_code": 1, "stderr": "No URL configured for Ollama Helper."}
+        payload = {
+            "model": model,
+            "prompt": prompt_text,
+            "stream": False,
+            "options": {"temperature": 0.2}
+        }
+        on_log(f"[PROMPT HELPER] Sending to {url}/api/generate", "llama")
+        try:
+            resp = requests.post(f"{url}/api/generate", json=payload, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            response_text = data.get("response", "")
+            on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            return {"stdout": response_text, "exit_code": 0}
+        except Exception as e:
+            on_log(f"[ERROR] LLM Helper failed: {e}", "llama")
+            return {"exit_code": 1, "stderr": str(e)}
+
 # ── Bash-Bot execution ────────────────────────────────────────────────────────
 
 def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
@@ -839,18 +893,34 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
                     return False
                 if not cmd_obj.get("enabled", True):
                     continue
-                cmd_text = cmd_obj.get("command", "").strip()
-                if not cmd_text:
-                    continue
-                t = (3600 if cmd_obj.get("long_running")
-                     else int(cmd_obj.get("timeout_seconds", timeout)))
-                res = _exec_cmd(cmd_text, label=label, timeout_override=t)
-                telemetry["tool_calls"].append({
-                    "tool":      "bash",
-                    "args":      {"command": cmd_text},
-                    "result":    res,
-                    "exit_code": res.get("exit_code", -1),
-                })
+                    
+                cmd_type = cmd_obj.get("type", "command")
+                if cmd_type == "prompt":
+                    if not config.get("llm_helper_enabled", False):
+                        on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.")
+                        continue
+                    prompt_text = (cmd_obj.get("prompt", "") or cmd_obj.get("command", "")).strip()
+                    if prompt_text:
+                        res = execute_helper_prompt(prompt_text, config, on_log)
+                        telemetry["tool_calls"].append({
+                            "tool":      "llm_helper",
+                            "args":      {"prompt": prompt_text},
+                            "result":    res,
+                            "exit_code": res.get("exit_code", -1),
+                        })
+                else:
+                    cmd_text = cmd_obj.get("command", "").strip()
+                    if not cmd_text:
+                        continue
+                    t = (3600 if cmd_obj.get("long_running")
+                         else int(cmd_obj.get("timeout_seconds", timeout)))
+                    res = _exec_cmd(cmd_text, label=label, timeout_override=t)
+                    telemetry["tool_calls"].append({
+                        "tool":      "bash",
+                        "args":      {"command": cmd_text},
+                        "result":    res,
+                        "exit_code": res.get("exit_code", -1),
+                    })
         return True
 
     # Startup commands
@@ -1161,9 +1231,18 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 
                 cmd_type = cmd_obj.get("type", "command")
                 if cmd_type == "prompt":
+                    if not config.get("llm_helper_enabled", False):
+                        on_log("[SKIP] Prompt step skipped because LLM Prompt Helper is disabled.", "shell")
+                        continue
                     prompt_text = (cmd_obj.get("prompt", "") or cmd_obj.get("command", "")).strip()
                     if prompt_text:
-                        _exec_llama_prompt(prompt_text, label="PROMPT")
+                        res = execute_helper_prompt(prompt_text, config, lambda m, src="shell": on_log(m, src))
+                        telemetry["tool_calls"].append({
+                            "tool":      "llm_helper",
+                            "args":      {"prompt": prompt_text},
+                            "result":    res,
+                            "exit_code": res.get("exit_code", -1),
+                        })
                 else:
                     cmd_text = cmd_obj.get("command", "").strip()
                     if not cmd_text:

@@ -149,6 +149,7 @@ def _show_add_project_dialog() -> None:
             "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
             "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
             "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
+            "llm_helper_enabled": False,
         },
         "llama_cli_bot": {
             "execution_target": "local",
@@ -163,6 +164,7 @@ def _show_add_project_dialog() -> None:
             "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
             "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
             "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
+            "llm_helper_enabled": False,
         },
         "ai_agent": {},
     }
