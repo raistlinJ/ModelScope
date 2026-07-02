@@ -1966,35 +1966,21 @@ def _render_bash_runtime(project: dict) -> None:
             st.text_input("Key Path", key="bash_ssh_key_path",
                           placeholder="~/.ssh/id_rsa",
                           help="Path to private key file. Leave empty if using password auth.")
-            col_test, col_retry = st.columns([2, 1])
-            # Check current state
-            _ssh_result = st.session_state.get("bash_ssh_test_result")
-            is_connected = _ssh_result and _ssh_result["status"] == "success"
-            is_failed = _ssh_result and _ssh_result["status"] == "error"
-
-            # If connected, just show the success state with a tiny reset button if they want to disconnect
-            if is_connected:
-                st.success(_ssh_result["message"])
-                if st.button("Disconnect / Test Another Host", key="btn_ssh_disconnect", type="secondary", use_container_width=True):
-                    st.session_state.pop("bash_ssh_test_result", None)
-                    st.rerun()
+            if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary"):
+                st.session_state.pop("bash_ssh_test_result", None)
+                with st.spinner("Please wait..."):
+                    _test_bash_ssh_connection()
+                st.rerun()
             
-            # If failed or not tested yet, show the action button
-            else:
-                btn_label = "Retry Connection" if is_failed else "Test Connection"
-                btn_type = "primary" if is_failed else "secondary"
-                
-                if st.button(btn_label, key="btn_bash_test_ssh", use_container_width=True, type=btn_type):
-                    st.session_state.pop("bash_ssh_test_result", None)
-                    with st.spinner("Please wait..."):
-                        _test_bash_ssh_connection()
-                    st.rerun()
-                
-                # Show error message under the retry button if it exists
-                if is_failed:
-                    st.error(_ssh_result["message"])
-                elif _ssh_result and _ssh_result["status"] == "warning":
-                    st.warning(_ssh_result["message"])
+            _ssh_result = st.session_state.get("bash_ssh_test_result")
+            if _ssh_result:
+                _ls, _lm = _ssh_result["status"], _ssh_result["message"]
+                if _ls == "success":
+                    st.success(_lm)
+                elif _ls == "warning":
+                    st.warning(_lm)
+                else:
+                    st.error(_lm)
 
     with st.expander("Commands", expanded=True):
         tab_startup, tab_completion = st.tabs(
