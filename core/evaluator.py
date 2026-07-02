@@ -768,6 +768,17 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     if _use_sudo:
         mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
         on_log(f"[BASH] sudo access enabled — commands will run as root {mode}")
+        
+        # Preflight check for sudo auth
+        _sudo_check_cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -n -v"
+        _check_res = env.execute(_sudo_check_cmd, timeout=10)
+        if _check_res.get("exit_code", -1) != 0:
+            err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")
+            err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
+            on_log(f"[ERROR] Sudo authentication failed: {err_clean}")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = f"Sudo authentication failed: {err_clean}"
+            return telemetry
     on_log("[BASH] Starting bash evaluation")
 
     def _exec_cmd(cmd: str, label: str = "RUN", timeout_override: int | None = None) -> dict:
