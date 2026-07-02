@@ -1180,7 +1180,9 @@ def render() -> None:
         _url_val   = (st.session_state.get("llm_url") or _def_url).strip()
 
         _active_scenario = st.session_state.get("active_scenario", "")
+        _active_proj = _get_active_project() or {}
         config = {
+            "type":                _active_proj.get("type", "bash_bot"),
             "backend_type":        _backend,
             "llm_url":             _url_val,
             "selected_model":      st.session_state.get("selected_model"),
