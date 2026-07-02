@@ -3052,6 +3052,31 @@ def _render_llama_cli_runtime(project: dict) -> None:
             else:
                 st.error(_msg)
 
+    with st.expander("Commands", expanded=True):
+        tab_startup, tab_completion = st.tabs(
+            ["▶  Startup", "⏹  Completion"]
+        )
+        with tab_startup:
+            st.caption(
+                "Commands run when execution starts, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="llama_cli_startup_commands",
+                pfx="llama_startup",
+                placeholder="e.g. /bin/bash setup.sh",
+            )
+        with tab_completion:
+            st.caption(
+                "Cleanup commands run after startup and validation finish, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="llama_cli_completion_commands",
+                pfx="llama_completion",
+                placeholder="e.g. rm -rf /tmp/test_workdir",
+            )
+
     _mcp_en = st.session_state.get("llama_cli_mcp_enabled", False)
     with st.expander("MCP Servers", expanded=_mcp_en):
         en_mcp = st.toggle("Enable MCP Servers", key="llama_cli_mcp_enabled", help="Turn on MCP support for this runtime.")
@@ -3084,31 +3109,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
             st.session_state["llama_cli_mcp_servers"] = servers
         else:
             st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
-
-    with st.expander("Commands", expanded=True):
-        tab_startup, tab_completion = st.tabs(
-            ["▶  Startup", "⏹  Completion"]
-        )
-        with tab_startup:
-            st.caption(
-                "Commands run when execution starts, organised as steps. "
-                "Each step runs its commands sequentially after the configured delay."
-            )
-            _render_command_steps(
-                state_key="llama_cli_startup_commands",
-                pfx="llama_startup",
-                placeholder="e.g. /bin/bash setup.sh",
-            )
-        with tab_completion:
-            st.caption(
-                "Cleanup commands run after startup and validation finish, organised as steps. "
-                "Each step runs its commands sequentially after the configured delay."
-            )
-            _render_command_steps(
-                state_key="llama_cli_completion_commands",
-                pfx="llama_completion",
-                placeholder="e.g. rm -rf /tmp/test_workdir",
-            )
 
     _flush_llama_cli_config(project)
 
