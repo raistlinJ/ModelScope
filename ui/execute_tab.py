@@ -124,12 +124,12 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
                             sys_text = cmd_obj.get("system_prompt", "")
                             if sys_text:
                                 with st.expander("System Prompt", expanded=False):
-                                    st.markdown(f"```text\n{sys_text}\n```")
+                                    st.code(sys_text, language="text")
                                     
                             usr_text = cmd_obj.get("user_prompt", "")
                             if usr_text:
                                 with st.expander("User Prompt", expanded=True):
-                                    st.markdown(f"```text\n{usr_text}\n```")
+                                    st.code(usr_text, language="text")
                     else:
                         text = cmd_obj.get("command", "")
                         if text and enabled:
