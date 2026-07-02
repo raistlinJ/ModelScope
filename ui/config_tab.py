@@ -1875,24 +1875,6 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                                 st.session_state[usr_key] = cmd.get("user_prompt", "")
                             with st.expander("User Prompt", expanded=False):
                                 cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
-                                
-                            # Validation Checks for Prompts
-                            cv_chk, cv_exp = st.columns([1.5, 4.0])
-                            with cv_chk:
-                                chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
-                                if chk_key not in st.session_state:
-                                    _init_type = cmd.get("expected_output_type", "Ignore")
-                                    if _init_type not in ["Regex", "Exact String"]:
-                                        _init_type = "Ignore"
-                                    st.session_state[chk_key] = _init_type
-                                cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key)
-                            with cv_exp:
-                                exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
-                                if exp_key not in st.session_state:
-                                    st.session_state[exp_key] = cmd.get("expected_output", "")
-                                chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
-                                exp_disabled = not cmd.get("enabled", True) or (chk_type in ("Ignore", "No output"))
-                                cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", disabled=exp_disabled)
                     else:
                         if not first_cmd_seen:
                             hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
