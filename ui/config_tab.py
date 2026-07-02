@@ -1873,11 +1873,11 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 _found, _err = fetch_ollama_models(_url.strip())
                 if _found:
                     st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
-                    st.success(f"Found {len(_found)} models.")
+                    st.toast(f"✅ Found {len(_found)} models.")
                 else:
-                    st.error(_err or "No models returned.")
+                    st.toast(f"❌ {_err or 'No models returned.'}")
             else:
-                st.warning("Enter a valid URL.")
+                st.toast("⚠️ Enter a valid URL.")
         _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
         if _models:
             _model_names = [m["name"] for m in _models]
@@ -1922,11 +1922,11 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
                     if _found:
                         st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
-                        st.success(f"Found {len(_found)} models.")
+                        st.toast(f"✅ Found {len(_found)} models.")
                     else:
-                        st.error(_err or "No models returned.")
+                        st.toast(f"❌ {_err or 'No models returned.'}")
                 else:
-                    st.warning("Enter a valid URL.")
+                    st.toast("⚠️ Enter a valid URL.")
 
         _ssl = st.checkbox(
             "Require SSL Certificate Verification",
