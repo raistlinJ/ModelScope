@@ -1966,10 +1966,16 @@ def _render_bash_runtime(project: dict) -> None:
             st.text_input("Key Path", key="bash_ssh_key_path",
                           placeholder="~/.ssh/id_rsa",
                           help="Path to private key file. Leave empty if using password auth.")
-            if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary"):
+            _is_testing = st.session_state.get("testing_bash_ssh", False)
+            if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", disabled=_is_testing):
+                st.session_state["testing_bash_ssh"] = True
+                st.rerun()
+            
+            if _is_testing:
                 st.session_state.pop("bash_ssh_test_result", None)
                 with st.spinner("Please wait..."):
                     _test_bash_ssh_connection()
+                st.session_state["testing_bash_ssh"] = False
                 st.rerun()
             
             _ssh_result = st.session_state.get("bash_ssh_test_result")
@@ -2609,13 +2615,18 @@ def _render_llama_cli_runtime(project: dict) -> None:
                               help="Leave empty to use key-based auth.")
             st.text_input("Key Path", key="llama_cli_ssh_key_path",
                           placeholder="~/.ssh/id_rsa")
-            col_llama_test, col_llama_retry = st.columns([2, 1])
-            with col_llama_test:
-                if st.button("Test Connection", key="btn_llama_test_ssh",
-                             use_container_width=True, type="secondary"):
-                    st.session_state.pop("llama_cli_ssh_test_result", None)
-                    with st.spinner("Please wait..."):
-                        _test_llama_cli_ssh_connection()
+            _is_testing_llama = st.session_state.get("testing_llama_cli_ssh", False)
+            if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", disabled=_is_testing_llama):
+                st.session_state["testing_llama_cli_ssh"] = True
+                st.rerun()
+                
+            if _is_testing_llama:
+                st.session_state.pop("llama_cli_ssh_test_result", None)
+                with st.spinner("Please wait..."):
+                    _test_llama_cli_ssh_connection()
+                st.session_state["testing_llama_cli_ssh"] = False
+                st.rerun()
+
             _llama_ssh_result = st.session_state.get("llama_cli_ssh_test_result")
             if _llama_ssh_result:
                 _ls, _lm = _llama_ssh_result["status"], _llama_ssh_result["message"]
@@ -2625,12 +2636,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     st.warning(_lm)
                 else:
                     st.error(_lm)
-                    with col_llama_retry:
-                        if st.button("Retry", key="btn_llama_retry_ssh",
-                                     use_container_width=True):
-                            st.session_state.pop("llama_cli_ssh_test_result", None)
-                            _test_llama_cli_ssh_connection()
-                            st.rerun()
 
     with st.expander("Model Setup", expanded=True):
         backend = st.selectbox(
