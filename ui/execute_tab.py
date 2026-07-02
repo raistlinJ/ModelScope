@@ -376,6 +376,17 @@ def _render_bash_execute(project: dict) -> None:
 
     log_placeholder = st.empty()
     st.session_state["_bash_log_placeholder"] = log_placeholder
+
+    if run_btn and not run_in_progress:
+        st.session_state["run_logs"]         = []
+        st.session_state["run_completed"]    = False
+        st.session_state["telemetry"]        = {}
+        st.session_state["cancel_requested"] = False
+        st.session_state["_run_in_progress"] = True
+        log_placeholder.empty()
+        with st.spinner("Running…"):
+            _run_bash_bot(project)
+
     _render_terminal(log_placeholder, st.session_state.get("run_logs", []))
 
     # Show result summary if run just completed
@@ -390,14 +401,6 @@ def _render_bash_execute(project: dict) -> None:
         else:
             st.info("📊 Execution complete.")
 
-    if run_btn and not run_in_progress:
-        st.session_state["run_logs"]         = []
-        st.session_state["run_completed"]    = False
-        st.session_state["telemetry"]        = {}
-        st.session_state["cancel_requested"] = False
-        st.session_state["_run_in_progress"] = True
-        with st.spinner("Running…"):
-            _run_bash_bot(project)
 
 
 # ── Llama-CLI Bot execute ──────────────────────────────────────────────────────
@@ -734,6 +737,19 @@ def _render_llama_cli_execute(project: dict) -> None:
     llama_placeholder = col_ll.empty()
     st.session_state["_llama_log_placeholder_shell"] = shell_placeholder
     st.session_state["_llama_log_placeholder_llama"] = llama_placeholder
+
+    if run_btn and not run_in_progress:
+        st.session_state["run_logs_shell"]   = []
+        st.session_state["run_logs_llama"]   = []
+        st.session_state["run_completed"]    = False
+        st.session_state["telemetry"]        = {}
+        st.session_state["cancel_requested"] = False
+        st.session_state["_run_in_progress"] = True
+        shell_placeholder.empty()
+        llama_placeholder.empty()
+        with st.spinner("Running…"):
+            _run_llama_cli_bot(project)
+
     _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
     _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
 
@@ -755,16 +771,6 @@ def _render_llama_cli_execute(project: dict) -> None:
                 st.info(f"📊 Execution complete — {len(responses)} prompt(s) processed.")
             else:
                 st.info("📊 Execution complete.")
-
-    if run_btn and not run_in_progress:
-        st.session_state["run_logs_shell"]   = []
-        st.session_state["run_logs_llama"]   = []
-        st.session_state["run_completed"]    = False
-        st.session_state["telemetry"]        = {}
-        st.session_state["cancel_requested"] = False
-        st.session_state["_run_in_progress"] = True
-        with st.spinner("Running…"):
-            _run_llama_cli_bot(project)
 
 
 def render() -> None:

@@ -1224,6 +1224,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         else:
             on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
 
+    if not cancel_ref[0]:
+        _run_step_list(startup, label="STARTUP")
+
     # Validation — runs even if the run was cancelled/timed-out
     if val_sets:
         if telemetry["run_aborted"]:
