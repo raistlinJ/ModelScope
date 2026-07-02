@@ -2688,9 +2688,10 @@ def _test_llama_cli_run(project: dict) -> None:
         
         _disc = st.session_state.get("llama_cli_discovered_models", [])
         _mname = st.session_state.get("llama_cli_model_name", "")
+        _mdir  = st.session_state.get("llama_cli_model_dir", "").strip()
         _mpath = next(
             (m["path"] for m in _disc if m["name"] == _mname),
-            _mname,
+            os.path.join(_mdir, _mname) if _mdir and _mname else _mname,
         )
         if not _mpath:
             st.session_state["_llama_svc_result"] = ("error", "No model selected.", "")
