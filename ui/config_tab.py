@@ -1566,31 +1566,33 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
 
                     _cmd_type = cmd.get("type", "command")
                     if _cmd_type == "prompt":
-                        cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
-                        with cc0:
-                            st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
-                        with cc1:
-                            st.markdown("**LLM Prompt**")
-                        with cc2:
-                            pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
-                            cmd["preserve_context"] = st.checkbox("Preserve Ctx", value=cmd.get("preserve_context", True), key=pc_key)
-                        with cc3:
-                            en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                            cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
-                        with cc4:
-                            if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
-                                mutation = ("del_cmd", si, ci)
-                        
-                        sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
-                        if sys_key not in st.session_state:
-                            st.session_state[sys_key] = cmd.get("system_prompt", "")
-                        cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...")
-                        
-                        usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
-                        if usr_key not in st.session_state:
-                            st.session_state[usr_key] = cmd.get("user_prompt", "")
-                        cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...")
-                        st.write("")
+                        with st.container(border=True):
+                            cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                            with cc0:
+                                st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
+                            with cc1:
+                                st.markdown("**LLM Prompt**")
+                            with cc2:
+                                pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
+                                cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
+                            with cc3:
+                                en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                                cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                            with cc4:
+                                if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
+                                    mutation = ("del_cmd", si, ci)
+                            
+                            sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                            if sys_key not in st.session_state:
+                                st.session_state[sys_key] = cmd.get("system_prompt", "")
+                            with st.expander("System Prompt", expanded=False):
+                                cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                            
+                            usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
+                            if usr_key not in st.session_state:
+                                st.session_state[usr_key] = cmd.get("user_prompt", "")
+                            with st.expander("User Prompt", expanded=True):
+                                cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
                     else:
                         # Single flat row: indicator | command | timeout | long-running | enabled | delete
                         cc0, cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([0.3, 4.7, 0.8, 1.0, 1.0, 1.0, 0.7])
