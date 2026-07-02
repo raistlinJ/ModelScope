@@ -330,6 +330,30 @@ examples:
     )
     _add_run_args(run_p)
 
+    # ── project subcommand ──────────────────────────────────────────────────────
+    project_p = subparsers.add_parser(
+        "project",
+        help="Run an evaluation using a project configuration JSON file.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    project_p.add_argument(
+        "-f", "--file",
+        dest="project_file",
+        required=True,
+        metavar="PATH",
+        help="Path to an exported project JSON configuration file.",
+    )
+    project_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the loaded configuration and exit without running.",
+    )
+    project_p.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable DEBUG-level logging.",
+    )
+
     # ── batch subcommand ──────────────────────────────────────────────────────
     batch_p = subparsers.add_parser(
         "batch",
@@ -619,6 +643,113 @@ def _print_run_summary(telemetry: dict) -> None:
         {"Field": "Tool Calls",       "Value": str(len(telemetry.get("tool_calls", [])))},
     ]
     print(_box_table(rows, title="Run Summary"))
+
+
+# ── `project` subcommand ──────────────────────────────────────────────────────
+
+def _cmd_project(args: argparse.Namespace) -> int:
+    """Execute an evaluation from an exported project JSON configuration."""
+    from core.session_log import SessionLog
+    from core.evaluator import run_bash_evaluation, run_llama_cli_evaluation, run_evaluation
+    from core.environment import create_environment
+
+    configure_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    # Attach colorizing formatter if terminal supports it
+    if _use_color():
+        logger = logging.getLogger("modelscope")
+        for handler in logger.handlers:
+            if getattr(handler, "_modelscope_handler", False):
+                original_fmt = handler.formatter
+                class _ColorFormatter(logging.Formatter):
+                    def format(self, record: logging.LogRecord) -> str:
+                        line = super().format(record)
+                        return _colorize_log_line(line)
+                color_fmt = _ColorFormatter(
+                    "%(asctime)s %(levelname)-7s [modelscope] %(message)s",
+                    datefmt="%H:%M:%S",
+                )
+                handler.setFormatter(color_fmt)
+                break
+
+    try:
+        with open(args.project_file, "r") as f:
+            proj = json.load(f)
+    except Exception as e:
+        print(_c(f"error: failed to read project file: {e}", _RED), file=sys.stderr)
+        return 1
+
+    # Extract top level config
+    config = proj.get("config", {})
+    bot_type = proj.get("type", "")
+
+    # Inject required keys for run_evaluation loop
+    config.setdefault("cancel_requested_ref", [False])
+
+    # Dry-run: print config and exit
+    if getattr(args, "dry_run", False):
+        safe_config = {k: ("***REDACTED***" if "password" in k.lower() else v)
+                       for k, v in config.items()}
+        print(_c(f"Dry-run config for project '{proj.get('name', 'Unknown')}' (no evaluation will run):", _BOLD))
+        print(json.dumps(safe_config, indent=2, default=str))
+        return 0
+
+    session_log = SessionLog()
+
+    def _base_on_log(msg: str) -> None:
+        session_log.log(msg)
+
+    on_log = logged_on_log(inner=_base_on_log)
+
+    exec_target = config.get("execution_target", "local")
+    is_ssh = exec_target == "ssh"
+    is_pct = exec_target == "pct"
+
+    env = None
+    try:
+        env = create_environment(
+            ssh=is_ssh,
+            host=config.get("ssh_host", ""),
+            port=config.get("ssh_port", 22),
+            username=config.get("ssh_user", "root"),
+            password=config.get("ssh_password"),
+            key_path=config.get("ssh_key_path"),
+            remote_cwd=config.get("ssh_caf_dir") or "",
+            pct_vmid=config.get("pct_vmid") if is_pct else None,
+        )
+        if is_pct:
+            on_log(f"[INIT] Target: PCT (VMID: {config.get('pct_vmid', '?')}) via SSH/Local")
+        elif is_ssh:
+            on_log(
+                f"[INIT] Target: SSH "
+                f"({config.get('ssh_user', 'root')}@"
+                f"{config.get('ssh_host', '?')})"
+            )
+        else:
+            on_log("[INIT] Target: Local")
+
+        if bot_type == "bash_bot":
+            telemetry = run_bash_evaluation(env, config, on_log)
+        elif bot_type == "llama_cli_bot":
+            telemetry = run_llama_cli_evaluation(env, config, on_log)
+        else:
+            # Fallback to main Cyber Agent
+            telemetry = run_evaluation(env, config, on_log)
+
+    except KeyboardInterrupt:
+        print(_c("\nRun aborted by user (Ctrl+C).", _YELLOW))
+        return 130
+    finally:
+        if env is not None and hasattr(env, "close"):
+            env.close()
+
+    if telemetry:
+        session_log.save_telemetry(telemetry)
+        if bot_type != "bash_bot":
+            print()
+            _print_telemetry_summary(telemetry)
+
+    return 0
 
 
 # ── `run` subcommand ──────────────────────────────────────────────────────────
@@ -1120,6 +1251,9 @@ def main(argv: list[str] | None = None) -> int:
         _apply_config_file_defaults(args, file_cfg, raw_argv)
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
+    if args.subcommand == "project":
+        return _cmd_project(args)
+
     if args.subcommand == "run":
         return _cmd_run(args)
 
