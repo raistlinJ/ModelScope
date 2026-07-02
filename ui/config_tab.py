@@ -1957,11 +1957,11 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                         with cc_del:
                             st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
 
-                bc1, bc2 = st.columns([1, 1])
-                with bc1:
-                    st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,))
-                with bc2:
-                    st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,))
+                ca, cb, _ = st.columns([1.5, 2.0, 6.5])
+                with ca:
+                    st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
+                with cb:
+                    st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
 
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
