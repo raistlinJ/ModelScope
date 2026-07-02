@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+import streamlit as st
+
 try:
     import streamlit.components.v1 as _st_components
     _COMPONENTS_AVAILABLE = True
@@ -62,7 +64,9 @@ def render_terminal(
     )
 
     # Bug 8: scroll the terminal to the bottom after each render
-    if _COMPONENTS_AVAILABLE:
+    if hasattr(st, "html"):
+        st.html(_SCROLL_JS)
+    elif _COMPONENTS_AVAILABLE:
         try:
             _st_components.html(_SCROLL_JS, height=0)
         except Exception:
