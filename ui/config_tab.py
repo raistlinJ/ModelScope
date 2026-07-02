@@ -3254,8 +3254,8 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
         st.session_state[state_key] = steps
 
 
-def _render_llama_cli_metrics_setup(project: dict) -> None:
-    """Inputs sub-tab for Llama-CLI-Bot: steps, validation, metrics."""
+def _render_llama_cli_inputs(project: dict) -> None:
+    """Inputs sub-tab for Llama-CLI-Bot: steps."""
 
     # ── Preset Scenarios ─────────────────────────────────────────────────────
     _presets = _load_llama_cli_presets()
@@ -3290,8 +3290,7 @@ def _render_llama_cli_metrics_setup(project: dict) -> None:
                 # Keep legacy lists in sync for settings persistence
                 st.session_state["llama_cli_prompts"]             = list(_p.get("prompts", []))
                 st.session_state["llama_cli_commands"]            = list(_p.get("commands", []))
-                st.session_state["llama_cli_validation_commands"] = list(_p.get("validation_commands", []))
-                st.session_state["llama_cli_fail_patterns"]       = copy.deepcopy(_p.get("fail_patterns", []))
+                st.session_state["llama_cli_validation_sets"]     = list(_p.get("validation_sets", []))
                 st.session_state["llama_cli_metrics_matrix"]      = copy.deepcopy(_p.get("metrics_matrix", []))
                 st.rerun()
         st.divider()
@@ -3325,83 +3324,13 @@ def _render_llama_cli_metrics_setup(project: dict) -> None:
         "**Command** steps run shell commands directly."
     )
     _render_step_editor("llama_cli_steps", "llama")
+    
+    _flush_llama_cli_config(project)
 
-    st.divider()
 
-    # ── Validation Steps ──────────────────────────────────────────────────────
-    st.subheader("Validation Steps")
-    with st.expander("Validation Commands", expanded=True):
-        st.caption("Commands run after steps complete — must exit 0 to count as PASS.")
-        _addable_list(
-            state_key="llama_cli_validation_commands",
-            placeholder="grep -q 'expected' /tmp/output.txt",
-            input_key="_llama_new_val",
-            add_key="btn_llama_add_val",
-            del_key_prefix="llama_del_val",
-        )
-
-    with st.expander("Fail Patterns", expanded=True):
-        st.caption("Patterns evaluated after execution — string match, shell command exit, or prompt check.")
-        # Normalize legacy string patterns to typed dicts
-        _raw_patterns = st.session_state.get("llama_cli_fail_patterns", [])
-        patterns: list = [
-            p if isinstance(p, dict) else {"type": "string", "value": p}
-            for p in _raw_patterns
-        ]
-        st.session_state["llama_cli_fail_patterns"] = patterns
-
-        _TYPE_LABELS = {"string": "String match", "command": "Command", "prompt": "Prompt"}
-        _fp_type_col, _fp_val_col, _fp_add_col = st.columns([2, 5, 1])
-        with _fp_type_col:
-            _new_fp_type = st.selectbox(
-                "Type", options=list(_TYPE_LABELS.keys()),
-                format_func=lambda k: _TYPE_LABELS[k],
-                key="_llama_fp_type", label_visibility="collapsed",
-            )
-        with _fp_val_col:
-            _fp_placeholders = {
-                "string":  'e.g. "Error: file not found"',
-                "command": "e.g. test -f /tmp/output.txt",
-                "prompt":  "e.g. Did the command produce an error? Answer YES or NO.",
-            }
-            _new_fp_val = st.text_input(
-                "Value", placeholder=_fp_placeholders[_new_fp_type],
-                key="_llama_fp_val", label_visibility="collapsed",
-            )
-        with _fp_add_col:
-            if st.button("Add", key="btn_llama_add_fp", use_container_width=True):
-                _v = _new_fp_val.strip()
-                if _v:
-                    patterns.append({"type": _new_fp_type, "value": _v})
-                    st.session_state["llama_cli_fail_patterns"] = patterns
-                    st.rerun()
-
-        if patterns:
-            _TYPE_COLOURS = {
-                "string":  ("#79c0ff", "rgba(121,192,255,0.14)", "rgba(121,192,255,0.35)"),
-                "command": ("#f0883e", "rgba(240,136,62,0.14)",  "rgba(240,136,62,0.35)"),
-                "prompt":  ("#bc8cff", "rgba(188,140,255,0.14)", "rgba(188,140,255,0.35)"),
-            }
-            _TYPE_ICONS = {"string": "STR", "command": "CMD", "prompt": "PROMPT"}
-            _to_remove = None
-            for _i, _fp in enumerate(patterns):
-                _ftype = _fp.get("type", "string")
-                _clr, _bg, _border = _TYPE_COLOURS.get(_ftype, ("#8b949e", "rgba(139,148,158,0.14)", "rgba(139,148,158,0.35)"))
-                _badge_html = (
-                    f'<span style="background:{_bg};color:{_clr};padding:3px 9px;'
-                    f'border-radius:999px;font-size:0.67rem;font-weight:700;'
-                    f'border:1px solid {_border};font-family:monospace;letter-spacing:0.3px;'
-                    f'display:inline-block">{_TYPE_ICONS.get(_ftype, "?")}</span>'
-                )
-                _pc1, _pc2, _pc3 = st.columns([1, 7, 1])
-                _pc1.markdown(_badge_html, unsafe_allow_html=True)
-                _pc2.code(_fp.get("value", ""))
-                if _pc3.button("✕", key=f"llama_del_fp_{_i}"):
-                    _to_remove = _i
-            if _to_remove is not None:
-                patterns.pop(_to_remove)
-                st.session_state["llama_cli_fail_patterns"] = patterns
-                st.rerun()
+def _render_llama_cli_validation(project: dict) -> None:
+    """Validation sub-tab for Llama-CLI-Bot: Pass/Fail sets and Metrics."""
+    _render_validation_sets_ui(project, "llama_cli", _flush_llama_cli_config)
 
     st.divider()
 
@@ -3416,8 +3345,10 @@ def _render_llama_cli_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-CLI bot configuration."""
     st.divider()
 
-    sub_runtime, sub_inputs = st.tabs(["🖥  Runtime", "✅  Validation"])
+    sub_runtime, sub_inputs, sub_val = st.tabs(["🖥  Runtime", "⌨️  Inputs", "✅  Validation"])
     with sub_runtime:
         _render_llama_cli_runtime(project)
     with sub_inputs:
+        _render_llama_cli_inputs(project)
+    with sub_val:
         _render_llama_cli_validation(project)
