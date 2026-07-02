@@ -134,13 +134,12 @@ def _show_add_project_dialog() -> None:
     name = st.text_input("Project Name", placeholder="My Bash Bot")
     bot_type = st.selectbox(
         "Bot Type",
-        options=["Bash-Bot", "Llama-CLI-Bot (Coming Soon)", "AI-Agent (Coming Soon)"],
+        options=["Bash-Bot"],
         help="Choose the type of bot for this project. Llama-CLI-Bot and AI-Agent are coming soon.",
     )
+    st.caption("Llama-CLI-Bot and AI-Agent are coming soon!")
     _TYPE_MAP = {
-        "Bash-Bot":                      "bash_bot",
-        "Llama-CLI-Bot (Coming Soon)":   "llama_cli_bot",
-        "AI-Agent (Coming Soon)":        "ai_agent",
+        "Bash-Bot": "bash_bot",
     }
     _CONFIG_DEFAULTS = {
         "bash_bot": {
@@ -186,12 +185,9 @@ def _show_add_project_dialog() -> None:
                 "Nmap Scanner: runs `nmap -F 127.0.0.1`, saves output, then validates scan structure."
             )
 
-    if "Coming Soon" in bot_type:
-        st.info(f"{bot_type.split(' ')[0]} configuration is coming soon.")
-
     col_create, col_cancel = st.columns(2)
     with col_create:
-        if st.button("Create", type="primary", use_container_width=True, disabled=("Coming Soon" in bot_type)):
+        if st.button("Create", type="primary", use_container_width=True):
             proj_name  = name.strip() or f"Project {len(st.session_state['projects']) + 1}"
             _type_key  = _TYPE_MAP[bot_type]
             _push_undo({"desc": "create project", "type": "project",
