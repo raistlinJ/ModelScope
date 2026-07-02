@@ -2,7 +2,6 @@ import os
 import time
 import threading
 import streamlit as st
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from core.evaluator import run_evaluation
 from core.logsetup import logged_on_log
@@ -432,7 +431,6 @@ def _render_bash_execute(project: dict) -> None:
         llama_placeholder.empty()
         # Launch in background thread so the UI stays responsive
         thread = threading.Thread(target=_run_bash_bot, args=(project,), daemon=True)
-        add_script_run_ctx(thread)
         thread.start()
         st.session_state["_run_thread"] = thread
         st.rerun()
@@ -804,7 +802,6 @@ def _render_llama_cli_execute(project: dict) -> None:
         llama_placeholder.empty()
         # Launch in background thread so the UI stays responsive
         thread = threading.Thread(target=_run_llama_cli_bot, args=(project,), daemon=True)
-        add_script_run_ctx(thread)
         thread.start()
         st.session_state["_run_thread"] = thread
         st.rerun()
