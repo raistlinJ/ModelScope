@@ -222,7 +222,7 @@ def delete_ollama_model(base_url: str, model_name: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def fetch_llama_cpp_models(base_url: str) -> tuple[list[dict], str]:
+def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list[dict], str]:
     """
     Return (models, error) where models is [{name, size_gb, context_size}]
     from a llama.cpp /v1/models endpoint.  Works for local and remote servers.
@@ -232,7 +232,7 @@ def fetch_llama_cpp_models(base_url: str) -> tuple[list[dict], str]:
     if not url:
         return [], "Server URL is empty."
     try:
-        resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8)
+        resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8, verify=verify_ssl)
         resp.raise_for_status()
         data = resp.json()
         # Parse /v1/models: check both top-level `data` (OpenAI list format) and `models`

@@ -1337,6 +1337,7 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_backend": st.session_state.get("bash_llm_helper_backend", "OpenAI-Compatible"),
         "llm_helper_openai_url": st.session_state.get("bash_llm_helper_openai_url", ""),
         "llm_helper_openai_apikey": st.session_state.get("bash_llm_helper_openai_apikey", ""),
+        "llm_helper_openai_verify_ssl": st.session_state.get("bash_llm_helper_openai_verify_ssl", True),
         "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("bash_llm_helper_model", ""),
     })
@@ -1879,25 +1880,39 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
 
     else:
         # OpenAI-Compatible
-        _url = st.text_input(
-            "Instance URL",
-            key=f"{pfx}_llm_helper_openai_url_widget",
-            value=st.session_state.get(f"{pfx}_llm_helper_openai_url", ""),
-            placeholder="http://localhost:8080",
-            help="Base URL of any OpenAI-compatible server. Do not include /v1.",
+        col_url, col_fetch = st.columns([5, 1])
+        with col_url:
+            _url = st.text_input(
+                "Instance URL",
+                key=f"{pfx}_llm_helper_openai_url_widget",
+                value=st.session_state.get(f"{pfx}_llm_helper_openai_url", ""),
+                placeholder="http://localhost:8080",
+                help="Base URL of any OpenAI-compatible server. Do not include /v1.",
+            )
+            st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
+        _ssl = st.checkbox(
+            "Require SSL Certificate Verification",
+            key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
+            value=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True),
+            help="Uncheck for self-signed certs or plain HTTP servers.",
         )
-        st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
-        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True):
-            if _url.strip():
-                from core.models import fetch_llama_cpp_models
-                _found, _err = fetch_llama_cpp_models(_url.strip())
-                if _found:
-                    st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
-                    st.success(f"Found {len(_found)} models.")
+        st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
+
+        with col_fetch:
+            st.write("")
+            st.write("")
+            if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True):
+                if _url.strip():
+                    from core.models import fetch_llama_cpp_models
+                    _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=_ssl)
+                    if _found:
+                        st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
+                        st.success(f"Found {len(_found)} models.")
+                    else:
+                        st.error(_err or "No models returned.")
                 else:
-                    st.error(_err or "No models returned.")
-            else:
-                st.warning("Enter a valid URL.")
+                    st.warning("Enter a valid URL.")
+
         _apikey = st.text_input(
             "API Key (optional)",
             key=f"{pfx}_llm_helper_openai_apikey_widget",
@@ -1915,6 +1930,18 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
         else:
             _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
             st.session_state[f"{pfx}_llm_helper_model"] = _man
+
+        if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
+            if _url.strip():
+                from core.llama_server import get_server_info
+                _info = get_server_info(_url.strip(), verify_ssl=_ssl)
+                if _info:
+                    _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
+                    st.success(f"Online  |  model: `{_mname}`  |  n_ctx: `{_info.get('n_ctx', '?')}`")
+                else:
+                    st.error("Could not reach server.")
+            else:
+                st.warning("Enter an Instance URL first.")
 
 def _render_bash_runtime(project: dict) -> None:
     """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
@@ -2496,6 +2523,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_backend": st.session_state.get("llama_cli_llm_helper_backend", "OpenAI-Compatible"),
         "llm_helper_openai_url": st.session_state.get("llama_cli_llm_helper_openai_url", ""),
         "llm_helper_openai_apikey": st.session_state.get("llama_cli_llm_helper_openai_apikey", ""),
+        "llm_helper_openai_verify_ssl": st.session_state.get("llama_cli_llm_helper_openai_verify_ssl", True),
         "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", "http://localhost:11434"),
         "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", ""),
     })

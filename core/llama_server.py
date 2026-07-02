@@ -23,13 +23,13 @@ def is_running(url: str = LLAMA_CPP_DEFAULT_URL, timeout: float = 2.0) -> bool:
         return False
 
 
-def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL) -> dict | None:
+def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True) -> dict | None:
     """
     Return {n_ctx, model_path} from the running server, or None. (fix #28)
     Reads /props endpoint: default_generation_settings.n_ctx + model_path.
     """
     try:
-        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3)
+        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3, verify=verify_ssl)
         if not r.ok:
             return None
         d = r.json()
