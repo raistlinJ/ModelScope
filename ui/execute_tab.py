@@ -428,8 +428,9 @@ def _render_bash_execute(project: dict) -> None:
         st.session_state["_run_thread"] = thread
         st.rerun()
 
-    # Polling: if a run is in progress, refresh the UI periodically
-    if run_in_progress:
+    # Polling: if a run is in progress, refresh the UI periodically without flickering
+    @st.fragment(run_every="0.5s")
+    def _poll_bash_execution():
         shared = st.session_state.get("_run_shared", {})
         
         # Sync shared state to session state for UI to render
@@ -446,8 +447,6 @@ def _render_bash_execute(project: dict) -> None:
             # If user clicked Stop in UI, push it to shared dict
             if st.session_state.get("cancel_requested"):
                 shared["cancel_requested"] = True
-            time.sleep(0.5)
-            st.rerun()
         else:
             # Thread finished — ensure state is clean
             st.session_state["_run_in_progress"] = False
@@ -467,6 +466,9 @@ def _render_bash_execute(project: dict) -> None:
             if st.session_state.get("_exec_phase") != "done":
                 st.session_state["_exec_phase"] = "done"
             st.rerun()
+
+    if run_in_progress:
+        _poll_bash_execution()
     else:
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
@@ -811,8 +813,9 @@ def _render_llama_cli_execute(project: dict) -> None:
         st.session_state["_run_thread"] = thread
         st.rerun()
 
-    # Polling: if a run is in progress, refresh the UI periodically
-    if run_in_progress:
+    # Polling: if a run is in progress, refresh the UI periodically without flickering
+    @st.fragment(run_every="0.5s")
+    def _poll_llama_execution():
         shared = st.session_state.get("_run_shared", {})
         
         # Sync shared state to session state for UI to render
@@ -829,8 +832,6 @@ def _render_llama_cli_execute(project: dict) -> None:
             # If user clicked Stop in UI, push it to shared dict
             if st.session_state.get("cancel_requested"):
                 shared["cancel_requested"] = True
-            time.sleep(0.5)
-            st.rerun()
         else:
             # Thread finished — ensure state is clean
             st.session_state["_run_in_progress"] = False
@@ -850,6 +851,9 @@ def _render_llama_cli_execute(project: dict) -> None:
             if st.session_state.get("_exec_phase") != "done":
                 st.session_state["_exec_phase"] = "done"
             st.rerun()
+
+    if run_in_progress:
+        _poll_llama_execution()
     else:
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
