@@ -340,9 +340,17 @@ def _render_bash_execute(project: dict) -> None:
                                     dstr  = f" ({delay}s delay)" if delay > 0 else ""
                                     st.caption(f"Step {sidx + 1}{dstr}:")
                                     for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                                        cmd_text = cmd_obj.get("command", "")
-                                        if not cmd_text:
-                                            continue
+                                        _type = cmd_obj.get("type", "command")
+                                        if _type == "prompt":
+                                            sys_p = cmd_obj.get("system_prompt", "")
+                                            usr_p = cmd_obj.get("user_prompt", "")
+                                            if not sys_p and not usr_p:
+                                                continue
+                                            cmd_text = f"LLM Judge: {sys_p[:20]}... | {usr_p[:20]}..."
+                                        else:
+                                            cmd_text = cmd_obj.get("command", "")
+                                            if not cmd_text:
+                                                continue
                                         cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
                                         cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
                                         exp_type = cmd_obj.get("expected_output_type", "Ignore")
@@ -715,9 +723,17 @@ def _render_llama_cli_execute(project: dict) -> None:
                                     dstr  = f" ({delay}s delay)" if delay > 0 else ""
                                     st.caption(f"Step {sidx + 1}{dstr}:")
                                     for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                                        cmd_text = cmd_obj.get("command", "")
-                                        if not cmd_text:
-                                            continue
+                                        _type = cmd_obj.get("type", "command")
+                                        if _type == "prompt":
+                                            sys_p = cmd_obj.get("system_prompt", "")
+                                            usr_p = cmd_obj.get("user_prompt", "")
+                                            if not sys_p and not usr_p:
+                                                continue
+                                            cmd_text = f"LLM Judge: {sys_p[:20]}... | {usr_p[:20]}..."
+                                        else:
+                                            cmd_text = cmd_obj.get("command", "")
+                                            if not cmd_text:
+                                                continue
                                         cmd_key  = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
                                         cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
                                         exp_type = cmd_obj.get("expected_output_type", "Ignore")
