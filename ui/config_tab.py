@@ -2647,6 +2647,85 @@ def _fetch_mcp_servers(project: dict) -> None:
     st.rerun()
 
 
+def _test_llama_cli_run(project: dict) -> None:
+    import shlex
+    import os
+    
+    target = st.session_state.get("llama_cli_execution_target", "local")
+    env = None
+    
+    if target == "local":
+        from core.environment import LocalEnvironment
+        env = LocalEnvironment()
+    elif target == "pct":
+        from core.environment import PCTEnvironment, LocalEnvironment
+        vmid = st.session_state.get("llama_cli_pct_vmid", "").strip()
+        if not vmid:
+            st.session_state["_llama_svc_result"] = ("error", "VMID is required for PCT target.", "")
+            return
+        env = PCTEnvironment(vmid, LocalEnvironment())
+    elif target == "ssh":
+        from core.environment import SSHEnvironment
+        _flush_llama_cli_config(project)
+        cfg = project["config"]
+        host = cfg.get("ssh_host", "").strip()
+        if not host:
+            st.session_state["_llama_svc_result"] = ("error", "SSH Host is required.", "")
+            return
+        env = SSHEnvironment(
+            host=host, port=int(cfg.get("ssh_port", 22)),
+            username=cfg.get("ssh_user", "root"),
+            password=cfg.get("ssh_password") or None,
+            key_path=cfg.get("ssh_key_path") or None,
+            remote_cwd=".",
+        )
+
+    try:
+        use_sudo = st.session_state.get("llama_cli_sudo", False)
+        sudo_pw  = (st.session_state.get("llama_cli_sudo_password") or "").strip()
+        
+        _disc = st.session_state.get("llama_cli_discovered_models", [])
+        _mname = st.session_state.get("llama_cli_model_name", "")
+        _mpath = next(
+            (m["path"] for m in _disc if m["name"] == _mname),
+            _mname,
+        )
+        if not _mpath:
+            st.session_state["_llama_svc_result"] = ("error", "No model selected.", "")
+            return
+
+        _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip() or "llama-cli"
+        
+        if _bin and os.path.isdir(_bin) and target == "local":
+            _bin = os.path.join(_bin, "llama-cli")
+        
+        cmd = f"{_bin} -m {shlex.quote(_mpath)} --prompt \"Hello, world!\" -n 1 --simple-io --no-display-prompt --single-turn"
+        
+        if use_sudo:
+            if sudo_pw:
+                cmd = f"echo {shlex.quote(sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+            else:
+                cmd = f"sudo {cmd}"
+
+        res = env.execute(cmd, timeout=30)
+        
+        if res["exit_code"] != 0:
+            err = res.get("stderr", "").strip() or res.get("stdout", "").strip()
+            st.session_state["_llama_svc_result"] = ("error", f"Test failed (exit {res['exit_code']}): {err[:400]}", cmd)
+        else:
+            out = res.get("stdout", "").strip()
+            st.session_state["_llama_svc_result"] = ("ok", f"Test successful! Response:\n{out[:200]}", cmd)
+
+    except Exception as exc:
+        st.session_state["_llama_svc_result"] = ("error", f"Execution error: {exc}", "")
+    finally:
+        if env and hasattr(env, "close"):
+            try:
+                env.close()
+            except Exception:
+                pass
+
+
 def _render_llama_cli_runtime(project: dict) -> None:
     """Runtime sub-tab for Llama-CLI-Bot: target, model setup, MCP servers, timeout."""
 
@@ -2901,56 +2980,41 @@ def _render_llama_cli_runtime(project: dict) -> None:
         _col_svc, _col_status = st.columns([1, 2])
         _backend = st.session_state.get("llama_cli_backend", "llama.cpp")
         with _col_svc:
-            if st.button("Start Service", key="btn_llama_start_service",
-                         use_container_width=True, type="primary",
-                         help="Start llama-server with the selected model (llama.cpp), or test connectivity (OpenAI-compatible)."):
-                if _backend.lower().startswith("openai"):
-                    _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
-                    if not _base:
-                        st.session_state["_llama_svc_result"] = ("error", "No Instance URL configured.", "")
-                    else:
-                        _info = llama_server.get_server_info(_base)
-                        if _info:
-                            _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
-                            st.session_state["_llama_svc_result"] = (
-                                "ok",
-                                f"Online  |  model: `{_mn}`  |  n_ctx: `{_info.get('n_ctx', '?')}`",
-                                "",
-                            )
-                        else:
-                            st.session_state["_llama_svc_result"] = (
-                                "error",
-                                f"Could not reach `{_base}` — check URL and network.",
-                                "",
-                            )
-                else:
-                    # Resolve model path from discovered models
-                    _disc = st.session_state.get("llama_cli_discovered_models", [])
-                    _mname = st.session_state.get("llama_cli_model_name", "")
-                    _mpath = next(
-                        (m["path"] for m in _disc if m["name"] == _mname),
-                        _mname,  # fallback: use the name as the path
-                    )
-                    _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip() or "/usr/local/bin/llama-server"
-                    _ctx  = int(st.session_state.get("llama_cli_tokens", 32768))
-                    _cmd  = f"{_bin} --model {_mpath} --ctx-size {_ctx} --host 127.0.0.1 --port 8080 --jinja --parallel 1"
-                    if not _mpath:
-                        st.session_state["_llama_svc_result"] = (
-                            "error",
-                            "No model selected — set Model Directory and Scan first.",
-                            "",
-                        )
-                    else:
-                        _ok, _msg = llama_server.start(
-                            _mpath,
-                            context_size=_ctx,
-                            binary=_bin,
-                        )
-                        st.session_state["_llama_svc_result"] = ("ok" if _ok else "error", _msg, _cmd)
-                        st.session_state["_llama_svc_cmd"]    = _cmd
+            _is_testing = st.session_state.get("_llama_cli_testing", False)
+            if st.button("Test Run", key="btn_llama_test_run",
+                         use_container_width=True, type="primary", disabled=_is_testing,
+                         help="Run a test prompt (llama-cli), or test connectivity (OpenAI)."):
+                st.session_state["_llama_cli_testing"] = True
                 st.rerun()
 
-        # ── Service status display (always shown) ─────────────────────────────
+            if _is_testing:
+                st.session_state.pop("_llama_svc_result", None)
+                with st.spinner("Testing..."):
+                    if _backend.lower().startswith("openai"):
+                        _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
+                        if not _base:
+                            st.session_state["_llama_svc_result"] = ("error", "No Instance URL configured.", "")
+                        else:
+                            _info = llama_server.get_server_info(_base)
+                            if _info:
+                                _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
+                                st.session_state["_llama_svc_result"] = (
+                                    "ok",
+                                    f"Online  |  model: `{_mn}`  |  n_ctx: `{_info.get('n_ctx', '?')}`",
+                                    "",
+                                )
+                            else:
+                                st.session_state["_llama_svc_result"] = (
+                                    "error",
+                                    f"Could not reach `{_base}` — check URL and network.",
+                                    "",
+                                )
+                    else:
+                        _test_llama_cli_run(project)
+                st.session_state["_llama_cli_testing"] = False
+                st.rerun()
+
+        # ── Test Run status display (always shown) ─────────────────────────────
         with _col_status:
             _svc_result = st.session_state.get("_llama_svc_result")
             if _svc_result:
@@ -2961,23 +3025,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
                         st.code(_cmd, language="bash")
                 else:
                     st.error(_msg)
-            elif _backend.lower().startswith("llama") or _backend == "llama.cpp":
-                # Show running state if server is already up
-                _srv_url = "http://127.0.0.1:8080"
-                if llama_server.poll_ready(_srv_url):
-                    _info = llama_server.get_server_info(_srv_url)
-                    _mn   = (_info.get("model_path") or "").split("/")[-1] if _info else "?"
-                    _ctx  = _info.get("n_ctx", "?") if _info else "?"
-                    st.markdown(
-                        f'<div class="service-active-box">'
-                        f'<div class="service-label">Running</div>'
-                        f'<div class="service-cmd">model: {_mn}  |  n_ctx: {_ctx}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                    _cached_cmd = st.session_state.get("_llama_svc_cmd", "")
-                    if _cached_cmd:
-                        st.code(_cached_cmd, language="bash")
 
     with st.expander("MCP Servers", expanded=False):
         st.caption("Discover MCP servers available on the target machine.")
