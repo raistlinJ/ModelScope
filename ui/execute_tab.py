@@ -173,24 +173,35 @@ def _run_bash_bot(project: dict) -> None:
     _flush_bash_config(project)
     cfg = project["config"]
 
-    logs: list[dict]       = []
+    logs_shell: list[dict]       = []
+    logs_llama: list[dict]       = []
     cancel_ref: list[bool] = [False]
-    _last_render: list[float] = [0.0]
-    log_placeholder = st.session_state.get("_bash_log_placeholder")
+    _last_render_shell: list[float] = [0.0]
+    _last_render_llama: list[float] = [0.0]
+    
+    log_placeholder_shell = st.session_state.get("_bash_log_placeholder_shell")
+    log_placeholder_llama = st.session_state.get("_bash_log_placeholder_llama")
 
     session_log = SessionLog()
 
-    def on_log(msg: str) -> None:
+    def on_log(msg: str, source: str = "shell") -> None:
         if st.session_state.get("cancel_requested"):
             cancel_ref[0] = True
         entry = {"text": msg, "tag": _tag(msg)}
-        logs.append(entry)
-        st.session_state["run_logs"] = list(logs)
-        session_log.log(msg)
         now = time.monotonic()
-        if log_placeholder and (now - _last_render[0]) >= 0.5:
-            _render_terminal(log_placeholder, logs)
-            _last_render[0] = now
+        if source == "shell":
+            logs_shell.append(entry)
+            st.session_state["run_logs_shell"] = list(logs_shell)
+            if log_placeholder_shell and (now - _last_render_shell[0]) >= 0.5:
+                _render_terminal(log_placeholder_shell, logs_shell)
+                _last_render_shell[0] = now
+        else:
+            logs_llama.append(entry)
+            st.session_state["run_logs_llama"] = list(logs_llama)
+            if log_placeholder_llama and (now - _last_render_llama[0]) >= 0.5:
+                _render_terminal(log_placeholder_llama, logs_llama)
+                _last_render_llama[0] = now
+        session_log.log(msg)
 
     from core.environment import create_environment
     tgt = cfg.get("execution_target", "local")
@@ -385,27 +396,36 @@ def _render_bash_execute(project: dict) -> None:
     with col_clear:
         if st.button("Clear Log", key="btn_bash_exec_clear",
                      use_container_width=True):
-            st.session_state["run_logs"]         = []
+            st.session_state["run_logs_shell"]   = []
+            st.session_state["run_logs_llama"]   = []
             st.session_state["run_completed"]    = False
             st.session_state["telemetry"]        = {}
             st.session_state["_run_in_progress"] = False
             st.session_state["cancel_requested"] = False
             st.rerun()
 
-    log_placeholder = st.empty()
-    st.session_state["_bash_log_placeholder"] = log_placeholder
+    col_sh, col_ll = st.columns(2)
+    col_sh.markdown("**Shell Execution Log**")
+    col_ll.markdown("**LLM Interaction Log**")
+    shell_placeholder = col_sh.empty()
+    llama_placeholder = col_ll.empty()
+    st.session_state["_bash_log_placeholder_shell"] = shell_placeholder
+    st.session_state["_bash_log_placeholder_llama"] = llama_placeholder
 
     if run_btn and not run_in_progress:
-        st.session_state["run_logs"]         = []
+        st.session_state["run_logs_shell"]   = []
+        st.session_state["run_logs_llama"]   = []
         st.session_state["run_completed"]    = False
         st.session_state["telemetry"]        = {}
         st.session_state["cancel_requested"] = False
         st.session_state["_run_in_progress"] = True
-        log_placeholder.empty()
+        shell_placeholder.empty()
+        llama_placeholder.empty()
         with st.spinner("Running…"):
             _run_bash_bot(project)
 
-    _render_terminal(log_placeholder, st.session_state.get("run_logs", []))
+    _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
+    _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
