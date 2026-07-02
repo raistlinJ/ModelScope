@@ -764,7 +764,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     }
 
     _sudo_pw   = (config.get("sudo_password") or "").strip()
-    _use_sudo  = bool(config.get("bash_sudo"))
+    _use_sudo  = bool(config.get("sudo"))
     if _use_sudo:
         mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
         on_log(f"[BASH] sudo access enabled — commands will run as root {mode}")
