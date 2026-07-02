@@ -309,13 +309,12 @@ def _render_bash_execute(project: dict) -> None:
                                     label_md += f" — {desc}"
 
                                 with st.expander(label_md, expanded=set_selected):
+                                    st.session_state.setdefault(set_sel_key, True)
                                     new_sel = st.checkbox(
-                                        "Enable this Validation Set", value=set_selected,
-                                        key=f"bash_exec_vset_{idx}_chk",
+                                        "Enable this Validation Set",
+                                        key=set_sel_key,
                                     )
-                                    if new_sel != set_selected:
-                                        st.session_state[set_sel_key] = new_sel
-                                        st.rerun()
+                                    set_selected = new_sel
 
                                     for sidx, step in enumerate(vset.get("steps", [])):
                                         delay = step.get("delay_seconds", 0)
@@ -336,14 +335,14 @@ def _render_bash_execute(project: dict) -> None:
 
                                             col_cc, col_cl = st.columns([1, 10])
                                             with col_cc:
+                                                st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
                                                 new_cmd_sel = st.checkbox(
-                                                    f"Enable command {cidx+1} in step {sidx+1}", value=cmd_sel,
-                                                    key=f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                    f"Enable command {cidx+1} in step {sidx+1}",
+                                                    key=cmd_key,
                                                     label_visibility="collapsed",
                                                     disabled=not set_selected,
                                                 )
-                                                if new_cmd_sel != cmd_sel:
-                                                    st.session_state[cmd_key] = new_cmd_sel
+                                                cmd_sel = new_cmd_sel
                                             with col_cl:
                                                 display = cmd_text + hint if hint else cmd_text
                                                 if cmd_sel and set_selected:
@@ -638,13 +637,12 @@ def _render_llama_cli_execute(project: dict) -> None:
                                     label_md += f" — {desc}"
 
                                 with st.expander(label_md, expanded=set_selected):
+                                    st.session_state.setdefault(set_sel_key, True)
                                     new_sel = st.checkbox(
-                                        "Enable this Validation Set", value=set_selected,
-                                        key=f"llama_exec_vset_{idx}_chk",
+                                        "Enable this Validation Set",
+                                        key=set_sel_key,
                                     )
-                                    if new_sel != set_selected:
-                                        st.session_state[set_sel_key] = new_sel
-                                        st.rerun()
+                                    set_selected = new_sel
 
                                     for sidx, step in enumerate(vset.get("steps", [])):
                                         delay = step.get("delay_seconds", 0)
@@ -665,14 +663,14 @@ def _render_llama_cli_execute(project: dict) -> None:
 
                                             col_cc, col_cl = st.columns([1, 10])
                                             with col_cc:
+                                                st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
                                                 new_cmd_sel = st.checkbox(
-                                                    f"Enable command {cidx+1} in step {sidx+1}", value=cmd_sel,
-                                                    key=f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_chk",
+                                                    f"Enable command {cidx+1} in step {sidx+1}",
+                                                    key=cmd_key,
                                                     label_visibility="collapsed",
                                                     disabled=not set_selected,
                                                 )
-                                                if new_cmd_sel != cmd_sel:
-                                                    st.session_state[cmd_key] = new_cmd_sel
+                                                cmd_sel = new_cmd_sel
                                             with col_cl:
                                                 display = cmd_text + hint if hint else cmd_text
                                                 if cmd_sel and set_selected:
