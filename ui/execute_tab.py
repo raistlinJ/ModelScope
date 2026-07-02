@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import streamlit as st
 from config.defaults import LLAMA_CPP_DEFAULT_URL, OLLAMA_DEFAULT_URL
 from core.evaluator import run_evaluation
@@ -290,7 +291,6 @@ def _run_bash_bot(project: dict) -> None:
     history: list = st.session_state.get(history_key, [])
     history.append(telemetry or {})
     st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
-    st.rerun()
 
 
 def _render_bash_execute(project: dict) -> None:
@@ -398,6 +398,7 @@ def _render_bash_execute(project: dict) -> None:
         if st.button("⏹  Stop", key="btn_bash_exec_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
+            st.rerun()
     with col_clear:
         if st.button("Clear Log", key="btn_bash_exec_clear",
                      use_container_width=True):
@@ -428,11 +429,30 @@ def _render_bash_execute(project: dict) -> None:
         st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
-        with st.spinner("Running…"):
-            _run_bash_bot(project)
+        # Launch in background thread so the UI stays responsive
+        thread = threading.Thread(target=_run_bash_bot, args=(project,), daemon=True)
+        thread.start()
+        st.session_state["_run_thread"] = thread
+        st.rerun()
 
-    _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-    _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+    # Polling: if a run is in progress, refresh the UI periodically
+    if run_in_progress:
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        thread = st.session_state.get("_run_thread")
+        if thread and thread.is_alive():
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            # Thread finished — ensure state is clean
+            st.session_state["_run_in_progress"] = False
+            st.session_state.pop("_run_thread", None)
+            if st.session_state.get("_exec_phase") != "done":
+                st.session_state["_exec_phase"] = "done"
+            st.rerun()
+    else:
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
@@ -600,7 +620,6 @@ def _run_llama_cli_bot(project: dict) -> None:
     history: list = st.session_state.get(history_key, [])
     history.append(telemetry or {})
     st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
-    st.rerun()
 
 
 def _get_llama_selected_validation_sets(cfg: dict) -> list:
@@ -751,6 +770,7 @@ def _render_llama_cli_execute(project: dict) -> None:
         if st.button("⏹  Stop", key="btn_llama_exec_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
+            st.rerun()
     with col_clear:
         if st.button("Clear Log", key="btn_llama_exec_clear", use_container_width=True):
             st.session_state["run_logs_shell"]   = []
@@ -780,11 +800,30 @@ def _render_llama_cli_execute(project: dict) -> None:
         st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
-        with st.spinner("Running…"):
-            _run_llama_cli_bot(project)
+        # Launch in background thread so the UI stays responsive
+        thread = threading.Thread(target=_run_llama_cli_bot, args=(project,), daemon=True)
+        thread.start()
+        st.session_state["_run_thread"] = thread
+        st.rerun()
 
-    _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-    _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+    # Polling: if a run is in progress, refresh the UI periodically
+    if run_in_progress:
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        thread = st.session_state.get("_run_thread")
+        if thread and thread.is_alive():
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            # Thread finished — ensure state is clean
+            st.session_state["_run_in_progress"] = False
+            st.session_state.pop("_run_thread", None)
+            if st.session_state.get("_exec_phase") != "done":
+                st.session_state["_exec_phase"] = "done"
+            st.rerun()
+    else:
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
