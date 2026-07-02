@@ -2041,7 +2041,7 @@ def _test_pct_connection(vmid_key: str, result_key: str) -> None:
         env = PCTEnvironment(vmid, LocalEnvironment())
         res = env.execute("echo ok")
         if res["exit_code"] == 0 and "ok" in res["stdout"]:
-            st.session_state[result_key] = {"status": "success", "message": f"Connected to PCT container {vmid}"}
+            st.session_state[result_key] = {"status": "success", "message": f"Connection test succeeded for PCT container {vmid}"}
         else:
             st.session_state[result_key] = {"status": "warning", "message": f"Connected but unexpected response: {res!r}"}
     except Exception as exc:
@@ -2107,7 +2107,7 @@ def _test_bash_ssh_connection() -> None:
         result = stdout.read().decode().strip()
         client.close()
         if result == "ok":
-            _store("success", f"Connected to {user}@{host}:{port} ✓")
+            _store("success", f"Connection test succeeded for {user}@{host}:{port} ✓")
         else:
             _store("warning", f"Connected but unexpected echo response: {result!r}")
     except socket.gaierror:
@@ -2463,7 +2463,7 @@ def _test_llama_cli_ssh_connection() -> None:
         result = stdout.read().decode().strip()
         client.close()
         if result == "ok":
-            _store("success", f"Connected to {user}@{host}:{port} ✓")
+            _store("success", f"Connection test succeeded for {user}@{host}:{port} ✓")
         else:
             _store("warning", f"Connected but unexpected echo response: {result!r}")
     except socket.gaierror:
