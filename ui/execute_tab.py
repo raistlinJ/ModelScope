@@ -32,6 +32,9 @@ _LOG_TAG_MAP = {
     "[CLEANUP]":      "init",
     "[SYS]":          "sys",
     "[USR]":          "usr",
+    "[RUN]":          "cmd",
+    "[PROMPT HELPER]": "prompt",
+    "[JUDGE]":        "prompt",
 }
 
 
@@ -215,11 +218,13 @@ def _run_bash_bot(project: dict, shared: dict) -> None:
             shared["phase"] = "completion"
         elif msg.startswith("[COMPLETE]"):
             shared["phase"] = "done"
+        # Determine log destination by phase
+        phase = shared.get("phase", "startup")
         entry = {"text": msg, "tag": _tag(msg)}
-        if source == "shell":
-            shared["logs_shell"].append(entry)
+        if phase == "validation":
+            shared.setdefault("logs_validation", []).append(entry)
         else:
-            shared["logs_llama"].append(entry)
+            shared.setdefault("logs_setup", []).append(entry)
         session_log.log(msg)
 
     from core.environment import create_environment
@@ -382,8 +387,8 @@ def _render_bash_execute(project: dict) -> None:
     with col_clear:
         if st.button("Clear Log", key="btn_bash_exec_clear",
                      use_container_width=True):
-            st.session_state["run_logs_shell"]   = []
-            st.session_state["run_logs_llama"]   = []
+            st.session_state["run_logs_setup"]   = []
+            st.session_state["run_logs_validation"]   = []
             st.session_state["run_completed"]    = False
             st.session_state["telemetry"]        = {}
             st.session_state["_run_in_progress"] = False
@@ -392,16 +397,16 @@ def _render_bash_execute(project: dict) -> None:
             st.rerun()
 
     col_sh, col_ll = st.columns(2)
-    col_sh.markdown("**Shell Execution Log**")
-    col_ll.markdown("**LLM Judge Log**")
+    col_sh.markdown("**Setup/Cleanup Log**")
+    col_ll.markdown("**Validation Log**")
     shell_placeholder = col_sh.empty()
     llama_placeholder = col_ll.empty()
     st.session_state["_bash_log_placeholder_shell"] = shell_placeholder
     st.session_state["_bash_log_placeholder_llama"] = llama_placeholder
 
     if run_btn and not run_in_progress:
-        st.session_state["run_logs_shell"]   = []
-        st.session_state["run_logs_llama"]   = []
+        st.session_state["run_logs_setup"]   = []
+        st.session_state["run_logs_validation"]   = []
         st.session_state["run_completed"]    = False
         st.session_state["telemetry"]        = {}
         st.session_state["cancel_requested"] = False
@@ -417,8 +422,8 @@ def _render_bash_execute(project: dict) -> None:
         shared_state = {
             "cancel_requested": False,
             "phase": "",
-            "logs_shell": [],
-            "logs_llama": [],
+            "logs_setup": [],
+            "logs_validation": [],
             "completed": False,
             "telemetry": {},
         }
@@ -434,13 +439,13 @@ def _render_bash_execute(project: dict) -> None:
         shared = st.session_state.get("_run_shared", {})
         
         # Sync shared state to session state for UI to render
-        st.session_state["run_logs_shell"] = shared.get("logs_shell", [])
-        st.session_state["run_logs_llama"] = shared.get("logs_llama", [])
+        st.session_state["run_logs_setup"] = shared.get("logs_setup", [])
+        st.session_state["run_logs_validation"] = shared.get("logs_validation", [])
         if shared.get("phase"):
             st.session_state["_exec_phase"] = shared["phase"]
             
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
         thread = st.session_state.get("_run_thread")
         
         if thread and thread.is_alive():
@@ -470,8 +475,8 @@ def _render_bash_execute(project: dict) -> None:
     if run_in_progress:
         _poll_bash_execution()
     else:
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
@@ -518,11 +523,13 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
             shared["phase"] = "completion"
         elif msg.startswith("[COMPLETE]"):
             shared["phase"] = "done"
+        # Determine log destination by phase
+        phase = shared.get("phase", "startup")
         entry = {"text": msg, "tag": _tag(msg)}
-        if source == "shell":
-            shared["logs_shell"].append(entry)
+        if phase == "validation":
+            shared.setdefault("logs_validation", []).append(entry)
         else:
-            shared["logs_llama"].append(entry)
+            shared.setdefault("logs_setup", []).append(entry)
         session_log.log(msg)
 
     from core.environment import create_environment
@@ -767,8 +774,8 @@ def _render_llama_cli_execute(project: dict) -> None:
             st.rerun()
     with col_clear:
         if st.button("Clear Log", key="btn_llama_exec_clear", use_container_width=True):
-            st.session_state["run_logs_shell"]   = []
-            st.session_state["run_logs_llama"]   = []
+            st.session_state["run_logs_setup"]   = []
+            st.session_state["run_logs_validation"]   = []
             st.session_state["run_completed"]    = False
             st.session_state["telemetry"]        = {}
             st.session_state["_run_in_progress"] = False
@@ -777,16 +784,16 @@ def _render_llama_cli_execute(project: dict) -> None:
             st.rerun()
 
     col_sh, col_ll = st.columns(2)
-    col_sh.markdown("**Shell Execution Log**")
-    col_ll.markdown("**LLM Judge Log**")
+    col_sh.markdown("**Setup/Cleanup Log**")
+    col_ll.markdown("**Validation Log**")
     shell_placeholder = col_sh.empty()
     llama_placeholder = col_ll.empty()
     st.session_state["_llama_log_placeholder_shell"] = shell_placeholder
     st.session_state["_llama_log_placeholder_llama"] = llama_placeholder
 
     if run_btn and not run_in_progress:
-        st.session_state["run_logs_shell"]   = []
-        st.session_state["run_logs_llama"]   = []
+        st.session_state["run_logs_setup"]   = []
+        st.session_state["run_logs_validation"]   = []
         st.session_state["run_completed"]    = False
         st.session_state["telemetry"]        = {}
         st.session_state["cancel_requested"] = False
@@ -802,8 +809,8 @@ def _render_llama_cli_execute(project: dict) -> None:
         shared_state = {
             "cancel_requested": False,
             "phase": "",
-            "logs_shell": [],
-            "logs_llama": [],
+            "logs_setup": [],
+            "logs_validation": [],
             "completed": False,
             "telemetry": {},
         }
@@ -819,13 +826,13 @@ def _render_llama_cli_execute(project: dict) -> None:
         shared = st.session_state.get("_run_shared", {})
         
         # Sync shared state to session state for UI to render
-        st.session_state["run_logs_shell"] = shared.get("logs_shell", [])
-        st.session_state["run_logs_llama"] = shared.get("logs_llama", [])
+        st.session_state["run_logs_setup"] = shared.get("logs_setup", [])
+        st.session_state["run_logs_validation"] = shared.get("logs_validation", [])
         if shared.get("phase"):
             st.session_state["_exec_phase"] = shared["phase"]
             
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
         thread = st.session_state.get("_run_thread")
         
         if thread and thread.is_alive():
@@ -855,8 +862,8 @@ def _render_llama_cli_execute(project: dict) -> None:
     if run_in_progress:
         _poll_llama_execution()
     else:
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_shell", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_llama", []))
+        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
+        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):

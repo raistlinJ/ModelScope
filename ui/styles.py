@@ -284,6 +284,8 @@ h3 {
 .log-tokens   { color: var(--muted); font-size: 0.72rem; }
 .log-sys      { color: var(--muted); font-size: 0.74rem; font-style: italic; }
 .log-usr      { color: #56b6c2; font-size: 0.74rem; font-style: italic; }
+.log-cmd      { color: #d946ef; font-weight: 600; }
+.log-prompt   { color: #4ade80; font-weight: 600; }
 .log-stream   { color: var(--text); }
 .log-decision { color: var(--warn); font-weight: 600; }
 
