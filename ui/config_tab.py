@@ -2387,7 +2387,7 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, prefix: s
             clean_steps = []
             for step in st.session_state[_steps_state_key]:
                 step_copy = copy.deepcopy(step)
-                step_copy["commands"] = [c for c in step_copy.get("commands", []) if c.get("command", "").strip()]
+                step_copy["commands"] = [c for c in step_copy.get("commands", []) if c.get("command", "").strip() or c.get("type") == "prompt"]
                 if step_copy["commands"] or step_copy.get("delay_seconds", 0) > 0:
                     clean_steps.append(step_copy)
                     
