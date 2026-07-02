@@ -112,12 +112,24 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
             st.markdown(f"*Step {si + 1}{delay_str}*")
             for cmd_obj in step.get("commands", []):
                 if isinstance(cmd_obj, dict):
-                    text    = cmd_obj.get("command", "")
+                    _type   = cmd_obj.get("type", "command")
                     enabled = cmd_obj.get("enabled", True)
-                    if text and enabled:
-                        st.code(text, language="bash")
-                    elif text:
-                        st.markdown(f"~~`{text}`~~ *(disabled)*")
+                    
+                    if _type == "prompt":
+                        usr_text = cmd_obj.get("user_prompt", "")
+                        sys_text = cmd_obj.get("system_prompt", "")
+                        disp_text = usr_text if usr_text else sys_text
+                        label_txt = f"💬 **Prompt**: {disp_text[:50]}{'...' if len(disp_text) > 50 else ''}"
+                        if enabled:
+                            st.markdown(label_txt)
+                        else:
+                            st.markdown(f"~~{label_txt}~~ *(disabled)*")
+                    else:
+                        text = cmd_obj.get("command", "")
+                        if text and enabled:
+                            st.code(text, language="bash")
+                        elif text:
+                            st.markdown(f"~~`{text}`~~ *(disabled)*")
                 elif isinstance(cmd_obj, str) and cmd_obj:
                     st.code(cmd_obj, language="bash")
 
