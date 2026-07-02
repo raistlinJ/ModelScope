@@ -354,9 +354,19 @@ examples:
         help="Enable DEBUG-level logging.",
     )
     project_p.add_argument(
+        "--ssh-user",
+        default=None,
+        help="Override the SSH username (also reads MODELSCOPE_SSH_USER).",
+    )
+    project_p.add_argument(
         "--ssh-password",
         default=None,
         help="Override the SSH password (also reads MODELSCOPE_SSH_PASSWORD).",
+    )
+    project_p.add_argument(
+        "--ssh-key-path",
+        default=None,
+        help="Override the SSH key path (also reads MODELSCOPE_SSH_KEY_PATH).",
     )
     project_p.add_argument(
         "--sudo-password",
@@ -709,9 +719,15 @@ def _cmd_project(args: argparse.Namespace) -> int:
         elif os.environ.get(env_name):
             config[key] = os.environ[env_name]
 
+    _resolve_secret("ssh_user", "ssh_user", "MODELSCOPE_SSH_USER")
     _resolve_secret("ssh_password", "ssh_password", "MODELSCOPE_SSH_PASSWORD")
+    _resolve_secret("ssh_key_path", "ssh_key_path", "MODELSCOPE_SSH_KEY_PATH")
     _resolve_secret("sudo_password", "sudo_password", "MODELSCOPE_SUDO_PASSWORD")
     _resolve_secret("openai_api_key", "openai_api_key", "MODELSCOPE_OPENAI_API_KEY")
+
+    # Prefer key over password if both are present
+    if config.get("ssh_key_path") and config.get("ssh_password"):
+        config.pop("ssh_password", None)
 
     # Dry-run: print config and exit
     if getattr(args, "dry_run", False):
