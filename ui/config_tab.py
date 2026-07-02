@@ -3282,79 +3282,6 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
         st.session_state[state_key] = steps
 
 
-def _render_llama_cli_inputs(project: dict) -> None:
-    """Inputs sub-tab for Llama-CLI-Bot: steps."""
-
-    # ── Preset Scenarios ─────────────────────────────────────────────────────
-    _presets = _load_llama_cli_presets()
-    if _presets:
-        st.subheader("Preset Scenarios")
-        _preset_opts = ["Custom"] + list(_presets.keys())
-        _sel_col, _btn_col = st.columns([4, 1])
-        with _sel_col:
-            _chosen = st.selectbox(
-                "Scenario", options=_preset_opts,
-                key="_llama_preset_sel", label_visibility="collapsed",
-            )
-        with _btn_col:
-            if st.button("Load", key="btn_llama_load_preset", type="primary",
-                         disabled=(_chosen == "Custom"), use_container_width=True):
-                _p = _presets[_chosen]
-                # Build unified steps from preset prompts + commands
-                _new_steps: list = []
-                for _pr in _p.get("prompts", []):
-                    _new_steps.append({
-                        "_id": _next_step_id(), "type": "prompt",
-                        "content": _pr, "enabled": True,
-                        "long_running": False, "timeout_seconds": 60,
-                    })
-                for _cm in _p.get("commands", []):
-                    _new_steps.append({
-                        "_id": _next_step_id(), "type": "command",
-                        "content": _cm, "enabled": True,
-                        "long_running": False, "timeout_seconds": 60,
-                    })
-                st.session_state["llama_cli_steps"]               = _new_steps
-                # Keep legacy lists in sync for settings persistence
-                st.session_state["llama_cli_prompts"]             = list(_p.get("prompts", []))
-                st.session_state["llama_cli_commands"]            = list(_p.get("commands", []))
-                st.session_state["llama_cli_validation_sets"]     = list(_p.get("validation_sets", []))
-                st.session_state["llama_cli_metrics_matrix"]      = copy.deepcopy(_p.get("metrics_matrix", []))
-                st.rerun()
-        st.divider()
-
-    # ── Migration: convert legacy flat lists to unified steps ─────────────────
-    _existing_steps = st.session_state.get("llama_cli_steps", [])
-    if not _existing_steps:
-        _old_prompts  = st.session_state.get("llama_cli_prompts", [])
-        _old_commands = st.session_state.get("llama_cli_commands", [])
-        if _old_prompts or _old_commands:
-            _migrated: list = []
-            for _pr in _old_prompts:
-                _migrated.append({
-                    "_id": _next_step_id(), "type": "prompt",
-                    "content": _pr, "enabled": True,
-                    "long_running": False, "timeout_seconds": 60,
-                })
-            for _cm in _old_commands:
-                _migrated.append({
-                    "_id": _next_step_id(), "type": "command",
-                    "content": _cm, "enabled": True,
-                    "long_running": False, "timeout_seconds": 60,
-                })
-            st.session_state["llama_cli_steps"] = _migrated
-
-    # ── Evaluation Steps ──────────────────────────────────────────────────────
-    st.subheader("Evaluation Steps")
-    st.caption(
-        "Steps are executed in order. "
-        "**Prompt** steps send natural-language instructions to the LLM; "
-        "**Command** steps run shell commands directly."
-    )
-    _render_step_editor("llama_cli_steps", "llama")
-    
-    _flush_llama_cli_config(project)
-
 
 def _render_llama_cli_validation(project: dict) -> None:
     """Validation sub-tab for Llama-CLI-Bot: Pass/Fail sets and Metrics."""
@@ -3373,10 +3300,8 @@ def _render_llama_cli_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-CLI bot configuration."""
     st.divider()
 
-    sub_runtime, sub_inputs, sub_val = st.tabs(["🖥  Runtime", "⌨️  Inputs", "✅  Validation"])
+    sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
     with sub_runtime:
         _render_llama_cli_runtime(project)
-    with sub_inputs:
-        _render_llama_cli_inputs(project)
     with sub_val:
         _render_llama_cli_validation(project)
