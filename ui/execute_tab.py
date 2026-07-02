@@ -283,102 +283,75 @@ def _render_bash_execute(project: dict) -> None:
                 st.rerun()
 
         if _cfg_open:
-            col_a, col_b = st.columns(2)
+            with st.container(border=True):
+                target = cfg.get("execution_target", "local")
+                ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
+                target_str = f"Target: {target.upper()}{ssh_info}"
+                timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
+                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
-            # ── Left: Startup & Completion ─────────────────────────────────
-            with col_a:
-                with st.container(border=True):
-                    _startup_open = st.session_state.get("bash_exec_startup_expanded", True)
-                    col_title_a, col_tog_a = st.columns([9, 1])
-                    with col_title_a:
-                        target = cfg.get("execution_target", "local")
-                        ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
-                        target_str = f"Target: {target.upper()}{ssh_info}"
-                        timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
-                        st.markdown(f"**Startup & Completion** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
-                    with col_tog_a:
-                        if st.button("▼" if _startup_open else "▶",
-                                     key="btn_bash_exec_startup_toggle",
-                                     use_container_width=True, help="Expand/collapse"):
-                            st.session_state["bash_exec_startup_expanded"] = not _startup_open
-                            st.rerun()
-                    if _startup_open:
-                        with st.expander("**Startup**", expanded=True):
-                            _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
-                        with st.expander("**Completion**", expanded=True):
-                            _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
+                with st.expander("**Startup**", expanded=True):
+                    _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-            # ── Right: Validation Steps ────────────────────────────────────
-            with col_b:
-                with st.container(border=True):
-                    _val_open = st.session_state.get("bash_exec_validation_expanded", True)
-                    col_title_b, col_tog_b = st.columns([9, 1])
-                    with col_title_b:
-                        st.markdown("**Validation Steps**")
-                    with col_tog_b:
-                        if st.button("▼" if _val_open else "▶",
-                                     key="btn_bash_exec_val_toggle",
-                                     use_container_width=True, help="Expand/collapse"):
-                            st.session_state["bash_exec_validation_expanded"] = not _val_open
-                            st.rerun()
-                    if _val_open:
-                        # Validation set list
+                st.markdown("**Validation Steps**")
+                # Validation set list
+                val_sets = cfg.get("validation_sets", [])
+                if not val_sets:
+                    st.caption("No validation sets configured — add them in the Config tab (Validation).")
+                else:
+                    for idx, vset in enumerate(val_sets):
+                        set_sel_key = f"bash_exec_vset_{idx}_selected"
+                        set_selected = st.session_state.get(set_sel_key, True)
 
-                        # Validation set list
-                        val_sets = cfg.get("validation_sets", [])
-                        if not val_sets:
-                            st.caption("No validation sets configured — add them in the Config tab (Validation).")
-                        else:
-                            for idx, vset in enumerate(val_sets):
-                                set_sel_key = f"bash_exec_vset_{idx}_selected"
-                                set_selected = st.session_state.get(set_sel_key, True)
+                        desc = vset.get("description", "")
+                        label_md = f"**{idx + 1}. {vset['name']}**"
+                        if desc:
+                            label_md += f" — {desc}"
 
-                                desc = vset.get("description", "")
-                                label_md = f"**{idx + 1}. {vset['name']}**"
-                                if desc:
-                                    label_md += f" — {desc}"
+                        with st.expander(label_md, expanded=set_selected):
+                            st.session_state.setdefault(set_sel_key, True)
+                            new_sel = st.checkbox(
+                                "Enable this Validation Set",
+                                key=set_sel_key,
+                            )
+                            set_selected = new_sel
 
-                                with st.expander(label_md, expanded=set_selected):
-                                    st.session_state.setdefault(set_sel_key, True)
-                                    new_sel = st.checkbox(
-                                        "Enable this Validation Set",
-                                        key=set_sel_key,
-                                    )
-                                    set_selected = new_sel
+                            for sidx, step in enumerate(vset.get("steps", [])):
+                                delay = step.get("delay_seconds", 0)
+                                dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                st.caption(f"Step {sidx + 1}{dstr}:")
+                                for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                    cmd_text = cmd_obj.get("command", "")
+                                    if not cmd_text:
+                                        continue
+                                    cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                    cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                    exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                    exp_out  = cmd_obj.get("expected_output", "")
+                                    hint = ""
+                                    if exp_type != "Ignore" and exp_out:
+                                        short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                        hint = f"  # expect {exp_type.lower()}: {short}"
 
-                                    for sidx, step in enumerate(vset.get("steps", [])):
-                                        delay = step.get("delay_seconds", 0)
-                                        dstr  = f" ({delay}s delay)" if delay > 0 else ""
-                                        st.caption(f"Step {sidx + 1}{dstr}:")
-                                        for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                                            cmd_text = cmd_obj.get("command", "")
-                                            if not cmd_text:
-                                                continue
-                                            cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
-                                            cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
-                                            exp_type = cmd_obj.get("expected_output_type", "Ignore")
-                                            exp_out  = cmd_obj.get("expected_output", "")
-                                            hint = ""
-                                            if exp_type != "Ignore" and exp_out:
-                                                short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
-                                                hint = f"  # expect {exp_type.lower()}: {short}"
+                                    col_cc, col_cl = st.columns([1, 10])
+                                    with col_cc:
+                                        st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
+                                        new_cmd_sel = st.checkbox(
+                                            f"Enable command {cidx+1} in step {sidx+1}",
+                                            key=cmd_key,
+                                            label_visibility="collapsed",
+                                            disabled=not set_selected,
+                                        )
+                                        cmd_sel = new_cmd_sel
+                                    with col_cl:
+                                        display = cmd_text + hint if hint else cmd_text
+                                        if cmd_sel and set_selected:
+                                            st.code(display, language="bash")
+                                        else:
+                                            st.markdown(f"~~`{display}`~~ *(skipped)*")
 
-                                            col_cc, col_cl = st.columns([1, 10])
-                                            with col_cc:
-                                                st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
-                                                new_cmd_sel = st.checkbox(
-                                                    f"Enable command {cidx+1} in step {sidx+1}",
-                                                    key=cmd_key,
-                                                    label_visibility="collapsed",
-                                                    disabled=not set_selected,
-                                                )
-                                                cmd_sel = new_cmd_sel
-                                            with col_cl:
-                                                display = cmd_text + hint if hint else cmd_text
-                                                if cmd_sel and set_selected:
-                                                    st.code(display, language="bash")
-                                                else:
-                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
+                with st.expander("**Completion**", expanded=True):
+                    _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
@@ -626,113 +599,88 @@ def _render_llama_cli_execute(project: dict) -> None:
                 st.rerun()
 
         if _cfg_open:
-            col_a, col_b = st.columns(2)
+            with st.container(border=True):
+                target = cfg.get("execution_target", "local")
+                ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
+                target_str = f"Target: {target.upper()}{ssh_info}"
+                model_name = cfg.get("model_name", "") or "not selected"
+                timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
+                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
-            # ── Left: Startup & Completion ─────────────────────────────────
-            with col_a:
-                with st.container(border=True):
-                    _startup_open = st.session_state.get("llama_exec_startup_expanded", True)
-                    col_title_a, col_tog_a = st.columns([9, 1])
-                    with col_title_a:
-                        target = cfg.get("execution_target", "local")
-                        ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
-                        target_str = f"Target: {target.upper()}{ssh_info}"
-                        model_name = cfg.get("model_name", "") or "not selected"
-                        timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
-                        st.markdown(f"**Startup & Completion** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
-                    with col_tog_a:
-                        if st.button("▼" if _startup_open else "▶",
-                                     key="btn_llama_exec_startup_toggle",
-                                     use_container_width=True, help="Expand/collapse"):
-                            st.session_state["llama_exec_startup_expanded"] = not _startup_open
-                            st.rerun()
-                    if _startup_open:
-                        # Model info summary
-                        backend = cfg.get("backend", "llama-cli")
-                        with st.expander("**Model Info**", expanded=True):
-                            st.caption(f"Backend: **{backend}**")
-                            st.caption(f"Model: **{model_name}**")
-                            if backend == "llama-cli":
-                                st.caption(f"Binary: `{cfg.get('binary_path', 'llama-cli')}`")
-                            else:
-                                st.caption(f"URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
-                            enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
-                            if enabled_mcps:
-                                st.caption(f"MCP: {', '.join(enabled_mcps)}")
+                # Model info summary
+                backend = cfg.get("backend", "llama-cli")
+                with st.expander("**Model Info**", expanded=True):
+                    st.caption(f"Backend: **{backend}**")
+                    st.caption(f"Model: **{model_name}**")
+                    if backend == "llama-cli":
+                        st.caption(f"Binary: `{cfg.get('binary_path', 'llama-cli')}`")
+                    else:
+                        st.caption(f"URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
+                    enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]
+                    if enabled_mcps:
+                        st.caption(f"MCP: {', '.join(enabled_mcps)}")
 
-                        with st.expander("**Startup**", expanded=True):
-                            _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
-                        with st.expander("**Completion**", expanded=True):
-                            _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
+                with st.expander("**Startup**", expanded=True):
+                    _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
 
-            # ── Right: Validation Steps ────────────────────────────────────
-            with col_b:
-                with st.container(border=True):
-                    _val_open = st.session_state.get("llama_exec_validation_expanded", True)
-                    col_title_b, col_tog_b = st.columns([9, 1])
-                    with col_title_b:
-                        st.markdown("**Validation Steps**")
-                    with col_tog_b:
-                        if st.button("▼" if _val_open else "▶",
-                                     key="btn_llama_exec_val_toggle",
-                                     use_container_width=True, help="Expand/collapse"):
-                            st.session_state["llama_exec_validation_expanded"] = not _val_open
-                            st.rerun()
-                    if _val_open:
-                        val_sets = cfg.get("validation_sets", [])
-                        if not val_sets:
-                            st.caption("No validation sets configured — add them in the Config tab (Validation).")
-                        else:
-                            for idx, vset in enumerate(val_sets):
-                                set_sel_key = f"llama_exec_vset_{idx}_selected"
-                                set_selected = st.session_state.get(set_sel_key, True)
+                st.markdown("**Validation Steps**")
+                val_sets = cfg.get("validation_sets", [])
+                if not val_sets:
+                    st.caption("No validation sets configured — add them in the Config tab (Validation).")
+                else:
+                    for idx, vset in enumerate(val_sets):
+                        set_sel_key = f"llama_exec_vset_{idx}_selected"
+                        set_selected = st.session_state.get(set_sel_key, True)
 
-                                desc = vset.get("description", "")
-                                label_md = f"**{idx + 1}. {vset['name']}**"
-                                if desc:
-                                    label_md += f" — {desc}"
+                        desc = vset.get("description", "")
+                        label_md = f"**{idx + 1}. {vset['name']}**"
+                        if desc:
+                            label_md += f" — {desc}"
 
-                                with st.expander(label_md, expanded=set_selected):
-                                    st.session_state.setdefault(set_sel_key, True)
-                                    new_sel = st.checkbox(
-                                        "Enable this Validation Set",
-                                        key=set_sel_key,
-                                    )
-                                    set_selected = new_sel
+                        with st.expander(label_md, expanded=set_selected):
+                            st.session_state.setdefault(set_sel_key, True)
+                            new_sel = st.checkbox(
+                                "Enable this Validation Set",
+                                key=set_sel_key,
+                            )
+                            set_selected = new_sel
 
-                                    for sidx, step in enumerate(vset.get("steps", [])):
-                                        delay = step.get("delay_seconds", 0)
-                                        dstr  = f" ({delay}s delay)" if delay > 0 else ""
-                                        st.caption(f"Step {sidx + 1}{dstr}:")
-                                        for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                                            cmd_text = cmd_obj.get("command", "")
-                                            if not cmd_text:
-                                                continue
-                                            cmd_key  = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
-                                            cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
-                                            exp_type = cmd_obj.get("expected_output_type", "Ignore")
-                                            exp_out  = cmd_obj.get("expected_output", "")
-                                            hint = ""
-                                            if exp_type != "Ignore" and exp_out:
-                                                short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
-                                                hint = f"  # expect {exp_type.lower()}: {short}"
+                            for sidx, step in enumerate(vset.get("steps", [])):
+                                delay = step.get("delay_seconds", 0)
+                                dstr  = f" ({delay}s delay)" if delay > 0 else ""
+                                st.caption(f"Step {sidx + 1}{dstr}:")
+                                for cidx, cmd_obj in enumerate(step.get("commands", [])):
+                                    cmd_text = cmd_obj.get("command", "")
+                                    if not cmd_text:
+                                        continue
+                                    cmd_key  = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                    cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
+                                    exp_type = cmd_obj.get("expected_output_type", "Ignore")
+                                    exp_out  = cmd_obj.get("expected_output", "")
+                                    hint = ""
+                                    if exp_type != "Ignore" and exp_out:
+                                        short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
+                                        hint = f"  # expect {exp_type.lower()}: {short}"
 
-                                            col_cc, col_cl = st.columns([1, 10])
-                                            with col_cc:
-                                                st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
-                                                new_cmd_sel = st.checkbox(
-                                                    f"Enable command {cidx+1} in step {sidx+1}",
-                                                    key=cmd_key,
-                                                    label_visibility="collapsed",
-                                                    disabled=not set_selected,
-                                                )
-                                                cmd_sel = new_cmd_sel
-                                            with col_cl:
-                                                display = cmd_text + hint if hint else cmd_text
-                                                if cmd_sel and set_selected:
-                                                    st.code(display, language="bash")
-                                                else:
-                                                    st.markdown(f"~~`{display}`~~ *(skipped)*")
+                                    col_cc, col_cl = st.columns([1, 10])
+                                    with col_cc:
+                                        st.session_state.setdefault(cmd_key, cmd_obj.get("enabled", True))
+                                        new_cmd_sel = st.checkbox(
+                                            f"Enable command {cidx+1} in step {sidx+1}",
+                                            key=cmd_key,
+                                            label_visibility="collapsed",
+                                            disabled=not set_selected,
+                                        )
+                                        cmd_sel = new_cmd_sel
+                                    with col_cl:
+                                        display = cmd_text + hint if hint else cmd_text
+                                        if cmd_sel and set_selected:
+                                            st.code(display, language="bash")
+                                        else:
+                                            st.markdown(f"~~`{display}`~~ *(skipped)*")
+
+                with st.expander("**Completion**", expanded=True):
+                    _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # ── Scenario system prompt (editable, persisted) ──────────────────────────
     st.session_state.setdefault("llama_cli_system_prompt", cfg.get("system_prompt", ""))
