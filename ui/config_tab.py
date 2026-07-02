@@ -2455,6 +2455,18 @@ def _flush_llama_cli_config(project: dict) -> None:
         "en_gpu_layers":       st.session_state.get("llama_cli_en_gpu_layers", False),
         "threads":             st.session_state.get("llama_cli_threads", 4),
         "en_threads":          st.session_state.get("llama_cli_en_threads", False),
+        "top_k":               st.session_state.get("llama_cli_top_k", 40),
+        "en_top_k":            st.session_state.get("llama_cli_en_top_k", False),
+        "top_p":               st.session_state.get("llama_cli_top_p", 0.9),
+        "en_top_p":            st.session_state.get("llama_cli_en_top_p", False),
+        "min_p":               st.session_state.get("llama_cli_min_p", 0.1),
+        "en_min_p":            st.session_state.get("llama_cli_en_min_p", False),
+        "repeat_penalty":      st.session_state.get("llama_cli_repeat_penalty", 1.1),
+        "en_repeat_penalty":   st.session_state.get("llama_cli_en_repeat_penalty", False),
+        "predict":             st.session_state.get("llama_cli_predict", 512),
+        "en_predict":          st.session_state.get("llama_cli_en_predict", False),
+        "seed":                st.session_state.get("llama_cli_seed", -1),
+        "en_seed":             st.session_state.get("llama_cli_en_seed", False),
         "flash_attn":          st.session_state.get("llama_cli_flash_attn", False),
         "custom_flags":        st.session_state.get("llama_cli_custom_flags", ""),
         "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
@@ -2847,41 +2859,43 @@ def _render_llama_cli_runtime(project: dict) -> None:
         )
 
         with st.expander("Advanced Options", expanded=False):
-            _col1, _col2 = st.columns(2)
-            with _col1:
-                st.session_state.setdefault("llama_cli_en_temp", False)
-                st.session_state.setdefault("llama_cli_temperature", 0.8)
-                c1, c2 = st.columns([1, 6])
-                with c1:
-                    st.write("")
-                    st.write("")
-                    _en_temp = st.checkbox("en_temp", key="llama_cli_en_temp", label_visibility="collapsed", help="Enable Temperature")
-                with c2:
-                    st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, key="llama_cli_temperature", disabled=not _en_temp, help="Higher values = more random, lower values = more focused (--temp).")
+            def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False):
+                with col:
+                    st.session_state.setdefault(f"llama_cli_en_{key_suffix}", False)
+                    c1, c2 = st.columns([1, 4])
+                    with c1:
+                        st.write("")
+                        st.write("")
+                        _en = st.checkbox(f"en_{key_suffix}", key=f"llama_cli_en_{key_suffix}", label_visibility="collapsed", help=f"Enable {label}")
+                    with c2:
+                        st.number_input(
+                            label,
+                            min_value=float(min_v) if is_float else int(min_v),
+                            max_value=float(max_v) if is_float else int(max_v),
+                            step=float(step) if is_float else int(step),
+                            key=f"llama_cli_{key_suffix}",
+                            disabled=not _en,
+                            help=help_text,
+                            format="%.2f" if is_float else None
+                        )
 
-                st.session_state.setdefault("llama_cli_en_gpu_layers", False)
-                st.session_state.setdefault("llama_cli_gpu_layers", 99)
-                c3, c4 = st.columns([1, 6])
-                with c3:
-                    st.write("")
-                    st.write("")
-                    _en_gpu = st.checkbox("en_gpu", key="llama_cli_en_gpu_layers", label_visibility="collapsed", help="Enable GPU Layers")
-                with c4:
-                    st.number_input("GPU Layers", min_value=0, max_value=999, step=1, key="llama_cli_gpu_layers", disabled=not _en_gpu, help="Number of layers to offload to GPU (-ngl). Use 99 or higher for full offload.")
-            with _col2:
-                st.session_state.setdefault("llama_cli_en_threads", False)
-                st.session_state.setdefault("llama_cli_threads", 4)
-                c5, c6 = st.columns([1, 6])
-                with c5:
-                    st.write("")
-                    st.write("")
-                    _en_threads = st.checkbox("en_threads", key="llama_cli_en_threads", label_visibility="collapsed", help="Enable Threads")
-                with c6:
-                    st.number_input("Threads", min_value=1, max_value=256, step=1, key="llama_cli_threads", disabled=not _en_threads, help="Number of CPU threads to use during generation (-t).")
-                
+            adv_cols = st.columns(4)
+            _adv_opt(adv_cols[0], "Temperature", "temp", 0.0, 2.0, 0.1, "Higher values = more random (--temp).", True)
+            _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).")
+            _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).")
+            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).")
+            
+            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True)
+            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True)
+            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True)
+            _adv_opt(adv_cols[3], "Predict", "predict", -1, 131072, 128, "Tokens to predict (-n).")
+            
+            _adv_opt(adv_cols[0], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).")
+            with adv_cols[1]:
                 st.session_state.setdefault("llama_cli_flash_attn", False)
-                st.write("") # Spacer
-                st.checkbox("Enable Flash Attention", key="llama_cli_flash_attn", help="Use Flash Attention for faster generation and lower memory usage (-fa).")
+                st.write("")
+                st.write("")
+                st.checkbox("Flash Attn", key="llama_cli_flash_attn", help="Use Flash Attention (-fa).")
 
         st.divider()
         _col_svc, _col_status = st.columns([1, 2])
