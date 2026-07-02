@@ -1986,7 +1986,8 @@ def _render_bash_runtime(project: dict) -> None:
                 
                 if st.button(btn_label, key="btn_bash_test_ssh", use_container_width=True, type=btn_type):
                     st.session_state.pop("bash_ssh_test_result", None)
-                    _test_bash_ssh_connection()
+                    with st.spinner("Please wait..."):
+                        _test_bash_ssh_connection()
                     st.rerun()
                 
                 # Show error message under the retry button if it exists
@@ -2627,7 +2628,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 if st.button("Test Connection", key="btn_llama_test_ssh",
                              use_container_width=True, type="secondary"):
                     st.session_state.pop("llama_cli_ssh_test_result", None)
-                    _test_llama_cli_ssh_connection()
+                    with st.spinner("Please wait..."):
+                        _test_llama_cli_ssh_connection()
             _llama_ssh_result = st.session_state.get("llama_cli_ssh_test_result")
             if _llama_ssh_result:
                 _ls, _lm = _llama_ssh_result["status"], _llama_ssh_result["message"]
