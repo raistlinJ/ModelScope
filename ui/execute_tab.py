@@ -197,7 +197,6 @@ def _run_bash_bot(project: dict, shared: dict) -> None:
     from core.evaluator import run_bash_evaluation
     from core.session_log import SessionLog
 
-    _flush_bash_config(project)
     cfg = project["config"]
 
     cancel_ref: list[bool] = [False]
@@ -410,6 +409,10 @@ def _render_bash_execute(project: dict) -> None:
         st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
+        
+        # Flush config in the main thread before launching background execution
+        _flush_bash_config(project)
+        
         # Launch in background thread so the UI stays responsive
         shared_state = {
             "cancel_requested": False,
@@ -495,7 +498,6 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
     from core.evaluator import run_llama_cli_evaluation
     from core.session_log import SessionLog
 
-    _flush_llama_cli_config(project)
     cfg = project["config"]
 
     cancel_ref: list[bool] = [False]
@@ -790,6 +792,10 @@ def _render_llama_cli_execute(project: dict) -> None:
         st.session_state["_exec_phase"]      = ""
         shell_placeholder.empty()
         llama_placeholder.empty()
+        
+        # Flush config in the main thread before launching background execution
+        _flush_llama_cli_config(project)
+        
         # Launch in background thread so the UI stays responsive
         shared_state = {
             "cancel_requested": False,
