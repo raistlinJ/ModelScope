@@ -253,8 +253,7 @@ h3 {
     color: var(--text);
     padding: 14px 18px;
     border-radius: 8px;
-    min-height: 260px;
-    max-height: 650px;
+    height: 500px;
     overflow-y: auto;
     font-family: var(--font-mono);
     font-size: 0.78rem;
