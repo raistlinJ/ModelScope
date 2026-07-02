@@ -946,10 +946,16 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     min_p         = config.get("min_p", 0.1)
     en_repeat_penalty = config.get("en_repeat_penalty", False)
     repeat_penalty = config.get("repeat_penalty", 1.1)
+    en_freq_penalty = config.get("en_freq_penalty", False)
+    freq_penalty   = config.get("freq_penalty", 0.0)
     en_predict    = config.get("en_predict", False)
     predict       = config.get("predict", 512)
     en_seed       = config.get("en_seed", False)
     seed          = config.get("seed", -1)
+    en_rope_freq_base = config.get("en_rope_freq_base", False)
+    rope_freq_base = config.get("rope_freq_base", 10000.0)
+    en_rope_freq_scale = config.get("en_rope_freq_scale", False)
+    rope_freq_scale = config.get("rope_freq_scale", 1.0)
     custom_flags  = config.get("custom_flags", "")
     _use_sudo  = bool(config.get("sudo"))
     _sudo_pw   = (config.get("sudo_password") or "").strip()
@@ -1158,8 +1164,11 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     f"{f' --top-p {top_p}' if en_top_p else ''}"
                     f"{f' --min-p {min_p}' if en_min_p else ''}"
                     f"{f' --repeat-penalty {repeat_penalty}' if en_repeat_penalty else ''}"
+                    f"{f' --freq-penalty {freq_penalty}' if en_freq_penalty else ''}"
                     f"{f' -n {predict}' if en_predict else ' -n 512'}"
                     f"{f' --seed {seed}' if en_seed else ''}"
+                    f"{f' --rope-freq-base {rope_freq_base}' if en_rope_freq_base else ''}"
+                    f"{f' --rope-freq-scale {rope_freq_scale}' if en_rope_freq_scale else ''}"
                     f"{' -fa' if flash_attn else ''}"
                     f"{sys_flag}"
                     f"{custom_flag_str}"

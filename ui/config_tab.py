@@ -2467,6 +2467,12 @@ def _flush_llama_cli_config(project: dict) -> None:
         "en_repeat_penalty":   st.session_state.get("llama_cli_en_repeat_penalty", False),
         "predict":             st.session_state.get("llama_cli_predict", 512),
         "en_predict":          st.session_state.get("llama_cli_en_predict", False),
+        "freq_penalty":        st.session_state.get("llama_cli_freq_penalty", 0.0),
+        "en_freq_penalty":     st.session_state.get("llama_cli_en_freq_penalty", False),
+        "rope_freq_base":      st.session_state.get("llama_cli_rope_freq_base", 10000.0),
+        "en_rope_freq_base":   st.session_state.get("llama_cli_en_rope_freq_base", False),
+        "rope_freq_scale":     st.session_state.get("llama_cli_rope_freq_scale", 1.0),
+        "en_rope_freq_scale":  st.session_state.get("llama_cli_en_rope_freq_scale", False),
         "seed":                st.session_state.get("llama_cli_seed", -1),
         "en_seed":             st.session_state.get("llama_cli_en_seed", False),
         "flash_attn":          st.session_state.get("llama_cli_flash_attn", False),
@@ -2954,7 +2960,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
             def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False):
                 with col:
                     st.session_state.setdefault(f"llama_cli_en_{key_suffix}", False)
-                    c1, c2 = st.columns([1, 4])
+                    c1, c2 = st.columns([0.2, 0.8], gap="small")
                     with c1:
                         st.write("")
                         st.write("")
@@ -2980,10 +2986,14 @@ def _render_llama_cli_runtime(project: dict) -> None:
             _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True)
             _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True)
             _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True)
-            _adv_opt(adv_cols[3], "Predict", "predict", -1, 131072, 128, "Tokens to predict (-n).")
+            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True)
             
-            _adv_opt(adv_cols[0], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).")
-            with adv_cols[1]:
+            _adv_opt(adv_cols[0], "Predict", "predict", -1, 131072, 128, "Tokens to predict (-n).")
+            _adv_opt(adv_cols[1], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).")
+            _adv_opt(adv_cols[2], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True)
+            _adv_opt(adv_cols[3], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True)
+            
+            with adv_cols[0]:
                 st.session_state.setdefault("llama_cli_flash_attn", False)
                 st.write("")
                 st.write("")
