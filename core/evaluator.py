@@ -909,7 +909,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
 
 # ── Llama-CLI-Bot execution ────────────────────────────────────────────────────
 
-def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], None]) -> dict:
+def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str, str], None]) -> dict:
     """Run prompts via llama-cli binary and/or shell commands, then validate."""
     import os
     import shlex
@@ -991,18 +991,18 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 actual_cmd = f"sudo {cmd}"
         else:
             actual_cmd = cmd
-        on_log(f"[{label}] {cmd}")
+        on_log(f"[{label}] {cmd}", "shell")
         res = env.execute(actual_cmd, timeout=t)
         if res.get("stdout"):
-            on_log(f"[STDOUT] {res['stdout'][:800]}")
+            on_log(f"[STDOUT] {res['stdout'][:800]}", "shell")
         if res.get("stderr"):
-            on_log(f"[STDERR] {res['stderr'][:400]}")
+            on_log(f"[STDERR] {res['stderr'][:400]}", "shell")
         return res
 
     def _run_step_list(steps: list, label: str = "RUN") -> bool:
         for step_idx, step in enumerate(steps):
             if cancel_ref[0]:
-                on_log("[CANCEL] Cancelled by user")
+                on_log("[CANCEL] Cancelled by user", "shell")
                 telemetry["run_aborted"] = True
                 return False
 
@@ -1021,12 +1021,12 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
             delay = float(step.get("delay_seconds", 0))
             if delay > 0:
-                on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s")
+                on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s", "shell")
                 time.sleep(delay)
 
             for cmd_obj in step.get("commands", []):
                 if cancel_ref[0]:
-                    on_log("[CANCEL] Cancelled by user")
+                    on_log("[CANCEL] Cancelled by user", "shell")
                     telemetry["run_aborted"] = True
                     return False
                 if not cmd_obj.get("enabled", True):
@@ -1047,7 +1047,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
     if _use_sudo:
         mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
-        on_log(f"[LLAMA-CLI] sudo access enabled — commands will run as root {mode}")
+        on_log(f"[LLAMA-CLI] sudo access enabled — commands will run as root {mode}", "shell")
         
         # Preflight check for sudo auth
         _sudo_check_cmd = f"sudo -k; echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -k; sudo -n -v"
@@ -1055,7 +1055,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         if _check_res.get("exit_code", -1) != 0:
             err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")
             err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
-            on_log(f"[ERROR] Sudo authentication failed: {err_clean}")
+            on_log(f"[ERROR] Sudo authentication failed: {err_clean}", "shell")
             telemetry["run_aborted"] = True
             telemetry["error"] = f"Sudo authentication failed: {err_clean}"
             return telemetry
@@ -1072,12 +1072,12 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # Load tool schemas for all backends
     if mcp_servers:
         try:
-            tools = _load_tool_schemas("./mcp-server/index.js", on_log=on_log)
+            tools = _load_tool_schemas("./mcp-server/index.js", on_log=lambda m: on_log(m, "shell"))
             if tools:
                 names = [t["function"]["name"] for t in tools]
-                on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}")
+                on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}", "shell")
         except Exception as exc:
-            on_log(f"[WARN] Could not load tool schemas: {exc}")
+            on_log(f"[WARN] Could not load tool schemas: {exc}", "shell")
 
     # Probe for MCP broker using the session handshake — not a dummy tool call.
     # call_mcp_tool("dummy", {}) always returns {"error": ...} (unknown tool),
@@ -1089,42 +1089,42 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     if tools:
         if probe_mcp_server(mcp_server_url):
             mcp_running = True
-            on_log(f"[MCP] Broker detected at {mcp_server_url}")
+            on_log(f"[MCP] Broker detected at {mcp_server_url}", "shell")
         else:
-            on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks")
+            on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
 
-    on_log(f"[LLAMA-CLI] Starting — backend={backend}, model={model_name or '(none)'}")
+    on_log(f"[LLAMA-CLI] Starting — backend={backend}, model={model_name or '(none)'}", "llama")
 
     if backend == "llama-server (managed)":
         model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
         if config.get("execution_target", "local") == "local":
             model_path = os.path.abspath(os.path.expanduser(model_path))
         if not model_path:
-            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
+            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.", "llama")
             telemetry["run_aborted"] = True
         else:
             port = config.get("server_port", 18080)
             proc = None
             try:
                 model_path_expanded = os.path.expanduser(model_path)
-                proc = _start_managed_llama_server(binary, model_path_expanded, tokens, port, on_log)
+                proc = _start_managed_llama_server(binary, model_path_expanded, tokens, port, lambda m: on_log(m, "shell"))
                 base_url = f"http://127.0.0.1:{port}/v1"
 
                 for i, prompt in enumerate(prompts):
                     if cancel_ref[0]:
-                        on_log("[CANCEL] Cancelled by user")
+                        on_log("[CANCEL] Cancelled by user", "llama")
                         telemetry["run_aborted"] = True
                         break
-                    on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
+                    on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}", "llama")
                     tool_calls, response = _run_llm_agent_loop(
                         base_url, model_name, prompt, tools, tokens,
-                        mcp_running, mcp_server_url, env, cancel_ref, on_log,
+                        mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
                         max_turns=max_iter, deadline=eval_deadline,
                     )
                     telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
                     telemetry["tool_calls"].extend(tool_calls)
             except RuntimeError as exc:
-                on_log(f"[ERROR] {exc}")
+                on_log(f"[ERROR] {exc}", "llama")
                 telemetry["run_aborted"] = True
             finally:
                 if proc:
@@ -1132,35 +1132,35 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                         proc.terminate()
                         proc.wait(timeout=5)
                     except Exception as exc:
-                        on_log(f"[WARN] Server termination failed: {exc}")
+                        on_log(f"[WARN] Server termination failed: {exc}", "shell")
 
     elif backend.lower().startswith("openai"):
         base_url   = (config.get("openai_base_url") or "").strip()
         api_key    = (config.get("openai_api_key") or "").strip()
         verify_ssl = config.get("openai_verify_ssl", True)
         if not base_url:
-            on_log("[ERROR] No Base URL configured for OpenAI backend. Set it in the Runtime → Model Setup tab.")
+            on_log("[ERROR] No Base URL configured for OpenAI backend. Set it in the Runtime → Model Setup tab.", "llama")
             telemetry["run_aborted"] = True
         else:
             if not model_name:
-                on_log("[WARN] No model selected — server will use its default model.")
+                on_log("[WARN] No model selected — server will use its default model.", "llama")
             for i, prompt in enumerate(prompts):
                 if cancel_ref[0]:
-                    on_log("[CANCEL] Cancelled by user")
+                    on_log("[CANCEL] Cancelled by user", "llama")
                     telemetry["run_aborted"] = True
                     break
-                on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}")
+                on_log(f"[PROMPT {i + 1}/{len(prompts)}] {prompt[:80]}{'…' if len(prompt) > 80 else ''}", "llama")
                 try:
                     tool_calls, response = _run_llm_agent_loop(
                         base_url, model_name, prompt, tools, tokens,
-                        mcp_running, mcp_server_url, env, cancel_ref, on_log,
+                        mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
                         max_turns=max_iter, deadline=eval_deadline,
                     )
-                    on_log(f"[RESPONSE] {response[:400]}")
+                    on_log(f"[RESPONSE] {response[:400]}", "llama")
                     telemetry["prompt_responses"].append({"prompt": prompt, "response": response})
                     telemetry["tool_calls"].extend(tool_calls)
                 except Exception as exc:
-                    on_log(f"[ERROR] HTTP request failed: {exc}")
+                    on_log(f"[ERROR] HTTP request failed: {exc}", "llama")
                     telemetry["prompt_responses"].append({"prompt": prompt, "response": ""})
                     telemetry["tool_calls"].append({
                         "tool":      "openai-http",
@@ -1177,7 +1177,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             corrected = os.path.join(os.path.dirname(binary), "llama-cli")
             on_log(
                 f"[WARN] binary_path points at llama-server — the llama.cpp backend "
-                f"needs llama-cli.  Auto-correcting to: {corrected}"
+                f"needs llama-cli.  Auto-correcting to: {corrected}",
+                "llama"
             )
             binary = corrected
 
@@ -1185,7 +1186,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         if config.get("execution_target", "local") == "local":
             model_path = os.path.abspath(os.path.expanduser(model_path))
         if not model_path:
-            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
+            on_log("[ERROR] No model selected. Configure a model in the Runtime tab.", "llama")
             telemetry["run_aborted"] = True
         else:
             # Build tool-aware system prompt for llama-cli backend
