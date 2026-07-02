@@ -1334,6 +1334,11 @@ def _flush_bash_config(project: dict) -> None:
             if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct")
             else st.session_state.get("bash_sudo_password", "")
         ) if st.session_state.get("bash_sudo") else "",
+        "llm_helper_backend": st.session_state.get("bash_llm_helper_backend", "OpenAI-Compatible"),
+        "llm_helper_openai_url": st.session_state.get("bash_llm_helper_openai_url", ""),
+        "llm_helper_openai_apikey": st.session_state.get("bash_llm_helper_openai_apikey", ""),
+        "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", "http://localhost:11434"),
+        "llm_helper_model": st.session_state.get("bash_llm_helper_model", ""),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1828,6 +1833,89 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
 
+def _render_llm_prompt_helper_tab(pfx: str) -> None:
+    """Render the connection settings for the LLM Prompt Helper."""
+    st.caption(
+        "Configure an LLM connection here to assist with generating commands or prompts "
+        "for your tasks."
+    )
+    backend = st.selectbox(
+        "LLM Backend",
+        options=["OpenAI-Compatible", "Ollama"],
+        index=0 if st.session_state.get(f"{pfx}_llm_helper_backend", "OpenAI-Compatible") == "OpenAI-Compatible" else 1,
+        key=f"{pfx}_llm_helper_backend_sel",
+    )
+    st.session_state[f"{pfx}_llm_helper_backend"] = backend
+
+    if backend == "Ollama":
+        _url = st.text_input(
+            "Ollama Server URL",
+            key=f"{pfx}_llm_helper_ollama_url",
+            value=st.session_state.get(f"{pfx}_llm_helper_ollama_url", "http://localhost:11434"),
+        )
+        st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
+        
+        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True):
+            if _url.strip():
+                from core.models import fetch_ollama_models
+                _found, _err = fetch_ollama_models(_url.strip())
+                if _found:
+                    st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
+                    st.success(f"Found {len(_found)} models.")
+                else:
+                    st.error(_err or "No models returned.")
+            else:
+                st.warning("Enter a valid URL.")
+        _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
+        if _models:
+            _model_names = [m["name"] for m in _models]
+            _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
+            _idx = _model_names.index(_cur) if _cur in _model_names else 0
+            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_ollama_model_sel")
+            st.session_state[f"{pfx}_llm_helper_model"] = _chosen
+        else:
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            st.session_state[f"{pfx}_llm_helper_model"] = _man
+
+    else:
+        # OpenAI-Compatible
+        _url = st.text_input(
+            "Instance URL",
+            key=f"{pfx}_llm_helper_openai_url",
+            value=st.session_state.get(f"{pfx}_llm_helper_openai_url", ""),
+            placeholder="http://localhost:8080",
+            help="Base URL of any OpenAI-compatible server. Do not include /v1.",
+        )
+        st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
+        if st.button("Fetch Models", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True):
+            if _url.strip():
+                from core.models import fetch_llama_cpp_models
+                _found, _err = fetch_llama_cpp_models(_url.strip())
+                if _found:
+                    st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
+                    st.success(f"Found {len(_found)} models.")
+                else:
+                    st.error(_err or "No models returned.")
+            else:
+                st.warning("Enter a valid URL.")
+        _apikey = st.text_input(
+            "API Key (optional)",
+            key=f"{pfx}_llm_helper_openai_apikey",
+            type="password",
+            value=st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""),
+        )
+        st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
+        _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
+        if _models:
+            _model_names = [m["name"] for m in _models]
+            _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
+            _idx = _model_names.index(_cur) if _cur in _model_names else 0
+            _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_openai_model_sel")
+            st.session_state[f"{pfx}_llm_helper_model"] = _chosen
+        else:
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            st.session_state[f"{pfx}_llm_helper_model"] = _man
+
 def _render_bash_runtime(project: dict) -> None:
     """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
 
@@ -1905,9 +1993,11 @@ def _render_bash_runtime(project: dict) -> None:
                     st.error(_lm)
 
     with st.expander("Commands", expanded=True):
-        tab_startup, tab_completion = st.tabs(
-            ["▶  Startup", "⏹  Completion"]
+        tab_llm, tab_startup, tab_completion = st.tabs(
+            ["🤖 LLM Prompt Helper", "▶  Startup", "⏹  Completion"]
         )
+        with tab_llm:
+            _render_llm_prompt_helper_tab("bash")
         with tab_startup:
             st.caption(
                 "Commands run when execution starts, organised as steps. "
@@ -2403,6 +2493,11 @@ def _flush_llama_cli_config(project: dict) -> None:
         "validation_sets":     st.session_state.get("llama_cli_validation_sets", []),
         "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
         "system_prompt":       st.session_state.get("llama_cli_system_prompt", ""),
+        "llm_helper_backend": st.session_state.get("llama_cli_llm_helper_backend", "OpenAI-Compatible"),
+        "llm_helper_openai_url": st.session_state.get("llama_cli_llm_helper_openai_url", ""),
+        "llm_helper_openai_apikey": st.session_state.get("llama_cli_llm_helper_openai_apikey", ""),
+        "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", "http://localhost:11434"),
+        "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", ""),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -2972,9 +3067,11 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 st.error(_msg)
 
     with st.expander("Commands", expanded=True):
-        tab_startup, tab_completion = st.tabs(
-            ["▶  Startup", "⏹  Completion"]
+        tab_llm, tab_startup, tab_completion = st.tabs(
+            ["🤖 LLM Prompt Helper", "▶  Startup", "⏹  Completion"]
         )
+        with tab_llm:
+            _render_llm_prompt_helper_tab("llama_cli")
         with tab_startup:
             st.caption(
                 "Commands run when execution starts, organised as steps. "

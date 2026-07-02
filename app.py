@@ -146,6 +146,9 @@ def _show_add_project_dialog() -> None:
             "startup_commands": [], "bash_timeout": 60,
             "completion_commands": [], "validation_commands": [],
             "fail_patterns": [], "metrics_matrix": [], "validation_sets": [],
+            "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
+            "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
+            "llm_helper_model": "",
         },
         "llama_cli_bot": {
             "execution_target": "local",
@@ -157,6 +160,9 @@ def _show_add_project_dialog() -> None:
             "mcp_config_path": "", "mcp_servers": [],
             "prompts": [], "commands": [], "steps": [], "timeout": 60,
             "validation_commands": [], "fail_patterns": [], "metrics_matrix": [],
+            "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
+            "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
+            "llm_helper_model": "",
         },
         "ai_agent": {},
     }
