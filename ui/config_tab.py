@@ -2870,6 +2870,14 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 )
                 st.session_state["llama_cli_model_name"] = chosen
 
+            st.session_state.setdefault("llama_cli_tokens", 32768)
+            st.number_input(
+                "Context Window (tokens)",
+                min_value=128, max_value=131072, step=256,
+                key="llama_cli_tokens",
+                help="Maximum context length passed to llama-cli via -c.",
+            )
+
             st.text_input(
                 "Custom Flags",
                 key="llama_cli_custom_flags",
@@ -2951,13 +2959,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 else:
                     st.warning("Enter an Instance URL first.")
 
-        st.session_state.setdefault("llama_cli_tokens", 32768)
-        st.number_input(
-            "Context Window (tokens)",
-            min_value=128, max_value=131072, step=256,
-            key="llama_cli_tokens",
-            help="Maximum context length passed to llama-cli via -c.",
-        )
+
 
         with st.expander("Advanced Options", expanded=False):
             def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False):
