@@ -2701,7 +2701,8 @@ def _test_llama_cli_run(project: dict) -> None:
         if _bin and os.path.isdir(_bin) and target == "local":
             _bin = os.path.join(_bin, "llama-cli")
         
-        cmd = f"{_bin} -m {shlex.quote(_mpath)} --prompt \"Hello, world!\" -n 1 --simple-io --no-display-prompt --single-turn"
+        _mpath_quoted = f'\"$HOME/\"{shlex.quote(_mpath[2:])}' if _mpath.startswith("~/") else shlex.quote(_mpath)
+        cmd = f"{_bin} -m {_mpath_quoted} --prompt \"Hello, world!\" -n 1 --simple-io --no-display-prompt --single-turn"
         
         if use_sudo:
             if sudo_pw:
@@ -2829,7 +2830,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     _scan_models(project)
 
             discovered: list = st.session_state.get("llama_cli_discovered_models", [])
-            model_names = [m["name"] for m in discovered]
+            model_names = []
+            for m in discovered:
+                if m["name"] not in model_names:
+                    model_names.append(m["name"])
             
             current = st.session_state.get("llama_cli_model_name", "")
             if current and current not in model_names:

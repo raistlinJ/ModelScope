@@ -1031,7 +1031,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             port = config.get("server_port", 18080)
             proc = None
             try:
-                proc = _start_managed_llama_server(binary, model_path, tokens, port, on_log)
+                model_path_expanded = os.path.expanduser(model_path)
+                proc = _start_managed_llama_server(binary, model_path_expanded, tokens, port, on_log)
                 base_url = f"http://127.0.0.1:{port}/v1"
 
                 for i, prompt in enumerate(prompts):
@@ -1144,9 +1145,11 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 safe_prompt = shlex.quote(prompt)
                 sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
                 custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
+                model_path_quoted = f'\"$HOME/\"{shlex.quote(model_path[2:])}' if model_path.startswith("~/") else shlex.quote(model_path)
+                
                 cmd = (
                     f"{binary}"
-                    f" -m {shlex.quote(model_path)}"
+                    f" -m {model_path_quoted}"
                     f" -c {tokens}"
                     f"{f' --temp {temperature}' if en_temp else ''}"
                     f"{f' -ngl {gpu_layers}' if en_gpu_layers else ''}"
