@@ -2020,19 +2020,34 @@ def _render_bash_runtime(project: dict) -> None:
 
 def _test_local_connection(result_key: str) -> None:
     from core.environment import LocalEnvironment
+    import shlex
     try:
         env = LocalEnvironment()
         res = env.execute("echo ok")
-        if res["exit_code"] == 0 and "ok" in res["stdout"]:
-            st.session_state[result_key] = {"status": "success", "message": "Local execution working successfully."}
-        else:
+        if res["exit_code"] != 0 or "ok" not in res["stdout"]:
             st.session_state[result_key] = {"status": "warning", "message": f"Unexpected response: {res!r}"}
+            return
+
+        prefix = "llama_cli" if result_key.startswith("llama_cli") else result_key.split("_")[0]
+        use_sudo = st.session_state.get(f"{prefix}_sudo")
+        if use_sudo:
+            sudo_pw = (st.session_state.get(f"{prefix}_sudo_password") or "").strip()
+            sudo_check_cmd = f"sudo -k; echo {shlex.quote(sudo_pw)} | sudo -S -v" if sudo_pw else "sudo -k; sudo -n -v"
+            check_res = env.execute(sudo_check_cmd, timeout=10)
+            if check_res.get("exit_code", -1) != 0:
+                err_msg = check_res.get("stderr", "") or check_res.get("stdout", "Unknown error")
+                err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
+                st.session_state[result_key] = {"status": "error", "message": f"Sudo auth failed: {err_clean}"}
+                return
+
+        st.session_state[result_key] = {"status": "success", "message": "Local execution working successfully."}
     except Exception as exc:
         st.session_state[result_key] = {"status": "error", "message": f"Local execution failed: {exc}"}
 
 
 def _test_pct_connection(vmid_key: str, result_key: str) -> None:
     from core.environment import LocalEnvironment, PCTEnvironment
+    import shlex
     vmid = (st.session_state.get(vmid_key) or "").strip()
     if not vmid:
         st.session_state[result_key] = {"status": "error", "message": "VMID is required."}
@@ -2040,10 +2055,23 @@ def _test_pct_connection(vmid_key: str, result_key: str) -> None:
     try:
         env = PCTEnvironment(vmid, LocalEnvironment())
         res = env.execute("echo ok")
-        if res["exit_code"] == 0 and "ok" in res["stdout"]:
-            st.session_state[result_key] = {"status": "success", "message": f"Connection test succeeded for PCT container {vmid}"}
-        else:
-            st.session_state[result_key] = {"status": "warning", "message": f"Connected but unexpected response: {res!r}"}
+        if res["exit_code"] != 0 or "ok" not in res["stdout"]:
+            st.session_state[result_key] = {"status": "warning", "message": f"Unexpected response: {res!r}"}
+            return
+
+        prefix = "llama_cli" if result_key.startswith("llama_cli") else result_key.split("_")[0]
+        use_sudo = st.session_state.get(f"{prefix}_sudo")
+        if use_sudo:
+            sudo_pw = (st.session_state.get(f"{prefix}_sudo_password") or "").strip()
+            sudo_check_cmd = f"sudo -k; echo {shlex.quote(sudo_pw)} | sudo -S -v" if sudo_pw else "sudo -k; sudo -n -v"
+            check_res = env.execute(sudo_check_cmd, timeout=10)
+            if check_res.get("exit_code", -1) != 0:
+                err_msg = check_res.get("stderr", "") or check_res.get("stdout", "Unknown error")
+                err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
+                st.session_state[result_key] = {"status": "error", "message": f"Sudo auth failed: {err_clean}"}
+                return
+
+        st.session_state[result_key] = {"status": "success", "message": f"Connection test succeeded for PCT container {vmid}"}
     except Exception as exc:
         st.session_state[result_key] = {"status": "error", "message": f"PCT connection failed: {exc}"}
 
