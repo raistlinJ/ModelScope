@@ -2050,30 +2050,33 @@ def _test_pct_connection(vmid_key: str, result_key: str) -> None:
 
 def _render_test_button(target_type: str, state_prefix: str, vmid_key: str = "") -> None:
     result_key = f"{state_prefix}_{target_type}_test_result"
-    _res = st.session_state.get(result_key)
-    is_connected = _res and _res["status"] == "success"
-    is_failed = _res and _res["status"] == "error"
+    testing_key = f"testing_{result_key}"
+    _is_testing = st.session_state.get(testing_key, False)
+    
+    btn_label = f"Test {target_type.upper() if target_type == 'pct' else 'Local'} Execution"
     
     col_test, _ = st.columns([2, 1])
     with col_test:
-        if is_connected:
-            st.success(_res["message"])
-            if st.button("Reset / Test Again", key=f"btn_{state_prefix}_test_{target_type}_reset", type="secondary", use_container_width=True):
-                st.session_state.pop(result_key, None)
-                st.rerun()
-        else:
-            btn_label = "Retry Connection" if is_failed else f"Test {target_type.upper() if target_type == 'pct' else 'Local'} Execution"
-            btn_type = "primary" if is_failed else "secondary"
-            if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", use_container_width=True, type=btn_type):
-                st.session_state.pop(result_key, None)
+        if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True, disabled=_is_testing):
+            st.session_state[testing_key] = True
+            st.rerun()
+            
+        if _is_testing:
+            st.session_state.pop(result_key, None)
+            with st.spinner("Please wait..."):
                 if target_type == "local":
                     _test_local_connection(result_key)
                 elif target_type == "pct":
                     _test_pct_connection(vmid_key, result_key)
-                st.rerun()
-    if not is_connected and _res:
-        if is_failed: st.error(_res["message"])
-        elif _res["status"] == "warning": st.warning(_res["message"])
+            st.session_state[testing_key] = False
+            st.rerun()
+
+        _res = st.session_state.get(result_key)
+        if _res:
+            _ls, _lm = _res["status"], _res["message"]
+            if _ls == "success": st.success(_lm)
+            elif _ls == "warning": st.warning(_lm)
+            else: st.error(_lm)
 
 
 def _test_bash_ssh_connection() -> None:
