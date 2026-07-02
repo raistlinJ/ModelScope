@@ -1652,7 +1652,8 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 if st.session_state.pop(_addcmd_flag_key, False):
                     mutation = ("add_cmd", si)
                 else:
-                    _llm_enabled = st.session_state.get(f"{pfx}_llm_helper_enabled", False)
+                    _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+                    _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
                     if _llm_enabled:
                         ca, cb, _ = st.columns([1.5, 1.5, 7.0])
                         with ca:
