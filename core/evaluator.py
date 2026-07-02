@@ -370,7 +370,7 @@ def _run_validation_sets(
                     sys_p = cmd_obj.get("system_prompt", "")
                     usr_p = cmd_obj.get("user_prompt", "")
                     cmd_text = f"Prompt: {sys_p[:20]}... | {usr_p[:20]}..."
-                    on_log(f"[VALIDATE CMD] Running LLM Judge: {cmd_text}")
+                    on_log(f"[VALIDATE CMD] Running Configured LLM: {cmd_text}")
                     
                     res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log)
                     stdout = res.get("stdout", "")

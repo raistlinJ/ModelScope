@@ -1574,7 +1574,8 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             with cc0:
                                 st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                             with cc1:
-                                st.markdown("**LLM Judge**")
+                                _title = "Configured LLAMA-CLI LLM" if state_key.startswith("llama_cli") else "Configured LLM"
+                                st.markdown(f"**{_title}**")
                             with cc2:
                                 pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
                                 cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
@@ -1676,7 +1677,8 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
                                 mutation = ("add_cmd", si)
                         with cb:
-                            if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                            _btn_title = "+ Add Configured LLAMA-CLI LLM" if state_key.startswith("llama_cli") else "+ Add Configured LLM"
+                            if st.button(_btn_title, key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
                                 mutation = ("add_prompt", si)
                     else:
                         if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
@@ -1860,7 +1862,8 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                             with cc0:
                                 st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                             with cc1:
-                                st.markdown("**LLM Judge**")
+                                _title = "Configured LLAMA-CLI LLM" if state_key.startswith("llama_cli") else "Configured LLM"
+                                st.markdown(f"**{_title}**")
                             with cc2:
                                 pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
                                 cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)

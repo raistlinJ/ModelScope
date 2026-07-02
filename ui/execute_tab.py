@@ -148,7 +148,7 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
                         with st.container(border=True):
                             pc_icon = "🔗" if cmd_obj.get("preserve_context", True) else "🚫"
                             en_str = "" if enabled else " &nbsp; *(disabled)*"
-                            st.markdown(f"💬 **LLM Judge** &nbsp; | &nbsp; {pc_icon} **Context** {en_str}")
+                            st.markdown(f"💬 **Configured LLM** &nbsp; | &nbsp; {pc_icon} **Context** {en_str}")
                             
                             sys_text = cmd_obj.get("system_prompt", "")
                             if sys_text:
@@ -346,7 +346,7 @@ def _render_bash_execute(project: dict) -> None:
                                             usr_p = cmd_obj.get("user_prompt", "")
                                             if not sys_p and not usr_p:
                                                 continue
-                                            cmd_text = f"LLM Judge: {sys_p[:20]}... | {usr_p[:20]}..."
+                                            cmd_text = f"Configured LLM: {sys_p[:20]}... | {usr_p[:20]}..."
                                         else:
                                             cmd_text = cmd_obj.get("command", "")
                                             if not cmd_text:
@@ -729,7 +729,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             usr_p = cmd_obj.get("user_prompt", "")
                                             if not sys_p and not usr_p:
                                                 continue
-                                            cmd_text = f"LLM Judge: {sys_p[:20]}... | {usr_p[:20]}..."
+                                            cmd_text = f"Configured LLAMA-CLI LLM: {sys_p[:20]}... | {usr_p[:20]}..."
                                         else:
                                             cmd_text = cmd_obj.get("command", "")
                                             if not cmd_text:
