@@ -776,7 +776,7 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             resp.raise_for_status()
             data = resp.json()
             response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            on_log(f"[RESPONSE] {response_text}", "llama")
             if preserve:
                 if system_prompt:
                     context_list.append({"role": "system", "content": system_prompt})
@@ -804,7 +804,7 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             resp.raise_for_status()
             data = resp.json()
             response_text = data.get("message", {}).get("content", "")
-            on_log(f"[RESPONSE] {response_text[:400]}", "llama")
+            on_log(f"[RESPONSE] {response_text}", "llama")
             if preserve:
                 if system_prompt:
                     context_list.append({"role": "system", "content": system_prompt})
