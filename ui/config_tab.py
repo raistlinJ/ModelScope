@@ -2712,33 +2712,35 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     _scan_models(project)
 
             discovered: list = st.session_state.get("llama_cli_discovered_models", [])
-            if discovered:
-                model_names = [m["name"] for m in discovered]
-                current     = st.session_state.get("llama_cli_model_name", "")
-                default_idx = model_names.index(current) if current in model_names else 0
+            model_names = [m["name"] for m in discovered]
+            
+            current = st.session_state.get("llama_cli_model_name", "")
+            if current and current not in model_names:
+                model_names.insert(0, current)
+            
+            default_idx = model_names.index(current) if current in model_names else 0
+            
+            if model_names:
                 chosen = st.selectbox(
                     "Model", options=model_names, index=default_idx,
                     key="_llama_model_sel_widget",
                 )
                 st.session_state["llama_cli_model_name"] = chosen
-
-                st.text_input(
-                    "Custom Flags",
-                    key="llama_cli_custom_flags",
-                    placeholder="-ngl 99 --temp 0.7",
-                    help="Additional flags to pass to llama-cli.",
-                )
-            elif st.session_state.get("llama_cli_model_name"):
-                st.info(f"Current model: `{st.session_state['llama_cli_model_name']}` "
-                        "(click Scan to refresh list)")
-                st.text_input(
-                    "Custom Flags",
-                    key="llama_cli_custom_flags",
-                    placeholder="-ngl 99 --temp 0.7",
-                    help="Additional flags to pass to llama-cli.",
-                )
             else:
-                st.caption("Set Model Directory and click **Scan** to discover models.")
+                chosen = st.text_input(
+                    "Model", 
+                    value=current,
+                    key="_llama_model_sel_widget",
+                    help="Enter model name manually, or use Scan to find models."
+                )
+                st.session_state["llama_cli_model_name"] = chosen
+
+            st.text_input(
+                "Custom Flags",
+                key="llama_cli_custom_flags",
+                placeholder="-ngl 99 --temp 0.7",
+                help="Additional flags to pass to llama-cli.",
+            )
         else:
             col_url, col_fetch = st.columns([5, 1])
             with col_url:
