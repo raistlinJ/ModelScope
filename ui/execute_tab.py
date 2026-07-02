@@ -39,6 +39,10 @@ _LOG_TAG_MAP = {
 
 
 def _tag(line: str) -> str:
+    if "PASS ✓" in line:
+        return "result"
+    if "FAIL ✗" in line:
+        return "warn"
     for prefix, tag in _LOG_TAG_MAP.items():
         if line.startswith(prefix):
             return tag
