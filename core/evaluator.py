@@ -372,7 +372,8 @@ def _run_validation_sets(
                     cmd_text = f"Prompt: {sys_p[:20]}... | {usr_p[:20]}..."
                     on_log(f"[VALIDATE CMD] Running Configured LLM: {cmd_text}")
                     
-                    res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log)
+                    use_main = (config.get("type") == "llama_cli_bot")
+                    res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=use_main)
                     stdout = res.get("stdout", "")
                     stderr = res.get("stderr", "")
                     exit_code = res.get("exit_code", -1)
@@ -750,10 +751,16 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_log: Callable) -> dict:
+def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_log: Callable, use_main_llm: bool = False) -> dict:
     import requests
-    backend = config.get("llm_helper_backend", "OpenAI-Compatible")
-    model = config.get("llm_helper_model", "")
+    
+    if use_main_llm:
+        backend = config.get("backend_type", "llama.cpp")
+        model = config.get("selected_model", "")
+        url = config.get("llm_url", "").rstrip("/")
+    else:
+        backend = config.get("llm_helper_backend", "OpenAI-Compatible")
+        model = config.get("llm_helper_model", "")
     
     # Handle both new cmd_obj dicts and legacy string prompts
     if isinstance(cmd_obj, str):
@@ -773,6 +780,24 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         messages.append({"role": "system", "content": system_prompt})
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
+        
+    if use_main_llm:
+        on_log(f"[PROMPT HELPER] Sending to main LLM ({backend}) at {url}", "llama")
+        try:
+            resp = _call_llm(backend, url, model, messages, [], config.get("context_size", 4096), on_log)
+            # _call_llm returns {"message": {"role": "assistant", "content": ...}, "usage": ...}
+            response_text = resp.get("message", {}).get("content", "")
+            
+            if preserve:
+                if system_prompt:
+                    context_list.append({"role": "system", "content": system_prompt})
+                if user_prompt:
+                    context_list.append({"role": "user", "content": user_prompt})
+                context_list.append({"role": "assistant", "content": response_text})
+            return {"stdout": response_text, "exit_code": 0}
+        except Exception as e:
+            on_log(f"[ERROR] Main LLM failed: {e}", "llama")
+            return {"exit_code": 1, "stderr": str(e)}
     
     if backend == "OpenAI-Compatible":
         url = config.get("llm_helper_openai_url", "").rstrip("/")
