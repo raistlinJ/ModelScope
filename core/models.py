@@ -27,6 +27,7 @@ def scan_gguf_models(root_path: str) -> list[dict]:
     root_path = (root_path or "").strip()
     if not root_path:
         return []
+    root_path = os.path.expanduser(root_path)
     if os.path.isfile(root_path) and root_path.lower().endswith(".gguf"):
         if _is_inference_model(root_path):
             return [{"name": os.path.basename(root_path), "path": root_path}]

@@ -2539,12 +2539,34 @@ def _scan_models(project: dict) -> None:
             remote_cwd=".",
         )
         try:
+            if model_dir.startswith("~/"):
+                model_dir_sh = '"$HOME/' + model_dir[2:] + '"'
+            else:
+                model_dir_sh = f'"{model_dir}"'
             res   = env.execute(
-                f'find "{model_dir}" -name "*.gguf" -not -name "ggml-vocab-*"',
+                f'find {model_dir_sh} -name "*.gguf" -not -name "ggml-vocab-*"',
                 timeout=15,
             )
             paths  = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
-            models = [{"name": p.split("/")[-1], "path": p} for p in paths]
+            
+            # resolve the base dir on the remote so we can make relative paths
+            base_dir = model_dir
+            if base_dir.startswith("~/"):
+                try:
+                    home_res = env.execute("echo $HOME")
+                    home = home_res["stdout"].strip()
+                    base_dir = home + "/" + base_dir[2:]
+                except Exception:
+                    pass
+            
+            models = []
+            for p in paths:
+                rel = p
+                if p.startswith(base_dir):
+                    rel = p[len(base_dir):].lstrip("/")
+                if not rel:
+                    rel = p.split("/")[-1]
+                models.append({"name": rel, "path": p})
         finally:
             env.close()
     st.session_state["llama_cli_discovered_models"] = models
