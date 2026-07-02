@@ -1386,18 +1386,19 @@ def _metrics_setup() -> None:
 
 # ── Bash-Bot configuration ─────────────────────────────────────────────────────
 
+def _clean_steps(steps_list):
+    cleaned = []
+    for step in steps_list:
+        if not isinstance(step, dict):
+            continue
+        new_step = copy.deepcopy(step)
+        new_step["commands"] = [c for c in new_step.get("commands", []) if isinstance(c, dict) and c.get("command", "").strip()]
+        if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
+            cleaned.append(new_step)
+    return cleaned
+
 def _flush_bash_config(project: dict) -> None:
     """Write flat bash_* working keys back into the project's config bundle."""
-    def _clean_steps(steps_list):
-        cleaned = []
-        for step in steps_list:
-            if not isinstance(step, dict):
-                continue
-            new_step = copy.deepcopy(step)
-            new_step["commands"] = [c for c in new_step.get("commands", []) if isinstance(c, dict) and c.get("command", "").strip()]
-            if new_step["commands"] or new_step.get("delay_seconds", 0) > 0:
-                cleaned.append(new_step)
-        return cleaned
 
     project["config"].update({
         "execution_target":  st.session_state.get("bash_execution_target", "local"),
