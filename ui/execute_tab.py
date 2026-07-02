@@ -116,14 +116,20 @@ def _render_step_list_readonly(steps: list, label: str) -> None:
                     enabled = cmd_obj.get("enabled", True)
                     
                     if _type == "prompt":
-                        usr_text = cmd_obj.get("user_prompt", "")
-                        sys_text = cmd_obj.get("system_prompt", "")
-                        disp_text = usr_text if usr_text else sys_text
-                        label_txt = f"💬 **Prompt**: {disp_text[:50]}{'...' if len(disp_text) > 50 else ''}"
-                        if enabled:
-                            st.markdown(label_txt)
-                        else:
-                            st.markdown(f"~~{label_txt}~~ *(disabled)*")
+                        with st.container(border=True):
+                            pc_icon = "🔗" if cmd_obj.get("preserve_context", True) else "🚫"
+                            en_str = "" if enabled else " &nbsp; *(disabled)*"
+                            st.markdown(f"💬 **LLM Prompt** &nbsp; | &nbsp; {pc_icon} **Context** {en_str}")
+                            
+                            sys_text = cmd_obj.get("system_prompt", "")
+                            if sys_text:
+                                with st.expander("System Prompt", expanded=False):
+                                    st.markdown(f"```text\n{sys_text}\n```")
+                                    
+                            usr_text = cmd_obj.get("user_prompt", "")
+                            if usr_text:
+                                with st.expander("User Prompt", expanded=True):
+                                    st.markdown(f"```text\n{usr_text}\n```")
                     else:
                         text = cmd_obj.get("command", "")
                         if text and enabled:
