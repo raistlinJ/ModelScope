@@ -353,6 +353,21 @@ examples:
         action="store_true",
         help="Enable DEBUG-level logging.",
     )
+    project_p.add_argument(
+        "--ssh-password",
+        default=None,
+        help="Override the SSH password (also reads MODELSCOPE_SSH_PASSWORD).",
+    )
+    project_p.add_argument(
+        "--sudo-password",
+        default=None,
+        help="Override the sudo password (also reads MODELSCOPE_SUDO_PASSWORD).",
+    )
+    project_p.add_argument(
+        "--openai-api-key",
+        default=None,
+        help="Override the OpenAI API key (also reads MODELSCOPE_OPENAI_API_KEY).",
+    )
 
     # ── batch subcommand ──────────────────────────────────────────────────────
     batch_p = subparsers.add_parser(
@@ -685,6 +700,18 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
     # Inject required keys for run_evaluation loop
     config.setdefault("cancel_requested_ref", [False])
+
+    # Merge sensitive credentials (Flags > Env > JSON)
+    def _resolve_secret(key: str, flag_name: str, env_name: str):
+        flag_val = getattr(args, flag_name, None)
+        if flag_val is not None:
+            config[key] = flag_val
+        elif os.environ.get(env_name):
+            config[key] = os.environ[env_name]
+
+    _resolve_secret("ssh_password", "ssh_password", "MODELSCOPE_SSH_PASSWORD")
+    _resolve_secret("sudo_password", "sudo_password", "MODELSCOPE_SUDO_PASSWORD")
+    _resolve_secret("openai_api_key", "openai_api_key", "MODELSCOPE_OPENAI_API_KEY")
 
     # Dry-run: print config and exit
     if getattr(args, "dry_run", False):
