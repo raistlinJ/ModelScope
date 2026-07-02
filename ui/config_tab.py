@@ -2679,14 +2679,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     st.error(_lm)
 
     with st.expander("Model Setup", expanded=True):
-        backend = st.selectbox(
-            "Provider",
-            options=["llama.cpp", "OpenAI-compatible HTTP"],
-            key="llama_cli_backend",
-            help="llama.cpp uses llama-cli binary with --prompt; OpenAI-compatible HTTP connects to any /v1/chat/completions endpoint.",
-        )
+        st.session_state["llama_cli_backend"] = "llama-cli"
+        backend = "llama-cli"
 
-        if backend == "llama.cpp":
+        if backend == "llama-cli":
             st.text_input(
                 "Binary Path",
                 key="llama_cli_binary_path",
@@ -2800,6 +2796,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
         st.number_input(
             "Context Window (tokens)",
             min_value=128, max_value=131072, step=256,
+            value=32768,
             key="llama_cli_tokens",
             help="Maximum context length passed to llama-cli via -c.",
         )
@@ -2914,13 +2911,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
             st.session_state["llama_cli_mcp_servers"] = servers
         else:
             st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
-
-    st.number_input(
-        "Timeout (seconds)",
-        min_value=0.1, max_value=3600.0, step=1.0,
-        key="llama_cli_timeout",
-        help="Maximum time (seconds) each command or prompt invocation may run.",
-    )
 
     _flush_llama_cli_config(project)
 
