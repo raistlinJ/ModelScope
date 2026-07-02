@@ -1422,11 +1422,18 @@ def _coerce_steps(raw: list) -> list:
                     })
                 elif isinstance(c, dict):
                     entry = {
-                        "command":        str(c.get("command", "")),
+                        "type":           str(c.get("type", "command")),
                         "enabled":        bool(c.get("enabled", True)),
-                        "long_running":   bool(c.get("long_running", False)),
-                        "timeout_seconds": int(c.get("timeout_seconds", 60)),
                     }
+                    if entry["type"] == "prompt":
+                        entry["system_prompt"] = str(c.get("system_prompt", ""))
+                        entry["user_prompt"] = str(c.get("user_prompt", ""))
+                        entry["preserve_context"] = bool(c.get("preserve_context", True))
+                    else:
+                        entry["command"] = str(c.get("command", ""))
+                        entry["long_running"] = bool(c.get("long_running", False))
+                        entry["timeout_seconds"] = int(c.get("timeout_seconds", 60))
+                        
                     if "expected_output_type" in c:
                         entry["expected_output_type"] = str(c["expected_output_type"])
                     if "expected_output" in c:
