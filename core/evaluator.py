@@ -962,8 +962,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     sudo_pfx   = "sudo " if _use_sudo else ""
     prompts    = config.get("prompts", [])
     commands   = config.get("commands", [])
-    val_cmds   = config.get("validation_commands", [])
-    fail_pats  = config.get("fail_patterns", [])
+    val_sets   = config.get("validation_sets", [])
 
     telemetry: dict = {
         "run_timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1244,27 +1243,23 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             "exit_code": res.get("exit_code", -1),
         })
 
-    # Validation — runs even if the run was cancelled/timed-out (Bug 6)
-    if val_cmds:
+    # Validation — runs even if the run was cancelled/timed-out
+    if val_sets:
         if telemetry["run_aborted"]:
-            on_log("[WARN] Run was cancelled or timed out — metrics evaluation still proceeding")
-        all_passed = True
-        for cmd in val_cmds:
-            val_cmd_str = cmd
-            if _use_sudo:
-                if _sudo_pw:
-                    val_cmd_str = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
-                else:
-                    val_cmd_str = f"sudo {cmd}"
-            val = _run_validation(env, val_cmd_str, fail_pats)
-            status = "PASS ✓" if val["passed"] else "FAIL ✗"
-            on_log(f"[VALIDATE] {status}  (exit_code={val['exit_code']})")
-            if not val["passed"]:
-                all_passed = False
-            telemetry["validation_stdout"] += val.get("stdout", "")
-            telemetry["validation_stderr"] += val.get("stderr", "")
-            telemetry["validation_exit_code"] = val["exit_code"]
+            on_log("[WARN] Run was cancelled or timed out — validation still proceeding")
+        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref)
         telemetry["validation_passed"] = all_passed
+        telemetry["validation_sets_results"] = set_results
+        telemetry["validation_stdout"] = "\n".join(
+            cmd_res.get("stdout", "") for vset in set_results for cmd_res in vset.get("steps", [])
+        )
+        telemetry["validation_stderr"] = "\n".join(
+            cmd_res.get("stderr", "") for vset in set_results for cmd_res in vset.get("steps", [])
+        )
+        if set_results:
+            last_set = set_results[-1]
+            if last_set.get("steps"):
+                telemetry["validation_exit_code"] = last_set["steps"][-1].get("exit_code")
 
     telemetry["total_latency"] = round(time.time() - start_t, 3)
     on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")

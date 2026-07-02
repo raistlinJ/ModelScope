@@ -134,9 +134,8 @@ _DEFAULTS: dict = {
     "llama_cli_prompts":             [],
     "llama_cli_commands":            [],
     "llama_cli_steps":               [],  # unified step editor (type: prompt|command)
-    "llama_cli_timeout":             60,
-    "llama_cli_validation_commands": [],
-    "llama_cli_fail_patterns":       [],
+    "llama_cli_timeout":             120,
+    "llama_cli_validation_sets":     [],
     "llama_cli_metrics_matrix":      [],
 
     # Metrics setup

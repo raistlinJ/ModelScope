@@ -2156,13 +2156,13 @@ def _test_bash_ssh_connection() -> None:
 
 
 @st.dialog("Validation Set", width="large")
-def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, edit_idx: int = None) -> None:
+def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, prefix: str, flush_fn, edit_idx: int = None) -> None:
     is_edit = edit_idx is not None
     si = edit_idx if is_edit else len(sets)
     target_set = sets[edit_idx] if is_edit else {}
     
-    _name_key = f"bash_val_add_name_{si}_{nonce}"
-    _desc_key = f"bash_val_add_desc_{si}_{nonce}"
+    _name_key = f"{prefix}_val_add_name_{si}_{nonce}"
+    _desc_key = f"{prefix}_val_add_desc_{si}_{nonce}"
     
     if _name_key not in st.session_state:
         st.session_state[_name_key] = target_set.get("name", f"Set {si + 1}")
@@ -2177,7 +2177,7 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, edit_idx:
 
     st.markdown("**Steps & Commands**")
     
-    _steps_state_key = f"_bash_val_dialog_steps_{si}_{nonce}"
+    _steps_state_key = f"_{prefix}_val_dialog_steps_{si}_{nonce}"
     if _steps_state_key not in st.session_state:
         if is_edit:
             st.session_state[_steps_state_key] = copy.deepcopy(target_set.get("steps", []))
@@ -2202,7 +2202,7 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, edit_idx:
         btn_label = "Save Set"
         if st.button(btn_label, type="primary", use_container_width=True):
             _push_undo({"desc": f"{'edit' if is_edit else 'add'} validation set", "type": "cmd",
-                        "state_key": "bash_validation_sets", "data": copy.deepcopy(sets)})
+                        "state_key": f"{prefix}_validation_sets", "data": copy.deepcopy(sets)})
             
             clean_steps = []
             for step in st.session_state[_steps_state_key]:
@@ -2226,17 +2226,18 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, edit_idx:
             else:
                 sets.append(new_set)
                 
-            st.session_state["bash_validation_sets"] = sets
-            st.session_state["bash_val_editor_nonce"] = nonce + 1
-            _flush_bash_config(project)
+            st.session_state[f"{prefix}_validation_sets"] = sets
+            st.session_state[f"{prefix}_val_editor_nonce"] = nonce + 1
+            flush_fn(project)
             st.rerun()
 
 
-def _render_bash_validation(project: dict) -> None:
-    """Validation sub-tab for Bash-Bot: Pass/Fail sets using inline data_editor."""
+def _render_validation_sets_ui(project: dict, prefix: str, flush_fn) -> None:
+    """Validation sub-tab: Pass/Fail sets using inline data_editor."""
 
-    sets = list(st.session_state.get("bash_validation_sets", []))
-    nonce = st.session_state.get("bash_val_editor_nonce", 0)
+    state_key = f"{prefix}_validation_sets"
+    sets = list(st.session_state.get(state_key, []))
+    nonce = st.session_state.get(f"{prefix}_val_editor_nonce", 0)
 
     with st.container(border=True):
         st.subheader("✓ Pass/Fail Validation")
@@ -2257,36 +2258,36 @@ def _render_bash_validation(project: dict) -> None:
                     with hc_desc:
                         st.caption(_desc if _desc else "_No description_")
                     with hc_enabled:
-                        en_key = f"bash_val_en_{si}_{nonce}"
+                        en_key = f"{prefix}_val_en_{si}_{nonce}"
                         new_enabled = st.checkbox("Enabled", value=active_set.get("enabled", True), key=en_key)
                         
                         if active_set.get("enabled", True) != new_enabled:
                             active_set["enabled"] = new_enabled
-                            st.session_state["bash_validation_sets"] = sets
-                            _flush_bash_config(project)
+                            st.session_state[state_key] = sets
+                            flush_fn(project)
 
                     with hc_edit:
-                        if st.button("View / Edit", key=f"btn_bash_val_edit_{si}", use_container_width=True):
-                            _edit_validation_set_dialog(project, sets, nonce, edit_idx=si)
+                        if st.button("View / Edit", key=f"btn_{prefix}_val_edit_{si}", use_container_width=True):
+                            _edit_validation_set_dialog(project, sets, nonce, prefix, flush_fn, edit_idx=si)
                     with hc_del:
-                        if st.button("✕", key=f"btn_bash_val_del_{si}", use_container_width=True, help="Remove validation set"):
+                        if st.button("✕", key=f"btn_{prefix}_val_del_{si}", use_container_width=True, help="Remove validation set"):
                             mutation = ("delete", si)
 
             if mutation:
                 op, target_idx = mutation
                 if op == "delete":
                     _push_undo({"desc": f"delete set '{sets[target_idx].get('name', '')}'",
-                                "type": "cmd", "state_key": "bash_validation_sets",
+                                "type": "cmd", "state_key": state_key,
                                 "data": copy.deepcopy(sets)})
                     sets.pop(target_idx)
-                    st.session_state["bash_validation_sets"] = sets
-                    st.session_state["bash_val_editor_nonce"] = nonce + 1
-                    _flush_bash_config(project)
+                    st.session_state[state_key] = sets
+                    st.session_state[f"{prefix}_val_editor_nonce"] = nonce + 1
+                    flush_fn(project)
                     st.rerun()
 
     # ── Add Validation Set ────────────────────────────────────────────────────
-    if st.button("＋ Add Validation Set", key="btn_add_set_bash", type="primary"):
-        _edit_validation_set_dialog(project, sets, nonce)
+    if st.button("＋ Add Validation Set", key=f"btn_add_set_{prefix}", type="primary"):
+        _edit_validation_set_dialog(project, sets, nonce, prefix, flush_fn)
 
 
 
@@ -2295,11 +2296,11 @@ def _render_bash_bot_config(project: dict) -> None:
     """Top-level config renderer for Bash-Bot projects (2 sub-tabs: Runtime, Metrics)."""
     st.divider()
 
-    sub_runtime, sub_validation = st.tabs(["🖥  Runtime", "📐  Validation"])
+    sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
     with sub_runtime:
         _render_bash_runtime(project)
-    with sub_validation:
-        _render_bash_validation(project)
+    with sub_val:
+        _render_validation_sets_ui(project, "bash", _flush_bash_config)
 
 
 # ── Shared Metrics Matrix widget ───────────────────────────────────────────────
@@ -2483,8 +2484,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "prompts":             _prompts,
         "commands":            _commands,
         "timeout":             st.session_state.get("llama_cli_timeout", 120),
-        "validation_commands": st.session_state.get("llama_cli_validation_commands", []),
-        "fail_patterns":       st.session_state.get("llama_cli_fail_patterns", []),
+        "validation_sets":     st.session_state.get("llama_cli_validation_sets", []),
         "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
     })
     from core.settings_store import save_settings
@@ -3416,8 +3416,8 @@ def _render_llama_cli_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-CLI bot configuration."""
     st.divider()
 
-    sub_runtime, sub_inputs = st.tabs(["🖥  Runtime", "📐  Metrics Setup"])
+    sub_runtime, sub_inputs = st.tabs(["🖥  Runtime", "✅  Validation"])
     with sub_runtime:
         _render_llama_cli_runtime(project)
     with sub_inputs:
-        _render_llama_cli_metrics_setup(project)
+        _render_llama_cli_validation(project)
