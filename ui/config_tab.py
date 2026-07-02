@@ -1862,9 +1862,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                                 en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
                                 cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
                             with cc4:
-                                if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
-                                    _val_del_cmd(si, ci)
-                                    st.rerun()
+                                st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
                             
                             sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
                             if sys_key not in st.session_state:
