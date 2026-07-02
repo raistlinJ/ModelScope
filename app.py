@@ -135,9 +135,8 @@ def _show_add_project_dialog() -> None:
     bot_type = st.selectbox(
         "Bot Type",
         options=["Bash-Bot", "Llama-Server-Bot"],
-        help="Choose the type of bot for this project. AI-Agent is coming soon.",
+        help="Choose the type of bot for this project.",
     )
-    st.caption("AI-Agent is coming soon!")
     _TYPE_MAP = {
         "Bash-Bot": "bash_bot",
         "Llama-Server-Bot": "llama_cli_bot",
