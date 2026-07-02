@@ -1,14 +1,20 @@
 # ModelScope CLI Reference
 
-All CLI commands must be run from the `ModelScope/` directory, or via the installed `modelscope` entry point after `pip install -e .`.
+All CLI commands must be run from the `ModelScope/` directory.
+
+If you have installed the project into your environment (`pip install -e .`), you can use the `modelscope` entry point:
+```bash
+modelscope project --file my_project.json
+```
+
+Otherwise, if you are running it directly from the repository, be sure to use the virtual environment's python executable:
+```bash
+.venv/bin/python cli.py project --file my_project.json
+```
 
 ## `project` — run exported UI projects
 
 You can export a bot's configuration from the ModelScope UI as a JSON file and run it entirely headlessly via the CLI. The CLI will automatically create the correct environment (Local, SSH, PCT) and run the evaluation logic.
-
-```bash
-modelscope project --file my_project.json
-```
 
 | Flag | Description |
 |------|-------------|

@@ -2,7 +2,8 @@
 """ModelScope CLI — terminal-only evaluation runner.
 
 Entry points:
-    python cli.py scenarios                         # list scenarios
+    python cli.py project --file proj.json           # run an exported project
+    python cli.py scenarios                          # list scenarios
     python cli.py run --model qwen --scenario "..."  # single run
     python cli.py batch --jobs-file jobs.json        # batch queue
     python cli.py sessions list                      # browse past sessions
@@ -13,12 +14,16 @@ Backward compat:
     python cli.py --model qwen ...                   # auto-inserts 'run'
 
 Examples:
+    python cli.py project --file bash_project.json
     python cli.py --list-scenarios
     python cli.py --backend llama.cpp --model my-model --scenario "Scenario 1 – File Creation"
     python cli.py run --model qwen2.5 --scenario "Scenario 1 – File Creation" --dry-run
     python cli.py batch --jobs-file jobs.json --parallel 2
     python cli.py sessions list
     python cli.py sessions show 828cc8a1
+
+Note: If running directly from the repository without activating the virtual environment, prefix with `.venv/bin/`:
+    .venv/bin/python cli.py project --file my_project.json
 """
 
 from __future__ import annotations
