@@ -2594,8 +2594,14 @@ def _scan_models(project: dict) -> None:
             env.close()
     st.session_state["llama_cli_discovered_models"] = models
     if not models:
+        st.session_state["llama_cli_model_name"] = ""
         st.warning("No .gguf models found in that directory.")
     else:
+        # If the previously selected model isn't in the new scan results, auto-select the first one
+        current = st.session_state.get("llama_cli_model_name", "")
+        new_names = [m["name"] for m in models]
+        if current not in new_names:
+            st.session_state["llama_cli_model_name"] = new_names[0]
         st.success(f"Found {len(models)} model(s).")
     st.rerun()
 
@@ -2848,13 +2854,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
             for m in discovered:
                 if m["name"] not in model_names:
                     model_names.append(m["name"])
-            
+
             current = st.session_state.get("llama_cli_model_name", "")
-            if current and current not in model_names:
-                model_names.insert(0, current)
-            
             default_idx = model_names.index(current) if current in model_names else 0
-            
+
             if model_names:
                 chosen = st.selectbox(
                     "Model", options=model_names, index=default_idx,

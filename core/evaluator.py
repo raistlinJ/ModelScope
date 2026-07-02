@@ -1097,6 +1097,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
     if backend == "llama-server (managed)":
         model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+        if target == "local":
+            model_path = os.path.abspath(os.path.expanduser(model_path))
         if not model_path:
             on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
             telemetry["run_aborted"] = True
@@ -1180,6 +1182,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             binary = corrected
 
         model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+        if target == "local":
+            model_path = os.path.abspath(os.path.expanduser(model_path))
         if not model_path:
             on_log("[ERROR] No model selected. Configure a model in the Runtime tab.")
             telemetry["run_aborted"] = True
