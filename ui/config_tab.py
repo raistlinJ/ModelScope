@@ -1850,7 +1850,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
     if backend == "Ollama":
         _url = st.text_input(
             "Ollama Server URL",
-            key=f"{pfx}_llm_helper_ollama_url",
+            key=f"{pfx}_llm_helper_ollama_url_widget",
             value=st.session_state.get(f"{pfx}_llm_helper_ollama_url", "http://localhost:11434"),
         )
         st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
@@ -1874,14 +1874,14 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_ollama_model_sel")
             st.session_state[f"{pfx}_llm_helper_model"] = _chosen
         else:
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
             st.session_state[f"{pfx}_llm_helper_model"] = _man
 
     else:
         # OpenAI-Compatible
         _url = st.text_input(
             "Instance URL",
-            key=f"{pfx}_llm_helper_openai_url",
+            key=f"{pfx}_llm_helper_openai_url_widget",
             value=st.session_state.get(f"{pfx}_llm_helper_openai_url", ""),
             placeholder="http://localhost:8080",
             help="Base URL of any OpenAI-compatible server. Do not include /v1.",
@@ -1900,7 +1900,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 st.warning("Enter a valid URL.")
         _apikey = st.text_input(
             "API Key (optional)",
-            key=f"{pfx}_llm_helper_openai_apikey",
+            key=f"{pfx}_llm_helper_openai_apikey_widget",
             type="password",
             value=st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""),
         )
@@ -1913,7 +1913,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             _chosen = st.selectbox("Model", options=_model_names, index=_idx, key=f"{pfx}_llm_helper_openai_model_sel")
             st.session_state[f"{pfx}_llm_helper_model"] = _chosen
         else:
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
+            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget", value=st.session_state.get(f"{pfx}_llm_helper_model", ""))
             st.session_state[f"{pfx}_llm_helper_model"] = _man
 
 def _render_bash_runtime(project: dict) -> None:
