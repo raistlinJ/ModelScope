@@ -1559,7 +1559,9 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
 
                     _cmd_type = cmd.get("type", "command")
                     if _cmd_type == "prompt":
-                        cc1, cc2, cc3, cc4 = st.columns([6.0, 1.5, 1.0, 0.7])
+                        cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                        with cc0:
+                            st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                         with cc1:
                             st.markdown("**LLM Prompt**")
                         with cc2:
@@ -1583,8 +1585,10 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                         cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...")
                         st.write("")
                     else:
-                        # Single flat row: command | timeout | long-running | enabled | delete
-                        cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
+                        # Single flat row: indicator | command | timeout | long-running | enabled | delete
+                        cc0, cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([0.3, 4.7, 0.8, 1.0, 1.0, 1.0, 0.7])
+                        with cc0:
+                            st.markdown("<div style='margin-top:8px; font-size:18px;' title='Command'>💻</div>", unsafe_allow_html=True)
                         with cc1:
                             cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
                             if cmd_key not in st.session_state:
