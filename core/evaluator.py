@@ -999,6 +999,133 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             on_log(f"[STDERR] {res['stderr'][:400]}", "shell")
         return res
 
+    def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT") -> dict:
+        if not prompt_text:
+            return {}
+        
+        nonlocal binary
+        if backend.lower().startswith("openai"):
+            base_url   = (config.get("openai_base_url") or "").strip()
+            if not base_url:
+                on_log("[ERROR] No Base URL configured for OpenAI backend.", "llama")
+                return {"exit_code": 1, "stderr": "No Base URL"}
+            
+            on_log(f"[{label}] {prompt_text[:80]}...", "llama")
+            try:
+                tool_calls, response = _run_llm_agent_loop(
+                    base_url, model_name, prompt_text, tools, tokens,
+                    mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
+                    max_turns=max_iter, deadline=eval_deadline,
+                )
+                on_log(f"[RESPONSE] {response[:400]}", "llama")
+                telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
+                telemetry["tool_calls"].extend(tool_calls)
+                return {"stdout": response, "exit_code": 0}
+            except Exception as exc:
+                on_log(f"[ERROR] HTTP request failed: {exc}", "llama")
+                return {"stdout": "", "stderr": str(exc), "exit_code": 1}
+                
+        else: # llama-cli
+            if os.path.basename(binary) in ("llama-server", "llama-server.exe"):
+                corrected = os.path.join(os.path.dirname(binary), "llama-cli")
+                on_log(f"[WARN] Auto-correcting llama-server to llama-cli: {corrected}", "llama")
+                binary = corrected
+
+            model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+            if config.get("execution_target", "local") == "local":
+                model_path = os.path.abspath(os.path.expanduser(model_path))
+            if not model_path:
+                on_log("[ERROR] No model selected.", "llama")
+                return {"exit_code": 1}
+
+            sys_prompt_parts = [
+                "You are an autonomous AI agent. You MUST call the appropriate tool rather than describing steps.",
+                "When you need to perform an action, respond ONLY with a tool call in this exact format (no other text):",
+                '<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>',
+                "",
+                "Available tools:",
+            ]
+            for t in tools:
+                fn = t["function"]
+                props = fn.get("parameters", {}).get("properties", {})
+                arg_names = ", ".join(props.keys())
+                if arg_names:
+                    sys_prompt_parts.append(f'  {fn["name"]}({arg_names}): {fn["description"]}')
+                else:
+                    sys_prompt_parts.append(f'  {fn["name"]}: {fn["description"]}')
+            tool_sys_prompt = "\n".join(sys_prompt_parts) if tools else ""
+
+            safe_prompt = shlex.quote(prompt_text)
+            sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
+            custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
+            model_path_quoted = f'\"$HOME/\"{shlex.quote(model_path[2:])}' if model_path.startswith("~/") else shlex.quote(model_path)
+            
+            cmd = (
+                f"{binary}"
+                f" -m {model_path_quoted}"
+                f" -c {tokens}"
+                f"{f' --temp {temperature}' if en_temp else ''}"
+                f"{f' -ngl {gpu_layers}' if en_gpu_layers else ''}"
+                f"{f' -t {threads}' if en_threads else ''}"
+                f"{f' --top-k {top_k}' if en_top_k else ''}"
+                f"{f' --top-p {top_p}' if en_top_p else ''}"
+                f"{f' --min-p {min_p}' if en_min_p else ''}"
+                f"{f' --repeat-penalty {repeat_penalty}' if en_repeat_penalty else ''}"
+                f"{f' --freq-penalty {freq_penalty}' if en_freq_penalty else ''}"
+                f"{f' -n {predict}' if en_predict else ' -n 512'}"
+                f"{f' --seed {seed}' if en_seed else ''}"
+                f"{f' --rope-freq-base {rope_freq_base}' if en_rope_freq_base else ''}"
+                f"{f' --rope-freq-scale {rope_freq_scale}' if en_rope_freq_scale else ''}"
+                f"{' -fa' if flash_attn else ''}"
+                f"{sys_flag}"
+                f"{custom_flag_str}"
+                f" --prompt {safe_prompt}"
+                f" --simple-io --no-display-prompt --single-turn"
+            )
+            if _use_sudo:
+                if _sudo_pw:
+                    cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+                else:
+                    cmd = f"sudo {cmd}"
+
+            on_log(f"[{label}] {prompt_text[:80]}...", "llama")
+            res = env.execute(cmd, timeout=timeout)
+            
+            if res.get("stderr"):
+                on_log(f"[BACKEND] {res['stderr'][:600]}", "shell")
+            if res.get("exit_code", 0) != 0 and not res.get("stdout", "").strip():
+                on_log(f"[ERROR] llama-cli exited with code {res['exit_code']}", "llama")
+                
+            response = res.get("stdout", "").strip()
+            on_log(f"[RESPONSE] {response[:400]}", "llama")
+            telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
+            telemetry["tool_calls"].append({
+                "tool": "llama-cli",
+                "args": {"prompt": prompt_text},
+                "result": res,
+                "exit_code": res.get("exit_code", -1),
+            })
+            
+            # Execute inline tool calls
+            inline_calls = _parse_inline_tool_calls(response)
+            for tc in inline_calls:
+                fn   = tc.get("function", {})
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+                on_log(f"[TOOL] Executing {name}({args})", "llama")
+                result = _execute_tool(env, name, args, mcp_running, mcp_server_url)
+                on_log(f"[TOOL RESULT] {str(result)[:300]}", "llama")
+                telemetry["tool_calls"].append({
+                    "tool": name,
+                    "args": args,
+                    "result": result,
+                    "exit_code": result.get("exit_code", 0),
+                })
+            return res
+
     def _run_step_list(steps: list, label: str = "RUN") -> bool:
         for step_idx, step in enumerate(steps):
             if cancel_ref[0]:
@@ -1031,18 +1158,24 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     return False
                 if not cmd_obj.get("enabled", True):
                     continue
-                cmd_text = cmd_obj.get("command", "").strip()
-                if not cmd_text:
-                    continue
-                t = (3600 if cmd_obj.get("long_running")
-                     else int(cmd_obj.get("timeout_seconds", timeout)))
-                res = _exec_cmd(cmd_text, label=label, timeout_override=t)
-                telemetry["tool_calls"].append({
-                    "tool":      "bash",
-                    "args":      {"command": cmd_text},
-                    "result":    res,
-                    "exit_code": res.get("exit_code", -1),
-                })
+                
+                cmd_type = cmd_obj.get("type", "command")
+                if cmd_type == "prompt":
+                    prompt_text = (cmd_obj.get("prompt", "") or cmd_obj.get("command", "")).strip()
+                    if prompt_text:
+                        _exec_llama_prompt(prompt_text, label="PROMPT")
+                else:
+                    cmd_text = cmd_obj.get("command", "").strip()
+                    if not cmd_text:
+                        continue
+                    t = (3600 if cmd_obj.get("long_running") else int(cmd_obj.get("timeout_seconds", timeout)))
+                    res = _exec_cmd(cmd_text, label=label, timeout_override=t)
+                    telemetry["tool_calls"].append({
+                        "tool":      "bash",
+                        "args":      {"command": cmd_text},
+                        "result":    res,
+                        "exit_code": res.get("exit_code", -1),
+                    })
         return True
 
     if _use_sudo:
@@ -1083,16 +1216,15 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # call_mcp_tool("dummy", {}) always returns {"error": ...} (unknown tool),
     # so the old probe could never set mcp_running = True. probe_mcp_server()
     # only checks whether the JSON-RPC initialize exchange succeeds.
-    if not cancel_ref[0]:
-        _run_step_list(startup, label="STARTUP")
+    # Ensure MCP servers are running before executing steps that might contain prompts
+    if tools:
+        if probe_mcp_server(mcp_server_url):
+            mcp_running = True
+            on_log(f"[MCP] Broker detected at {mcp_server_url}", "shell")
+        else:
+            on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
 
-    if prompts:
-        if tools:
-            if probe_mcp_server(mcp_server_url):
-                mcp_running = True
-                on_log(f"[MCP] Broker detected at {mcp_server_url}", "shell")
-            else:
-                on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
+    if not cancel_ref[0]:
 
         on_log(f"[LLAMA-CLI] Starting — backend={backend}, model={model_name or '(none)'}", "llama")
 
