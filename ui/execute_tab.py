@@ -570,14 +570,19 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
     )
 
     llama_config = {
+        "type":                "llama_cli_bot",
         "backend":             cfg.get("backend", "llama.cpp"),
+        "backend_type":        cfg.get("backend", "llama.cpp"),
         "binary_path":         cfg.get("binary_path", "llama-cli"),
         "model_dir":           cfg.get("model_dir", ""),
         "model_name":          cfg.get("model_name", ""),
+        "selected_model":      cfg.get("model_name", ""),
         "tokens":              cfg.get("tokens", 2048),
+        "context_size":        cfg.get("tokens", 2048),
         "server_port":         cfg.get("server_port", 18080),
         "mcp_server_url":      "http://127.0.0.1:9191",
         "openai_base_url":     cfg.get("openai_base_url", ""),
+        "llm_url":             cfg.get("openai_base_url", ""),
         "openai_api_key":      cfg.get("openai_api_key", ""),
         "openai_verify_ssl":   cfg.get("openai_verify_ssl", True),
         "mcp_servers":         [s for s in cfg.get("mcp_servers", []) if s.get("enabled")],
