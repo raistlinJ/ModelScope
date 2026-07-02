@@ -770,7 +770,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
         on_log(f"[BASH] sudo access enabled — commands will run as root {mode}")
         
         # Preflight check for sudo auth
-        _sudo_check_cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -n -v"
+        _sudo_check_cmd = f"sudo -k; echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -k; sudo -n -v"
         _check_res = env.execute(_sudo_check_cmd, timeout=10)
         if _check_res.get("exit_code", -1) != 0:
             err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")

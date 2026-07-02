@@ -1,0 +1,28 @@
+{
+  "id": "test_bash",
+  "name": "CLI Test Project",
+  "type": "bash_bot",
+  "config": {
+    "execution_target": "local",
+    "bash_timeout": 60,
+    "startup_commands": [
+      {
+        "_id": 1,
+        "delay_seconds": 0,
+        "commands": [
+          {
+            "_id": 2,
+            "command": "echo 'Hello from CLI project mode!'",
+            "enabled": true,
+            "timeout_seconds": 10
+          }
+        ]
+      }
+    ],
+    "completion_commands": [],
+    "validation_commands": [],
+    "fail_patterns": [],
+    "metrics_matrix": [],
+    "validation_sets": []
+  }
+}
