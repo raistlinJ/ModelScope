@@ -89,7 +89,7 @@ def render() -> None:
     )
 
     # Canonical selectbox — keeps value space as "local" / "remote (SSH)" to
-    # match all consumers (execute_tab.py:176,281 / batch_tab.py:129 / comparison_tab.py:20).
+    # match all active execution consumers.
     st.radio(
         "Execution Mode",
         options=["local", "remote (SSH)", "pct (Proxmox LXC)"],

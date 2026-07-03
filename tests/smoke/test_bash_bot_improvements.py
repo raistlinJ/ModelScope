@@ -237,29 +237,80 @@ def test_ssh_connection_success(monkeypatch):
 
     result = state.get("bash_ssh_test_result")
     assert result["status"] == "success"
-    assert "Connected" in result["message"]
+    assert "Connection test succeeded" in result["message"]
 
 
 # ── 4. Dialog flag removal: _show_val_set_dialog no longer used ───────────────
 
 def test_no_show_val_set_dialog_flag_in_render_validation():
-    """_render_bash_validation must not reference _show_val_set_dialog as a trigger."""
+    """The validation-set renderer must not reference _show_val_set_dialog as a trigger."""
     import ast, inspect
-    from ui.config_tab import _render_bash_validation
-    source = inspect.getsource(_render_bash_validation)
+    from ui.config_tab import _render_validation_sets_ui
+    source = inspect.getsource(_render_validation_sets_ui)
     # The flag check should have been removed
     assert '_show_val_set_dialog' not in source, (
-        "_render_bash_validation still references _show_val_set_dialog; "
+        "_render_validation_sets_ui still references _show_val_set_dialog; "
         "the flag-based dialog trigger was not removed."
     )
 
 
 def test_no_behavioral_validation_in_render():
-    """_render_bash_validation must not contain 'Behavioral Validation' text."""
+    """The validation-set renderer must not contain 'Behavioral Validation' text."""
     import inspect
-    from ui.config_tab import _render_bash_validation
-    source = inspect.getsource(_render_bash_validation)
+    from ui.config_tab import _render_validation_sets_ui
+    source = inspect.getsource(_render_validation_sets_ui)
     assert "Behavioral Validation" not in source
+
+
+def test_no_metrics_matrix_in_llama_validation_tab():
+    """The Llama validation tab must only render validation sets."""
+    import inspect
+    from ui.config_tab import _render_llama_cli_validation
+    source = inspect.getsource(_render_llama_cli_validation)
+    assert "Metrics Matrix" not in source
+    assert "_render_metrics_matrix" not in source
+
+
+def test_llama_advanced_options_use_expected_defaults_and_keys():
+    """Advanced Options must seed the real config keys with evaluator defaults."""
+    with open("ui/config_tab.py") as f:
+        config_src = f.read()
+    with open("ui/execute_tab.py") as f:
+        execute_src = f.read()
+    with open("core/state.py") as f:
+        state_src = f.read()
+
+    for expected in (
+        'value_key_suffix="temperature"',
+        "default_value=0.8",
+        "default_value=99",
+        "default_value=4",
+        "default_value=40",
+        "default_value=0.9",
+        "default_value=0.1",
+        "default_value=1.1",
+        "default_value=0.0",
+        "default_value=512",
+        "default_value=-1",
+        "default_value=10000.0",
+        "default_value=1.0",
+    ):
+        assert expected in config_src
+
+    for expected in (
+        '"llama_cli_en_freq_penalty"',
+        '"llama_cli_freq_penalty"',
+        '"llama_cli_en_rope_freq_base"',
+        '"llama_cli_rope_freq_base"',
+        '"llama_cli_en_rope_freq_scale"',
+        '"llama_cli_rope_freq_scale"',
+        '"llama_cli_custom_flags"',
+    ):
+        assert expected in state_src
+
+    assert '"seed":                cfg.get("seed", -1)' in execute_src
+    assert '"rope_freq_base":      cfg.get("rope_freq_base", 10000.0)' in execute_src
+    assert '"rope_freq_scale":     cfg.get("rope_freq_scale", 1.0)' in execute_src
 
 
 # ── 5. Template integration in app.py ─────────────────────────────────────────
@@ -271,6 +322,16 @@ def test_app_imports_bash_templates():
         src = f.read()
     assert "BASH_BOT_TEMPLATES" in src
     assert "bash_templates" in src
+
+
+def test_app_does_not_render_batch_or_comparison_tabs():
+    """Batch Evaluation and Model Comparison should not be top-level app tabs."""
+    with open("app.py") as f:
+        src = f.read()
+    assert "Batch Evaluation" not in src
+    assert "Model Comparison" not in src
+    assert "batch_tab.render" not in src
+    assert "comparison_tab.render" not in src
 
 
 def test_template_config_deep_copied():

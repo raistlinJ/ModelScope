@@ -15,7 +15,7 @@ The target audience is security researchers and ML engineers who need reproducib
 ```
  +------------------------------------------------------------------+
  |  Streamlit GUI  (app.py)                                         |
- |          Model Comparison                                         |
+ |          Configuration / Execute / Analytical Dashboard           |
  +-----------------------------+------------------------------------+
                                | run_evaluation(env, config, on_log)
                                v
@@ -468,19 +468,9 @@ print(json.dumps(data, indent=2))
 
 ---
 
-## Batch Evaluation
+## CLI Batch Runs
 
-### GUI (Batch tab)
-
-1. Open the **Batch Evaluation** tab in the Streamlit UI.
-2. Add jobs via the **Add Job to Queue** form — set scenario, backend, model, priority, and optional prompt override.
-3. Review the queue table, reorder by priority, remove individual jobs.
-4. Click **Run Batch** — jobs execute sequentially by default.
-5. Download results as **CSV** or **JSON** when complete.
-
-Each result row shows: Label, Scenario, Model, Status, Latency, Token count, Passed metrics, Failed metrics.
-
-### CLI batch jobs file
+Batch evaluation is available from the CLI.
 
 The `--jobs-file` argument accepts a JSON array. Each object supports these fields:
 
@@ -494,7 +484,7 @@ The `--jobs-file` argument accepts a JSON array. Each object supports these fiel
 | `mcp_url` | no | MCP server URL |
 | `priority` | no | Integer job priority; lower numbers run first (default: `5`) |
 
-Note: `user_prompt` and `system_prompt` overrides are available in the GUI Batch tab (as prompt variants) but are not read from the CLI jobs file. The scenario's default prompts are used.
+Note: `user_prompt` and `system_prompt` overrides are not read from the CLI jobs file. The scenario's default prompts are used.
 
 Example `jobs.json`:
 
@@ -625,8 +615,6 @@ ModelScope/
 │   ├── target_tab.py          # Target tab: execution target (Local / SSH credential fields)
 │   ├── execute_tab.py         # Execute tab: run orchestration and live terminal output
 │   ├── dashboard_tab.py       # Analytical Dashboard: metric badges, tool traces, response
-│   ├── batch_tab.py           # Batch Evaluation: job queue, run, CSV/JSON download
-│   ├── comparison_tab.py      # Model Comparison: N-model side-by-side pass/fail table
 │   ├── judge_config.py        # AI Judge configuration and ground truth generation
 │   ├── workflow_config.py     # Per-scenario-type config panels; MCP preset/schema registry UI
 │   ├── preflight_tab.py       # Pre-flight check UI
@@ -674,8 +662,6 @@ All URLs are configurable from the UI or via CLI flags.
 
 | Tab | Purpose |
 |-----|---------|
-| Configuration | Model setup, scenario selection, metric matrix, MCP server controls, AI Judge, Platform Verification |
+| Configuration | Model setup, validation sets, MCP server controls, AI Judge, Platform Verification |
 | Target | Execution target selection: Local or SSH (credential fields visible only when SSH is selected) |
 | Execute Evaluation | Single-run orchestration with live color-coded terminal output and cancel support |
-| Batch Evaluation | Job queue management, parallel batch execution, CSV/JSON result download |
-| Model Comparison | Run one scenario across N models; side-by-side PASS/FAIL table with aggregate pass rate |

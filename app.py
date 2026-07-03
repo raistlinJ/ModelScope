@@ -9,7 +9,7 @@ from core.logsetup import configure_logging
 from core.settings_store import load_settings, save_settings
 from ui.components import status_pill
 from ui.styles import inject
-from ui import config_tab, execute_tab, dashboard_tab, batch_tab, comparison_tab
+from ui import config_tab, execute_tab, dashboard_tab
 # from ui import caf_tab, target_tab  # CAF/Target tabs hidden — re-enable when CAF bot type is implemented
 
 st.set_page_config(
@@ -30,8 +30,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 init_state()
-st.session_state.setdefault("batch_queue", [])
-st.session_state.setdefault("comparison_models", [])
 
 # ── Load persisted settings on first run only ──────────────────────────────────
 if not st.session_state.get("_settings_loaded"):
@@ -364,35 +362,14 @@ else:
 # tab_target = "🎯  Target"      → target_tab.render()
 # tab_caf    = "🤖  CyberAgentFlow" → caf_tab.render()
 
-if _active_bot_type == "bash_bot":
-    # Bash-Bot: Config + Execute + Dashboard.
-    # Batch Evaluation and Model Comparison are LLM-specific and not shown.
-    tab_cfg, tab_exec, tab_dash = st.tabs([
-        "⚙  Configuration",
-        "▶  Execute",
-        "📊  Analytical Dashboard",
-    ])
-    with tab_cfg:
-        config_tab.render()
-    with tab_exec:
-        execute_tab.render()
-    with tab_dash:
-        dashboard_tab.render()
-else:
-    tab_cfg, tab_exec, tab_dash, tab_batch, tab_compare = st.tabs([
-        "⚙  Configuration",
-        "▶  Execute",
-        "📊  Analytical Dashboard",
-        "🔄  Batch Evaluation",
-        "⚖  Model Comparison",
-    ])
-    with tab_cfg:
-        config_tab.render()
-    with tab_exec:
-        execute_tab.render()
-    with tab_dash:
-        dashboard_tab.render()
-    with tab_batch:
-        batch_tab.render()
-    with tab_compare:
-        comparison_tab.render()
+tab_cfg, tab_exec, tab_dash = st.tabs([
+    "⚙  Configuration",
+    "▶  Execute",
+    "📊  Analytical Dashboard",
+])
+with tab_cfg:
+    config_tab.render()
+with tab_exec:
+    execute_tab.render()
+with tab_dash:
+    dashboard_tab.render()

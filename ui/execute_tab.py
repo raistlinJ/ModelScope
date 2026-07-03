@@ -620,7 +620,11 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
         "en_predict":          cfg.get("en_predict", False),
         "predict":             cfg.get("predict", 512),
         "en_seed":             cfg.get("en_seed", False),
-        "seed":                cfg.get("seed", 42),
+        "seed":                cfg.get("seed", -1),
+        "en_rope_freq_base":   cfg.get("en_rope_freq_base", False),
+        "rope_freq_base":      cfg.get("rope_freq_base", 10000.0),
+        "en_rope_freq_scale":  cfg.get("en_rope_freq_scale", False),
+        "rope_freq_scale":     cfg.get("rope_freq_scale", 1.0),
         "cancel_requested_ref": cancel_ref,
         "active_project_id":   project.get("id"),
     }

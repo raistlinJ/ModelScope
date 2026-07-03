@@ -26,8 +26,8 @@ must not be imported from the CLI — see `core/__init__.py` for the exact list.
   dispatch table (`_EVALUATORS`), and `evaluate_metric()` / `make_metric()` /
   `format_criterion()`. This is the Strategy pattern: adding a metric means
   registering one function, never editing an if/elif chain.
-- **scenarios.py** — built-in named presets (`SCENARIOS`) bundling prompts,
-  validation command and a metrics matrix.
+- **scenarios.py** — built-in named presets (`SCENARIOS`) bundling prompts
+  and validation commands.
 
 ### `core/` — framework logic
 Pure / CLI-safe:
@@ -60,14 +60,12 @@ UI-coupled (import Streamlit — UI path only):
 - **state.py** — session-state defaults and scenario sync.
 - **llama_server.py** — local llama-server process lifecycle.
 - **mcp_manager.py** — MCP tool-server lifecycle + tool invocation.
-- **comparison.py** — model-comparison orchestration.
-- **batch_runner.py** — batch evaluation runner.
+- **batch_runner.py** — CLI batch evaluation runner.
 
 ### `ui/` — Streamlit tabs and components
 One module per tab (`config_tab`, `target_tab`, `execute_tab`, `caf_tab`,
-`dashboard_tab`, `batch_tab`, `comparison_tab`) plus shared `components`,
-`styles`, `terminal`. Tabs handle widgets and presentation only — they call into
-`core/` for any actual work.
+`dashboard_tab`) plus shared `components`, `styles`, `terminal`. Tabs handle
+widgets and presentation only — they call into `core/` for any actual work.
 
 
 ## Data flow: how a run happens

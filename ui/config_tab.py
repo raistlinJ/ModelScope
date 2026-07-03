@@ -2484,125 +2484,6 @@ def _render_bash_bot_config(project: dict) -> None:
         _render_validation_sets_ui(project, "bash", _flush_bash_config)
 
 
-# ── Shared Metrics Matrix widget ───────────────────────────────────────────────
-
-def _render_metrics_matrix(state_key: str, key_prefix: str) -> None:
-    """Reusable metrics matrix add/edit/delete UI (shared by bash and llama_cli bots)."""
-    matrix: list = st.session_state.get(state_key, [])
-
-    visible_cats = [c for c in CATEGORIES if not c.startswith("CAF-")]
-
-    with st.expander("+ Add metric"):
-        type_options: list[str] = []
-        for cat in visible_cats:
-            for mkey, info in METRIC_TYPES.items():
-                if info["category"] == cat:
-                    type_options.append(f"{cat}: {info['label']}")
-
-        existing_ids = {m.get("id", "") for m in matrix}
-        suggested_id = next(
-            f"M-{i:03d}" for i in range(1, 999)
-            if f"M-{i:03d}" not in existing_ids
-        )
-
-        c1, c2, c3 = st.columns([2, 3, 4])
-        new_id     = c1.text_input("ID",   value=suggested_id, key=f"_{key_prefix}_nm_id")
-        new_name   = c2.text_input("Name", placeholder="My Check", key=f"_{key_prefix}_nm_name")
-        type_label = c3.selectbox("Type",  options=type_options, key=f"_{key_prefix}_nm_type")
-
-        selected_type_key = ""
-        for mkey, info in METRIC_TYPES.items():
-            if f"{info['category']}: {info['label']}" == type_label:
-                selected_type_key = mkey
-                break
-
-        param_values: dict = {}
-        if selected_type_key:
-            type_info = METRIC_TYPES[selected_type_key]
-            if type_info["params"]:
-                st.caption(f"*{type_info['description']}*")
-                pcols = st.columns(min(3, len(type_info["params"])))
-                for i, param in enumerate(type_info["params"]):
-                    with pcols[i % 3]:
-                        pkey = f"_{key_prefix}_nm_p_{param['name']}"
-                        if param["type"] == "int":
-                            param_values[param["name"]] = st.number_input(
-                                param["label"], value=int(param.get("default", 0)),
-                                step=1, key=pkey,
-                            )
-                        elif param["type"] == "float":
-                            param_values[param["name"]] = st.number_input(
-                                param["label"], value=float(param.get("default", 0.0)),
-                                step=0.1, format="%.1f", key=pkey,
-                            )
-                        elif param["type"] == "bool":
-                            param_values[param["name"]] = st.checkbox(
-                                param["label"],
-                                value=bool(param.get("default", True)), key=pkey,
-                            )
-                        else:
-                            param_values[param["name"]] = st.text_input(
-                                param["label"],
-                                value=str(param.get("default", "")), key=pkey,
-                            )
-
-        if st.button("Add Metric", key=f"btn_{key_prefix}_add_metric"):
-            _errors = []
-            _id   = new_id.strip()
-            _name = new_name.strip()
-            if not _name:
-                _errors.append("Name is required.")
-            if not _id:
-                _errors.append("ID is required.")
-            elif not re.match(r"^M-\d{3}$", _id):
-                _errors.append("ID must match format M-NNN (e.g. M-001).")
-            elif _id in existing_ids:
-                _errors.append(f"ID **{_id}** is already used.")
-            if _errors:
-                for err in _errors:
-                    st.error(err)
-            else:
-                matrix.append({
-                    "id":      _id,
-                    "name":    _name,
-                    "type":    selected_type_key,
-                    "enabled": True,
-                    "params":  dict(param_values),
-                })
-                st.session_state[state_key] = matrix
-                st.rerun()
-
-    if matrix:
-        hcols = st.columns([1, 2, 3, 3, 4, 1])
-        for lbl, col in zip(["On", "ID", "Name", "Type", "Criterion", "Del"], hcols):
-            col.markdown(f"**{lbl}**")
-        st.divider()
-        to_delete = None
-        for i, m in enumerate(matrix):
-            rc      = st.columns([1, 2, 3, 3, 4, 1])
-            enabled = rc[0].checkbox(
-                "Include", value=m.get("enabled", True),
-                key=f"{key_prefix}_me_{i}_{m['id']}", label_visibility="collapsed",
-            )
-            matrix[i]["enabled"] = enabled
-            rc[1].code(m["id"])
-            rc[2].write(m["name"])
-            rc[3].markdown(type_badge(m.get("type", "")), unsafe_allow_html=True)
-            rc[4].markdown(
-                f'<span class="criterion">{html.escape(format_criterion(m))}</span>',
-                unsafe_allow_html=True,
-            )
-            if rc[5].button("✕", key=f"{key_prefix}_md_{i}"):
-                to_delete = i
-        if to_delete is not None:
-            del matrix[to_delete]
-            st.session_state[state_key] = matrix
-            st.rerun()
-        st.session_state[state_key] = matrix
-    else:
-        st.info("No metrics configured. Add one above.")
-
-
 # ── Llama-CLI Bot configuration ────────────────────────────────────────────────
 
 def _flush_llama_cli_config(project: dict) -> None:
@@ -3155,9 +3036,23 @@ def _render_llama_cli_runtime(project: dict) -> None:
 
 
         with st.expander("Advanced Options", expanded=False):
-            def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False):
+            def _adv_opt(
+                col,
+                label,
+                key_suffix,
+                min_v,
+                max_v,
+                step,
+                help_text,
+                is_float=False,
+                value_key_suffix=None,
+                default_value=None,
+            ):
                 with col:
                     st.session_state.setdefault(f"llama_cli_en_{key_suffix}", False)
+                    value_key = f"llama_cli_{value_key_suffix or key_suffix}"
+                    if default_value is not None:
+                        st.session_state.setdefault(value_key, default_value)
                     c1, c2 = st.columns([0.2, 0.8], gap="small")
                     with c1:
                         st.write("")
@@ -3169,27 +3064,38 @@ def _render_llama_cli_runtime(project: dict) -> None:
                             min_value=float(min_v) if is_float else int(min_v),
                             max_value=float(max_v) if is_float else int(max_v),
                             step=float(step) if is_float else int(step),
-                            key=f"llama_cli_{key_suffix}",
+                            key=value_key,
                             disabled=not _en,
                             help=help_text,
                             format="%.2f" if is_float else None
                         )
 
             adv_cols = st.columns(4)
-            _adv_opt(adv_cols[0], "Temperature", "temp", 0.0, 2.0, 0.1, "Higher values = more random (--temp).", True)
-            _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).")
-            _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).")
-            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).")
+            _adv_opt(
+                adv_cols[0],
+                "Temperature",
+                "temp",
+                0.0,
+                2.0,
+                0.1,
+                "Higher values = more random (--temp).",
+                True,
+                value_key_suffix="temperature",
+                default_value=0.8,
+            )
+            _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).", default_value=99)
+            _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).", default_value=4)
+            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
             
-            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True)
-            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True)
-            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True)
-            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True)
+            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
+            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
+            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
+            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
             
-            _adv_opt(adv_cols[0], "Predict", "predict", -1, 131072, 128, "Tokens to predict (-n).")
-            _adv_opt(adv_cols[1], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).")
-            _adv_opt(adv_cols[2], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True)
-            _adv_opt(adv_cols[3], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True)
+            _adv_opt(adv_cols[0], "Predict", "predict", -1, 131072, 128, "Tokens to predict (-n).", default_value=512)
+            _adv_opt(adv_cols[1], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
+            _adv_opt(adv_cols[2], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
+            _adv_opt(adv_cols[3], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
             
             with adv_cols[0]:
                 st.session_state.setdefault("llama_cli_flash_attn", False)
@@ -3481,14 +3387,8 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
 
 
 def _render_llama_cli_validation(project: dict) -> None:
-    """Validation sub-tab for Llama-CLI-Bot: Pass/Fail sets and Metrics."""
+    """Validation sub-tab for Llama-CLI-Bot pass/fail sets."""
     _render_validation_sets_ui(project, "llama_cli", _flush_llama_cli_config)
-
-    st.divider()
-
-    st.subheader("Metrics Matrix")
-    st.caption("Metrics evaluated against run telemetry after execution.")
-    _render_metrics_matrix("llama_cli_metrics_matrix", "llama")
 
     _flush_llama_cli_config(project)
 
