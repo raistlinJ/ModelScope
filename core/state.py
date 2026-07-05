@@ -147,6 +147,8 @@ _DEFAULTS: dict = {
     "sys_prompt":        "",
     "user_prompt":       "",
     "run_logs":          [],
+    "run_logs_setup":    [],
+    "run_logs_validation": [],
     "run_completed":     False,
     "cancel_requested":  False,
     "_run_in_progress":  False,
@@ -232,6 +234,12 @@ _BASH_DEFAULTS: dict = {
     # UI-only state — not in _BASH_KEY_MAP (not persisted to project config)
     "bash_val_editor_nonce":    0,   # bumped on add/delete/reset to invalidate data_editor baseline
     "bash_val_active_set_idx":  0,   # persists set selection; reset to 0 on project switch
+    # Judge configuration (scoped to project, not global)
+    "judge_enabled":     False,
+    "judge_provider":    "anthropic",
+    "judge_model":       "claude-sonnet-4-6",
+    "judge_temperature": 0.0,
+    "judge_mode":        "Score all responses",
 }
 
 _BASH_KEY_MAP: dict = {
@@ -258,6 +266,12 @@ _BASH_KEY_MAP: dict = {
     "bash_llm_helper_enabled":  "llm_helper_enabled",
     "bash_llm_helper_openai_models": "llm_helper_openai_models",
     "bash_llm_helper_ollama_models": "llm_helper_ollama_models",
+    # Judge configuration (scoped to project, persisted via keymap)
+    "judge_enabled":     "judge_enabled",
+    "judge_provider":    "judge_provider",
+    "judge_model":       "judge_model",
+    "judge_temperature": "judge_temperature",
+    "judge_mode":        "judge_mode",
 }
 
 _LLAMA_DEFAULTS: dict = {
@@ -326,6 +340,12 @@ _LLAMA_DEFAULTS: dict = {
     "llama_cli_llm_helper_enabled":  False,
     "llama_cli_llm_helper_openai_models": [],
     "llama_cli_llm_helper_ollama_models": [],
+    # Judge configuration (scoped to project, not global)
+    "judge_enabled":     False,
+    "judge_provider":    "anthropic",
+    "judge_model":       "claude-sonnet-4-6",
+    "judge_temperature": 0.0,
+    "judge_mode":        "Score all responses",
 }
 
 _LLAMA_KEY_MAP: dict = {
@@ -394,6 +414,12 @@ _LLAMA_KEY_MAP: dict = {
     "llama_cli_llm_helper_enabled":  "llm_helper_enabled",
     "llama_cli_llm_helper_openai_models": "llm_helper_openai_models",
     "llama_cli_llm_helper_ollama_models": "llm_helper_ollama_models",
+    # Judge configuration (scoped to project, persisted via keymap)
+    "judge_enabled":     "judge_enabled",
+    "judge_provider":    "judge_provider",
+    "judge_model":       "judge_model",
+    "judge_temperature": "judge_temperature",
+    "judge_mode":        "judge_mode",
 }
 
 # Streamlit widget keys that carry their own session-state entry independent of
@@ -418,6 +444,16 @@ _LLAMA_CACHE_KEYS: tuple = (
     "_llama_svc_cmd",
 )
 
+# Keys whose live values belong to the active project. Saved when switching
+# away; restored (or defaulted) when switching to a new project.
+_RUNTIME_SWAP_KEYS: tuple = (
+    "run_logs",
+    "run_logs_setup",
+    "run_logs_validation",
+    "run_completed",
+    "telemetry",
+)
+
 # Prefixes of *dynamic* widget keys whose names embed step/command IDs and
 # therefore cannot be enumerated statically.  On a project switch every
 # session-state key that starts with one of these prefixes is deleted so that
@@ -434,6 +470,8 @@ _LLAMA_CACHE_KEYS: tuple = (
 #                              _lr (checkbox/value), _to (number_input/value),
 #                              _delay (number_input/value), _toggle, _open
 #   llama_mcp_en_            – MCP server enable toggles (positional checkbox)
+#   bash_exec_vset_          – Execute-tab bash validation-set checkboxes
+#   llama_exec_vset_         – Execute-tab llama validation-set checkboxes
 _DYNAMIC_WIDGET_PREFIXES: tuple = (
     "_us_",
     "_sc_",
@@ -442,6 +480,8 @@ _DYNAMIC_WIDGET_PREFIXES: tuple = (
     "bash_val_editor_",     # data_editor widget keys (keyed by set index + nonce)
     "bash_val_name_",       # inline name text_input keys (keyed by set index + nonce)
     "bash_val_desc_",       # inline description text_input keys (keyed by set index + nonce)
+    "bash_exec_vset_",      # Execute-tab bash validation-set checkboxes (keyed by set index)
+    "llama_exec_vset_",     # Execute-tab llama validation-set checkboxes (keyed by set index)
 )
 
 
@@ -494,15 +534,16 @@ def sync_project(project_id: str) -> None:
     # holds the outgoing ID here — it is updated only at the end of this fn.
     _outgoing_pid = st.session_state.get("_last_active_project_id")
     if _outgoing_pid:
-        st.session_state[f"run_logs_{_outgoing_pid}"]      = st.session_state.get("run_logs", [])
-        st.session_state[f"run_completed_{_outgoing_pid}"] = st.session_state.get("run_completed", False)
-        st.session_state[f"telemetry_{_outgoing_pid}"]     = st.session_state.get("telemetry", {})
+        for _k in _RUNTIME_SWAP_KEYS:
+            st.session_state[f"{_k}_{_outgoing_pid}"] = st.session_state.get(_k, _DEFAULTS.get(_k))
 
-    # Restore the incoming project's previously saved run state (empty defaults
-    # on first visit so the Execute tab starts clean for a new project).
-    st.session_state["run_logs"]      = st.session_state.get(f"run_logs_{project_id}", [])
-    st.session_state["run_completed"] = st.session_state.get(f"run_completed_{project_id}", False)
-    st.session_state["telemetry"]     = st.session_state.get(f"telemetry_{project_id}", {})
+    for _k in _RUNTIME_SWAP_KEYS:
+        st.session_state[_k] = st.session_state.get(f"{_k}_{project_id}", _DEFAULTS.get(_k))
+
+    # Volatile flags — always reset on switch; can't resume a run mid-switch
+    st.session_state["_exec_phase"]      = ""
+    st.session_state["_run_in_progress"] = False
+    st.session_state["cancel_requested"] = False
 
     # ── Purge all dynamic step/command widget keys (both bot types) ───────────
     # Must happen unconditionally: a bash project's _sc_* keys could bleed into

@@ -429,6 +429,8 @@ def _render_bash_dashboard(project: dict) -> None:
     pid = project["id"]
     history_key = f"run_history_{pid}"
     history: list = st.session_state.get(history_key, [])
+    # Filter to only bash_bot runs (default for legacy entries without run_bot_type)
+    history = [h for h in history if h.get("run_bot_type", "bash_bot") == "bash_bot"]
 
     if not history:
         st.info("No runs yet for this project — go to **Execute** and run it.")
@@ -608,6 +610,8 @@ def _render_llama_cli_dashboard(project: dict) -> None:
     pid         = project["id"]
     history_key = f"run_history_{pid}"
     history: list = st.session_state.get(history_key, [])
+    # Filter to only llama_cli_bot runs (excludes legacy/other bot-type entries)
+    history = [h for h in history if h.get("run_bot_type") == "llama_cli_bot"]
 
     if not history:
         st.info("No runs yet for this project — go to **Execute** and run it.")
