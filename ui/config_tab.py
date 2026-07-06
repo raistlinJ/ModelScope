@@ -58,7 +58,7 @@ def _show_delete_project_dialog(project_id: str) -> None:
     if not proj:
         st.rerun()
         return
-    st.warning(f"Permanently delete **{proj['name']}**? You can undo this with the ↩ Undo button in the sidebar.")
+    st.warning(f"Permanently delete **{proj['name']}**?")
     _, c1, c2 = st.columns([2, 1, 1.5])
     with c1:
         if st.button("Delete", type="primary", use_container_width=True):
@@ -255,6 +255,12 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", []),
+        # Judge configuration (scoped to project, not global)
+        "judge_enabled":     st.session_state.get("judge_enabled", False),
+        "judge_provider":    st.session_state.get("judge_provider", "anthropic"),
+        "judge_model":       st.session_state.get("judge_model", "claude-sonnet-4-6"),
+        "judge_temperature": st.session_state.get("judge_temperature", 0.0),
+        "judge_mode":        st.session_state.get("judge_mode", "Score all responses"),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1479,6 +1485,12 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", []),
+        # Judge configuration (scoped to project, not global)
+        "judge_enabled":     st.session_state.get("judge_enabled", False),
+        "judge_provider":    st.session_state.get("judge_provider", "anthropic"),
+        "judge_model":       st.session_state.get("judge_model", "claude-sonnet-4-6"),
+        "judge_temperature": st.session_state.get("judge_temperature", 0.0),
+        "judge_mode":        st.session_state.get("judge_mode", "Score all responses"),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
