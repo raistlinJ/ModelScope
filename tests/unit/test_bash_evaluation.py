@@ -136,17 +136,26 @@ class TestRunBashEvaluationSudo:
     def test_sudo_prefix_applied_to_legacy_commands(self):
         env = _env()
         run_bash_evaluation(
-            env, _cfg(startup_commands=["whoami"], bash_sudo=True), _log()
+            env, _cfg(startup_commands=["whoami"], sudo=True), _log()
         )
-        env.execute.assert_called_once_with("sudo whoami", timeout=60)
+        # First call is the sudo-auth preflight check, second is the actual command.
+        env.execute.assert_called_with("sudo whoami", timeout=60)
+        assert env.execute.call_args_list == [
+            call("sudo -k; sudo -n -v", timeout=10),
+            call("sudo whoami", timeout=60),
+        ]
 
     def test_sudo_prefix_applied_to_step_format(self):
         env = _env()
         step = {"delay_seconds": 0, "commands": [{"command": "id", "enabled": True}]}
         run_bash_evaluation(
-            env, _cfg(startup_commands=[step], bash_sudo=True), _log()
+            env, _cfg(startup_commands=[step], sudo=True), _log()
         )
-        env.execute.assert_called_once_with("sudo id", timeout=60)
+        env.execute.assert_called_with("sudo id", timeout=60)
+        assert env.execute.call_args_list == [
+            call("sudo -k; sudo -n -v", timeout=10),
+            call("sudo id", timeout=60),
+        ]
 
     def test_no_sudo_by_default(self):
         env = _env()

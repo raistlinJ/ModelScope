@@ -147,9 +147,12 @@ _DEFAULTS: dict = {
     "sys_prompt":        "",
     "user_prompt":       "",
     "run_logs":          [],
+    "run_logs_setup":      [],
+    "run_logs_validation": [],
     "run_completed":     False,
     "cancel_requested":  False,
     "_run_in_progress":  False,
+    "_exec_phase":       "",
 
     # Telemetry (current run)
     "telemetry": {},
@@ -418,6 +421,34 @@ _LLAMA_CACHE_KEYS: tuple = (
     "_llama_svc_cmd",
 )
 
+# LLM Helper ("LLM Judge") panel widget keys, shared by both bot types via the
+# {pfx}_llm_helper_* pattern in ui.config_tab._render_llm_prompt_helper_tab.
+# Every widget there passes key= together with value=/index=, which Streamlit
+# only honours the very first time that key is ever rendered in the session —
+# every render after that ignores value=/index= and just shows whatever the
+# widget key already holds. Left uncleared, a project's LLM Judge settings
+# would keep showing up (pre-filled, not blank) for every other/new project.
+_LLM_HELPER_WIDGET_SUFFIXES: tuple = (
+    "_llm_helper_enabled_widget",
+    "_llm_helper_backend_sel",
+    "_llm_helper_ollama_url_widget",
+    "_llm_helper_ollama_model_sel",
+    "_llm_helper_ollama_model_manual_widget",
+    "_llm_helper_openai_url_widget",
+    "_llm_helper_openai_apikey_widget",
+    "_llm_helper_openai_verify_ssl_widget",
+    "_llm_helper_openai_model_sel",
+    "_llm_helper_openai_model_manual_widget",
+)
+
+
+def _clear_llm_helper_widget_keys() -> None:
+    """Delete both bots' LLM Judge widget keys so they re-seed from the
+    freshly loaded working-copy values instead of showing stale state."""
+    for pfx in ("bash", "llama_cli"):
+        for suffix in _LLM_HELPER_WIDGET_SUFFIXES:
+            st.session_state.pop(f"{pfx}{suffix}", None)
+
 # Prefixes of *dynamic* widget keys whose names embed step/command IDs and
 # therefore cannot be enumerated statically.  On a project switch every
 # session-state key that starts with one of these prefixes is deleted so that
@@ -476,10 +507,11 @@ def sync_project(project_id: str) -> None:
     across projects do not bleed the previous project's content into the next
     render.
 
-    The current run's logs, completion flag, and telemetry are saved under the
-    outgoing project's key and restored from the incoming project's key, so
-    each project retains its own log history.  Only the "Clear Log" button
-    actually discards run state from session memory.
+    The current run's logs (including the Bash-Bot/Llama-Server-Bot per-phase
+    run_logs_setup / run_logs_validation panes), completion flag, and telemetry
+    are saved under the outgoing project's key and restored from the incoming
+    project's key, so each project retains its own log history.  Only the
+    "Clear Log" button actually discards run state from session memory.
     """
     projects = st.session_state.get("projects", [])
     project  = next((p for p in projects if p["id"] == project_id), None)
@@ -492,22 +524,39 @@ def sync_project(project_id: str) -> None:
     # Save the current run state under the outgoing project key so it can be
     # restored when the user switches back.  _last_active_project_id still
     # holds the outgoing ID here — it is updated only at the end of this fn.
+    #
+    # run_logs_setup / run_logs_validation are the Bash-Bot and Llama-Server-Bot
+    # Execute tabs' per-phase log panes — they must round-trip per project
+    # exactly like run_logs, run_completed, and telemetry, or the previous
+    # project's Setup and Validation logs stay on screen after switching.
     _outgoing_pid = st.session_state.get("_last_active_project_id")
     if _outgoing_pid:
-        st.session_state[f"run_logs_{_outgoing_pid}"]      = st.session_state.get("run_logs", [])
-        st.session_state[f"run_completed_{_outgoing_pid}"] = st.session_state.get("run_completed", False)
-        st.session_state[f"telemetry_{_outgoing_pid}"]     = st.session_state.get("telemetry", {})
+        st.session_state[f"run_logs_{_outgoing_pid}"]            = st.session_state.get("run_logs", [])
+        st.session_state[f"run_logs_setup_{_outgoing_pid}"]      = st.session_state.get("run_logs_setup", [])
+        st.session_state[f"run_logs_validation_{_outgoing_pid}"] = st.session_state.get("run_logs_validation", [])
+        st.session_state[f"run_completed_{_outgoing_pid}"]       = st.session_state.get("run_completed", False)
+        st.session_state[f"telemetry_{_outgoing_pid}"]           = st.session_state.get("telemetry", {})
 
     # Restore the incoming project's previously saved run state (empty defaults
     # on first visit so the Execute tab starts clean for a new project).
-    st.session_state["run_logs"]      = st.session_state.get(f"run_logs_{project_id}", [])
-    st.session_state["run_completed"] = st.session_state.get(f"run_completed_{project_id}", False)
-    st.session_state["telemetry"]     = st.session_state.get(f"telemetry_{project_id}", {})
+    st.session_state["run_logs"]            = st.session_state.get(f"run_logs_{project_id}", [])
+    st.session_state["run_logs_setup"]      = st.session_state.get(f"run_logs_setup_{project_id}", [])
+    st.session_state["run_logs_validation"] = st.session_state.get(f"run_logs_validation_{project_id}", [])
+    st.session_state["run_completed"]       = st.session_state.get(f"run_completed_{project_id}", False)
+    st.session_state["telemetry"]           = st.session_state.get(f"telemetry_{project_id}", {})
+
+    # Volatile display-only flags — always reset on switch; a run can't be
+    # "in progress" or mid-phase for a project you just navigated to.
+    st.session_state["_exec_phase"] = ""
 
     # ── Purge all dynamic step/command widget keys (both bot types) ───────────
     # Must happen unconditionally: a bash project's _sc_* keys could bleed into
     # an llama project's _us_* rendering if a step _id happens to match.
     _clear_dynamic_widget_keys()
+
+    # ── Purge LLM Judge widget keys (both bot types) — see docstring above
+    # _clear_llm_helper_widget_keys for why this must also be unconditional.
+    _clear_llm_helper_widget_keys()
 
     # 1. Reset all bash/llama working-copy keys to their defaults so that any
     #    inactive bot-type keys do not survive a project switch.

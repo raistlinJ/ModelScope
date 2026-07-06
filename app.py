@@ -1,9 +1,7 @@
 import copy
 import uuid
 import streamlit as st
-from config.defaults import DEFAULT_CONTEXT_SIZE, MIN_CONTEXT_SIZE
 from core.state import init_state, sync_project
-from core.models import scan_gguf_models
 from core import llama_server
 from core.logsetup import configure_logging
 from core.settings_store import load_settings, save_settings
@@ -166,7 +164,6 @@ def _show_add_project_dialog() -> None:
             "llm_helper_enabled": False,
             "llm_helper_openai_models": [], "llm_helper_ollama_models": [],
         },
-        "ai_agent": {},
     }
 
     _template_key = "blank"
@@ -222,7 +219,7 @@ if st.session_state.pop("_show_new_project_dialog", False):
 
 
 # ── Sidebar: project list ──────────────────────────────────────────────────────
-_BOT_ICON = {"bash_bot": "💻", "llama_cli_bot": "🦙", "ai_agent": "🤖"}
+_BOT_ICON = {"bash_bot": "💻", "llama_cli_bot": "🦙"}
 
 with st.sidebar:
     st.markdown("## ModelScope")
@@ -303,59 +300,10 @@ elif _active_bot_type == "llama_cli_bot":
         _pills += status_pill(f"Project: {_active_proj['name']}", "up")
     st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
 else:
-    # LLM-based bots: show the full model status bar
-    _backend     = st.session_state.get("backend_type", "llama.cpp")
-    _model       = st.session_state.get("selected_model") or "not chosen"
-    _running     = st.session_state.get("llama_server_running", False)
-    _ctx         = st.session_state.get("context_size", DEFAULT_CONTEXT_SIZE)
-    _mcp_on      = st.session_state.get("mcp_running", False)
-    _tool_foc    = st.session_state.get("tool_focus", "")
-    _src_mode    = st.session_state.get("model_source_mode", "pre_compiled_local")
-    _is_remote   = _src_mode == "pre_compiled_remote"
-    _process     = st.session_state.get("llama_server_process")
-    _crashed     = st.session_state.get("llama_server_crashed", False)
-
-    if _is_remote:
-        _srv_state = "up";  _srv_label = f"{_backend}: remote"
-    elif _running:
-        _srv_state = "up";  _srv_label = f"{_backend}: running"
-    elif _backend == "ollama":
-        _srv_state = "wait"; _srv_label = f"{_backend}: stopped"
-    elif _crashed:
-        _srv_state = "down"; _srv_label = f"{_backend}: crashed"
-    else:
-        _srv_state = "wait"; _srv_label = f"{_backend}: stopped"
-
-    _mod_state   = "up" if _model != "not chosen" else "wait"
-    _ctx_state   = "up" if _ctx >= MIN_CONTEXT_SIZE else "wait"
-    _model_label = _model.split("/")[-1] if "/" in _model else _model
-    _pills = (
-        status_pill(f"Model: {_model_label}", _mod_state)
-        + status_pill(_srv_label, _srv_state)
-        + status_pill(f"ctx: {_ctx:,}", _ctx_state)
-        + status_pill(f"MCP: {'on' if _mcp_on else 'off'}", "up" if _mcp_on else "wait")
-    )
-    if _is_remote:
-        _pills += status_pill("source: remote", "up")
-    if _tool_foc:
-        _pills += status_pill(f"Tool: {_tool_foc}", "up")
-
-    _bar_col, _restart_col = st.columns([8, 1])
-    with _bar_col:
+    # Unknown/legacy project type — no dedicated status bar.
+    _pills = status_pill(f"Project: {_active_proj['name']}", "up") if _active_proj else ""
+    if _pills:
         st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
-    with _restart_col:
-        _show_restart = _backend == "llama.cpp" and not _is_remote
-        if _show_restart and st.button(
-            "↺ Restart", key="btn_global_restart",
-            use_container_width=True,
-            help="Stop and restart the llama-server with the current model and context size",
-        ):
-            llama_server.stop()
-            _mp = st.session_state.get("selected_model_path")
-            if _mp:
-                ok, msg = llama_server.start(_mp, context_size=_ctx)
-                st.session_state["_srv_msg"] = ("success" if ok else "error", msg)
-            st.rerun()
 
 # ── Tabs — conditioned on active bot type ─────────────────────────────────────
 # Removed tabs (CAF & Target hidden — re-enable when those bot types are implemented):

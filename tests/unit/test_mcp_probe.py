@@ -50,14 +50,26 @@ def _log():
     return lambda msg: None
 
 
+def _prompt_set(user_prompt="hello"):
+    """A validation set with one LLM-Judge prompt step — the current route
+    into _exec_llama_prompt (the main LLM), replacing the old flat 'prompts'
+    list which run_llama_cli_evaluation no longer consumes."""
+    return {
+        "name": "Prompt Set", "enabled": True,
+        "steps": [{"delay_seconds": 0, "commands": [
+            {"type": "prompt", "enabled": True, "system_prompt": "", "user_prompt": user_prompt}
+        ]}],
+    }
+
+
 def _cfg_with_mcp(**overrides):
     """Config with a minimal MCP server list so tools are loaded."""
     base = {
+        "type": "llama_cli_bot",
         "backend": "llama.cpp",
         "model_dir": "/models",
         "model_name": "llama3.gguf",
-        "prompts": ["hello"],
-        "commands": [],
+        "validation_sets": [_prompt_set("hello")],
         "cancel_requested_ref": [False],
         "mcp_servers": [{"name": "custom", "command": "node", "args": [], "enabled": True}],
         "mcp_server_url": "http://127.0.0.1:9191",
@@ -82,7 +94,7 @@ class TestEvaluatorMcpProbe:
                     mock_call.return_value = {"status": "success"}
                     run_llama_cli_evaluation(
                         env, _cfg_with_mcp(),
-                        lambda m: log_msgs.append(m),
+                        lambda m, tag=None: log_msgs.append(m),
                     )
 
         # Log must confirm MCP is active
@@ -103,7 +115,7 @@ class TestEvaluatorMcpProbe:
             with patch("core.evaluator.probe_mcp_server", return_value=False):
                 run_llama_cli_evaluation(
                     env, _cfg_with_mcp(),
-                    lambda m: log_msgs.append(m),
+                    lambda m, tag=None: log_msgs.append(m),
                 )
 
         assert any("WARN" in m and "MCP broker" in m for m in log_msgs), (
@@ -164,7 +176,7 @@ class TestCliSystemPromptSize:
                 run_llama_cli_evaluation(
                     env,
                     _cfg_with_mcp(model_dir="/models", model_name="m.gguf"),
-                    lambda m: None,
+                    lambda m, tag=None: None,
                 )
 
         assert captured_cmds, "env.execute was never called"

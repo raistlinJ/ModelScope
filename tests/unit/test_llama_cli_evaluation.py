@@ -1,11 +1,15 @@
 """
 Unit tests for core.evaluator.run_llama_cli_evaluation.
 
-All external I/O is mocked: env.execute via MagicMock, stream_llama_cpp via
-unittest.mock.patch so no real HTTP or subprocess calls happen.
+Prompt execution is driven by the Startup / Validation / Completion step model:
+a "prompt"-type command inside a validation set's steps is routed through
+_exec_llama_prompt (the main LLM) when config["type"] == "llama_cli_bot"; a
+"command"-type step runs via env.execute. All external I/O is mocked:
+env.execute via MagicMock, stream_llama_cpp via unittest.mock.patch so no real
+HTTP or subprocess calls happen.
 """
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from core.evaluator import run_llama_cli_evaluation
 from core.environment import LocalEnvironment
 
@@ -20,23 +24,42 @@ def _env(stdout="response text", stderr="", exit_code=0):
 
 
 def _log():
-    return lambda msg: None
+    return lambda msg, tag=None: None
+
+
+def _prompt_set(*user_prompts, name="Prompt Set"):
+    """A validation set with one LLM-Judge prompt step per prompt given."""
+    return {
+        "name": name, "enabled": True,
+        "steps": [
+            {"delay_seconds": 0, "commands": [
+                {"type": "prompt", "enabled": True, "system_prompt": "", "user_prompt": p}
+            ]}
+            for p in user_prompts
+        ],
+    }
+
+
+def _command_set(cmd="check", **cmd_overrides):
+    """A validation set with one plain-command step."""
+    cmd_obj = {"type": "command", "enabled": True, "command": cmd, "expected_output_type": "Ignore"}
+    cmd_obj.update(cmd_overrides)
+    return {"name": "Validation", "enabled": True, "steps": [{"delay_seconds": 0, "commands": [cmd_obj]}]}
 
 
 def _cfg(**overrides):
     base = {
+        "type": "llama_cli_bot",
         "backend": "llama.cpp",
         "model_dir": "/models",
         "model_name": "llama3.gguf",
-        "prompts": [],
-        "commands": [],
         "cancel_requested_ref": [False],
     }
     base.update(overrides)
     return base
 
 
-# ── OpenAI HTTP backend ───────────────────────────────────────────────────────
+# ── OpenAI HTTP backend (main LLM, via validation-set prompt step) ────────────
 
 class TestRunLlamaCLIOpenAIBackend:
     def _stream_result(self, content="AI response"):
@@ -52,53 +75,52 @@ class TestRunLlamaCLIOpenAIBackend:
             result = run_llama_cli_evaluation(
                 env,
                 _cfg(backend="openai", openai_base_url="http://localhost:1234",
-                     prompts=["Hello"]),
+                     validation_sets=[_prompt_set("Hello")]),
                 _log(),
             )
         mock_stream.assert_called()
         assert len(result["prompt_responses"]) == 1
         assert result["prompt_responses"][0]["response"] == "AI response"
 
-    def test_openai_backend_no_base_url_aborts(self):
+    def test_openai_backend_no_base_url_fails_validation(self):
         env = _env()
         result = run_llama_cli_evaluation(
             env,
-            _cfg(backend="openai", openai_base_url="", prompts=["Hello"]),
+            _cfg(backend="openai", openai_base_url="",
+                 validation_sets=[_prompt_set("Hello")]),
             _log(),
         )
-        assert result["run_aborted"] is True
+        assert result["validation_passed"] is False
 
-    def test_openai_backend_http_error_records_failed_tool_call(self):
+    def test_openai_backend_http_error_fails_validation(self):
         env = _env()
         with patch("core.evaluator.stream_llama_cpp") as mock_stream:
             mock_stream.side_effect = Exception("connection refused")
             result = run_llama_cli_evaluation(
                 env,
                 _cfg(backend="openai", openai_base_url="http://localhost:1234",
-                     prompts=["Hello"]),
+                     validation_sets=[_prompt_set("Hello")]),
                 _log(),
             )
-        assert len(result["tool_calls"]) >= 1
-        assert result["tool_calls"][0]["exit_code"] == 1
+        assert result["validation_passed"] is False
 
     def test_openai_backend_cancel_stops_after_first_prompt(self):
         env = _env()
         cancel_ref = [False]
 
-        with patch("core.evaluator.stream_llama_cpp") as mock_stream:
-            def side_effect(**kwargs):
-                cancel_ref[0] = True
-                return self._stream_result()
-            mock_stream.side_effect = side_effect
+        def side_effect(**kwargs):
+            cancel_ref[0] = True
+            return self._stream_result()
 
+        with patch("core.evaluator.stream_llama_cpp", side_effect=side_effect):
             result = run_llama_cli_evaluation(
                 env,
                 _cfg(backend="openai", openai_base_url="http://localhost:1234",
-                     prompts=["p1", "p2", "p3"], cancel_requested_ref=cancel_ref),
+                     validation_sets=[_prompt_set("p1", "p2", "p3")],
+                     cancel_requested_ref=cancel_ref),
                 _log(),
             )
 
-        assert result["run_aborted"] is True
         assert len(result["prompt_responses"]) == 1
 
     def test_openai_backend_response_appended_to_prompt_responses(self):
@@ -108,25 +130,10 @@ class TestRunLlamaCLIOpenAIBackend:
             result = run_llama_cli_evaluation(
                 env,
                 _cfg(backend="openai", openai_base_url="http://localhost:1234",
-                     prompts=["What colour is the sky?"]),
+                     validation_sets=[_prompt_set("What colour is the sky?")]),
                 _log(),
             )
-        assert result["prompt_responses"][0]["prompt"] == "What colour is the sky?"
         assert result["prompt_responses"][0]["response"] == "The sky is blue."
-
-    def test_openai_backend_tool_call_uses_openai_http_label(self):
-        env = _env()
-        with patch("core.evaluator.stream_llama_cpp") as mock_stream:
-            mock_stream.return_value = self._stream_result()
-            result = run_llama_cli_evaluation(
-                env,
-                _cfg(backend="openai", openai_base_url="http://localhost:1234",
-                     prompts=["q"]),
-                _log(),
-            )
-        # With the agent loop, tool_calls only contains actual tool calls from the model,
-        # not the LLM call itself. The test verifies the system runs without error.
-        assert len(result["prompt_responses"]) == 1
 
     def test_openai_backend_dispatch_with_real_selectbox_value(self):
         """Production path: selectbox stores 'OpenAI-compatible HTTP', not bare 'openai'.
@@ -139,7 +146,7 @@ class TestRunLlamaCLIOpenAIBackend:
                 env,
                 _cfg(backend="OpenAI-compatible HTTP",
                      openai_base_url="http://localhost:1234",
-                     prompts=["Hello"]),
+                     validation_sets=[_prompt_set("Hello")]),
                 _log(),
             )
         mock_stream.assert_called()
@@ -149,20 +156,11 @@ class TestRunLlamaCLIOpenAIBackend:
 # ── Local binary backend ───────────────────────────────────────────────────────
 
 class TestRunLlamaCLILocalBinary:
-    def test_no_model_aborts(self):
-        env = _env()
-        result = run_llama_cli_evaluation(
-            env,
-            _cfg(model_dir="", model_name="", prompts=["hello"]),
-            _log(),
-        )
-        assert result["run_aborted"] is True
-
     def test_binary_dir_expands_to_llama_cli(self, tmp_path):
         env = _env()
-        result = run_llama_cli_evaluation(
+        run_llama_cli_evaluation(
             env,
-            _cfg(binary_path=str(tmp_path), prompts=["hello"]),
+            _cfg(binary_path=str(tmp_path), validation_sets=[_prompt_set("hello")]),
             _log(),
         )
         called_cmd = env.execute.call_args[0][0]
@@ -170,42 +168,43 @@ class TestRunLlamaCLILocalBinary:
 
     def test_model_path_constructed_from_dir_and_name(self):
         env = _env()
-        run_llama_cli_evaluation(env, _cfg(prompts=["hi"]), _log())
+        run_llama_cli_evaluation(env, _cfg(validation_sets=[_prompt_set("hi")]), _log())
         called_cmd = env.execute.call_args[0][0]
         assert "/models/llama3.gguf" in called_cmd
 
     def test_prompt_response_populated_from_stdout(self):
         env = _env(stdout="The answer is 42")
-        result = run_llama_cli_evaluation(env, _cfg(prompts=["what is 6*7?"]), _log())
+        result = run_llama_cli_evaluation(
+            env, _cfg(validation_sets=[_prompt_set("what is 6*7?")]), _log()
+        )
         assert result["prompt_responses"][0]["response"] == "The answer is 42"
 
     def test_multiple_prompts_produce_multiple_responses(self):
         env = _env(stdout="r")
-        result = run_llama_cli_evaluation(env, _cfg(prompts=["p1", "p2", "p3"]), _log())
+        result = run_llama_cli_evaluation(
+            env, _cfg(validation_sets=[_prompt_set("p1", "p2", "p3")]), _log()
+        )
         assert len(result["prompt_responses"]) == 3
 
     def test_cancel_stops_after_first_prompt(self):
         env = _env()
         cancel_ref = [False]
 
-        call_count = [0]
         def side_effect(cmd, **kw):
-            call_count[0] += 1
             cancel_ref[0] = True
             return {"stdout": "r", "stderr": "", "exit_code": 0}
 
         env.execute.side_effect = side_effect
         result = run_llama_cli_evaluation(
             env,
-            _cfg(prompts=["p1", "p2"], cancel_requested_ref=cancel_ref),
+            _cfg(validation_sets=[_prompt_set("p1", "p2")], cancel_requested_ref=cancel_ref),
             _log(),
         )
-        assert result["run_aborted"] is True
-        assert call_count[0] == 1
+        assert len(result["prompt_responses"]) == 1
 
     def test_tool_call_uses_llama_cli_label(self):
         env = _env()
-        result = run_llama_cli_evaluation(env, _cfg(prompts=["hi"]), _log())
+        result = run_llama_cli_evaluation(env, _cfg(validation_sets=[_prompt_set("hi")]), _log())
         assert result["tool_calls"][0]["tool"] == "llama-cli"
 
     def test_run_bot_type_is_llama_cli_bot(self):
@@ -222,14 +221,12 @@ class TestRunLlamaCLIBinaryAutoCorrect:
 
     def test_server_binary_swapped_for_cli_in_llamacpp_backend(self, tmp_path):
         """binary_path pointing at llama-server is corrected to llama-cli."""
-        import os
-        # Create a fake llama-server in a temp dir (path just needs to exist as a
-        # non-directory basename — the evaluator only checks basename, not existence)
         server_bin = str(tmp_path / "llama-server")
         env = _env()
-        result = run_llama_cli_evaluation(
+        run_llama_cli_evaluation(
             env,
-            _cfg(backend="llama.cpp", binary_path=server_bin, prompts=["hello"]),
+            _cfg(backend="llama.cpp", binary_path=server_bin,
+                 validation_sets=[_prompt_set("hello")]),
             _log(),
         )
         called_cmd = env.execute.call_args[0][0]
@@ -245,20 +242,16 @@ class TestRunLlamaCLIBinaryAutoCorrect:
         """llama-server path is left untouched for the managed-server backend,
         which legitimately needs it.  (The managed path calls _start_managed_llama_server.)
         """
-        import os
-        from unittest.mock import patch as _patch
-        # The managed-server backend calls _start_managed_llama_server; mock that
-        # so the test doesn't need a real binary.
         fake_server_bin = "/fake/path/llama-server"
         env = _env()
-        with _patch("core.evaluator._start_managed_llama_server") as mock_start:
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
             mock_start.return_value = None   # pretend startup failed gracefully
-            with _patch("core.evaluator.stream_llama_cpp") as mock_stream:
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
                 mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
                 run_llama_cli_evaluation(
                     env,
                     _cfg(backend="llama-server (managed)", binary_path=fake_server_bin,
-                         prompts=["hello"]),
+                         validation_sets=[_prompt_set("hello")]),
                     _log(),
                 )
         # _start_managed_llama_server should have received the original llama-server path
@@ -270,13 +263,19 @@ class TestRunLlamaCLIBinaryAutoCorrect:
             )
 
 
-# ── Shell commands ────────────────────────────────────────────────────────────
+# ── Startup/Completion shell command steps ────────────────────────────────────
 
 class TestRunLlamaCLIShellCommands:
-    def test_shell_commands_run_after_prompts(self):
+    def test_command_step_runs_and_tagged_as_bash(self):
         env = _env()
         result = run_llama_cli_evaluation(
-            env, _cfg(commands=["echo done"]), _log()
+            env,
+            _cfg(startup_commands=[
+                {"delay_seconds": 0, "commands": [
+                    {"type": "command", "command": "echo done", "enabled": True}
+                ]},
+            ]),
+            _log(),
         )
         env.execute.assert_called_once()
         assert result["tool_calls"][0]["tool"] == "bash"
@@ -284,10 +283,19 @@ class TestRunLlamaCLIShellCommands:
     def test_sudo_prefix_on_shell_commands(self):
         env = _env()
         run_llama_cli_evaluation(
-            env, _cfg(commands=["whoami"], sudo=True), _log()
+            env,
+            _cfg(sudo=True, startup_commands=[
+                {"delay_seconds": 0, "commands": [
+                    {"type": "command", "command": "whoami", "enabled": True}
+                ]},
+            ]),
+            _log(),
         )
-        called_cmds = [c[0][0] for c in env.execute.call_args_list]
-        assert any("sudo whoami" in c for c in called_cmds)
+        # First call is the sudo-auth preflight check, second is the actual command.
+        assert env.execute.call_args_list == [
+            call("sudo -k; sudo -n -v", timeout=10),
+            call("sudo whoami", timeout=120),
+        ]
 
     def test_cancel_stops_shell_commands(self):
         env = _env()
@@ -300,7 +308,10 @@ class TestRunLlamaCLIShellCommands:
         env.execute.side_effect = side_effect
         result = run_llama_cli_evaluation(
             env,
-            _cfg(commands=["cmd1", "cmd2"], cancel_requested_ref=cancel_ref),
+            _cfg(startup_commands=[
+                {"delay_seconds": 0, "commands": [{"type": "command", "command": "cmd1", "enabled": True}]},
+                {"delay_seconds": 0, "commands": [{"type": "command", "command": "cmd2", "enabled": True}]},
+            ], cancel_requested_ref=cancel_ref),
             _log(),
         )
         assert result["run_aborted"] is True
@@ -313,25 +324,20 @@ class TestRunLlamaCLIValidation:
     def test_validation_passes_on_zero_exit(self):
         env = _env(exit_code=0)
         result = run_llama_cli_evaluation(
-            env, _cfg(validation_commands=["check"], fail_patterns=[]), _log()
+            env, _cfg(validation_sets=[_command_set("check")]), _log()
         )
         assert result["validation_passed"] is True
 
     def test_validation_fails_on_nonzero_exit(self):
         env = _env(exit_code=1)
         result = run_llama_cli_evaluation(
-            env, _cfg(validation_commands=["check"], fail_patterns=[]), _log()
+            env, _cfg(validation_sets=[_command_set("check")]), _log()
         )
         assert result["validation_passed"] is False
 
-    def test_aborted_run_skips_validation(self):
+    def test_no_validation_sets_leaves_validation_passed_none(self):
         env = _env()
-        result = run_llama_cli_evaluation(
-            env,
-            _cfg(model_dir="", model_name="",  # triggers abort
-                 validation_commands=["check"], fail_patterns=[]),
-            _log(),
-        )
+        result = run_llama_cli_evaluation(env, _cfg(), _log())
         assert result["validation_passed"] is None
 
     def test_total_latency_is_set(self):

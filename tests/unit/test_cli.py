@@ -177,9 +177,6 @@ class TestBuildConfig:
             ssh_user="root",
             ssh_password=None,
             ssh_key_path=None,
-            ssh_caf_dir="~/cyber-agent-flow",
-            caf_scope=None,
-            caf_urgency=None,
         )
         for k, v in overrides.items():
             setattr(args, k, v)
@@ -191,9 +188,9 @@ class TestBuildConfig:
         assert cfg["backend_type"] == "llama.cpp"
         assert cfg["execution_mode"] == "local"
 
-    def test_ssh_host_sets_caf_ssh_mode(self):
+    def test_ssh_host_sets_ssh_mode(self):
         cfg = cli._build_config(self._args(ssh_host="10.0.0.1"))
-        assert cfg["execution_mode"] == "caf_ssh"
+        assert cfg["execution_mode"] == "ssh"
 
     def test_system_prompt_override(self):
         cfg = cli._build_config(self._args(system_prompt="custom sys"))
@@ -216,10 +213,6 @@ class TestBuildConfig:
     def test_llm_url_override(self):
         cfg = cli._build_config(self._args(llm_url="http://custom:9999"))
         assert "custom" in cfg["llm_url"]
-
-    def test_caf_scope_override(self):
-        cfg = cli._build_config(self._args(caf_scope="Broad"))
-        assert cfg["caf_scope"] == "Broad"
 
     def test_cancel_requested_ref_is_list(self):
         cfg = cli._build_config(self._args())

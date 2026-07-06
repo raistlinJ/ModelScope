@@ -80,12 +80,12 @@ class TestSaveSettings:
             "backend_type": "ollama",
             "llm_url": "http://localhost:11434",
             "context_size": 4096,
-            "active_scenario": "Scenario 1 – File Creation",
+            "tool_focus": "file_creator",
         }
         save_settings(state)
         data = json.loads((tmp_path / "settings.json").read_text())
         assert data["context_size"] == 4096
-        assert data["active_scenario"] == "Scenario 1 – File Creation"
+        assert data["tool_focus"] == "file_creator"
 
 
 class TestLoadSettings:
