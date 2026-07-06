@@ -499,7 +499,10 @@ def _render_bash_execute(project: dict) -> None:
         elif tel.get("validation_passed") is True:
             st.success("✓ Execution complete — all validation commands passed.")
         elif tel.get("validation_passed") is False:
-            st.error("✗ Execution complete — one or more validation commands failed.")
+            if tel.get("prompt_call_failed"):
+                st.error("✗ Execution complete — an LLM Judge prompt failed or could not connect.")
+            else:
+                st.error("✗ Execution complete — one or more validation commands failed.")
         else:
             st.info("📊 Execution complete.")
 
@@ -916,7 +919,10 @@ def _render_llama_cli_execute(project: dict) -> None:
         elif tel.get("validation_passed") is True:
             st.success("✓ Execution complete — all validation commands passed.")
         elif tel.get("validation_passed") is False:
-            st.error("✗ Execution complete — one or more validation commands failed.")
+            if tel.get("prompt_call_failed"):
+                st.error("✗ Execution complete — an LLM Judge prompt failed or could not connect.")
+            else:
+                st.error("✗ Execution complete — one or more validation commands failed.")
         else:
             responses = tel.get("prompt_responses", [])
             if responses:

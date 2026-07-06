@@ -371,6 +371,8 @@ def _render_bash_dashboard(project: dict) -> None:
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
                          key=f"bash_val_stderr_{pid}_{_run_tok}")
+    elif tel.get("prompt_call_failed"):
+        st.error("FAIL ✗ — an LLM Judge prompt failed or could not connect (see Tool Calls above).")
     else:
         st.info("No validation commands were run.")
 
@@ -487,7 +489,10 @@ def _render_llama_cli_dashboard(project: dict) -> None:
     st.subheader("Validation Output")
     val_exit = tel.get("validation_exit_code")
     if val_exit is None:
-        st.info("No validation command was run.")
+        if tel.get("prompt_call_failed"):
+            st.error("FAIL ✗ — an LLM Judge prompt failed or could not connect (see Tool Calls above).")
+        else:
+            st.info("No validation command was run.")
     else:
         if tel.get("validation_passed"):
             st.success(f"PASS ✓  (exit code: {val_exit})")

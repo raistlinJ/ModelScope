@@ -629,23 +629,37 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
             si1, si2 = m[1], m[2]
             steps[si1], steps[si2] = steps[si2], steps[si1]
         elif m[0] == "add_cmd":
-            steps[m[1]]["commands"].append({
-                "_id":             _next_step_id(),
-                "type":            "command",
-                "command":         "",
-                "enabled":         True,
-                "long_running":    False,
-                "timeout_seconds": 60,
-            })
+            _existing = steps[m[1]]["commands"]
+            # Guards against a double-add: the last-row text_input's on_change
+            # (Enter-to-add) and the "+ Add Command" button click can land in
+            # two separate reruns from a single click if the field loses focus
+            # first, each independently queuing an add_cmd mutation. Skip if
+            # the current last row is already a blank command row.
+            _last_blank = bool(_existing) and _existing[-1].get("type", "command") == "command" \
+                and not _existing[-1].get("command", "").strip()
+            if not _last_blank:
+                _existing.append({
+                    "_id":             _next_step_id(),
+                    "type":            "command",
+                    "command":         "",
+                    "enabled":         True,
+                    "long_running":    False,
+                    "timeout_seconds": 60,
+                })
         elif m[0] == "add_prompt":
-            steps[m[1]]["commands"].append({
-                "_id":             _next_step_id(),
-                "type":            "prompt",
-                "system_prompt":   "",
-                "user_prompt":     "",
-                "preserve_context": True,
-                "enabled":         True,
-            })
+            _existing = steps[m[1]]["commands"]
+            _last_blank = bool(_existing) and _existing[-1].get("type") == "prompt" \
+                and not _existing[-1].get("system_prompt", "").strip() \
+                and not _existing[-1].get("user_prompt", "").strip()
+            if not _last_blank:
+                _existing.append({
+                    "_id":             _next_step_id(),
+                    "type":            "prompt",
+                    "system_prompt":   "",
+                    "user_prompt":     "",
+                    "preserve_context": True,
+                    "enabled":         True,
+                })
         elif m[0] == "del_cmd":
             steps[m[1]]["commands"].pop(m[2])
         elif m[0] == "move_cmd":
@@ -662,7 +676,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
 
 
 
-def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None:
+def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_type: str) -> None:
     raw   = st.session_state.get(state_key, [])
     steps = _ensure_step_ids(_coerce_steps(raw))
     st.session_state[state_key] = steps
@@ -775,7 +789,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                             with cc0:
                                 st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                             with cc1:
-                                _title = "Configured LLAMA-CLI LLM" if state_key.startswith("llama_cli") else "Configured LLM"
+                                _title = "Configured LLAMA-CLI LLM" if bot_type == "llama_cli" else "Configured LLM"
                                 st.markdown(f"**{_title}**")
                             with cc2:
                                 pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
@@ -859,11 +873,19 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str) -> None
                         with cc_del:
                             st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
 
-                ca, cb, _ = st.columns([1.5, 2.0, 6.5])
-                with ca:
-                    st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
-                with cb:
-                    st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                # "+ Add Prompt" (LLM Judge validation step) is only meaningful for
+                # Llama-CLI-Bot projects, which have a main LLM under test —
+                # Bash-Bot validation is deterministic command/output checks only.
+                if bot_type == "llama_cli":
+                    ca, cb, _ = st.columns([1.5, 2.0, 6.5])
+                    with ca:
+                        st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
+                    with cb:
+                        st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                else:
+                    ca, _ = st.columns([2.0, 7.5])
+                    with ca:
+                        st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
 
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
@@ -1301,7 +1323,7 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, prefix: s
                 }]
             }]
 
-    _render_validation_steps(_steps_state_key, pfx=f"val_{si}_{nonce}", placeholder="e.g. ls -l")
+    _render_validation_steps(_steps_state_key, pfx=f"val_{si}_{nonce}", placeholder="e.g. ls -l", bot_type=prefix)
     
     col1, col2 = st.columns([4, 1])
     with col2:

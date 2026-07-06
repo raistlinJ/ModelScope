@@ -318,6 +318,60 @@ class TestRunLlamaCLIShellCommands:
         assert env.execute.call_count == 1
 
 
+# ── LLM Judge ("LLM Helper") prompt step failures ─────────────────────────────
+
+def _helper_prompt_step(user_prompt="hi"):
+    """A Startup/Completion step containing a single LLM-Judge prompt command."""
+    return [{"delay_seconds": 0, "commands": [
+        {"type": "prompt", "enabled": True, "system_prompt": "", "user_prompt": user_prompt}
+    ]}]
+
+
+class TestRunLlamaCLIPromptStepFailure:
+    def test_unreachable_prompt_fails_the_run(self):
+        """A prompt step that can't connect (no URL configured) must mark the
+        whole run as failed, not just log an error and continue."""
+        env = _env()
+        result = run_llama_cli_evaluation(
+            env,
+            _cfg(
+                llm_helper_enabled=True, llm_helper_backend="OpenAI-Compatible",
+                llm_helper_openai_url="",
+                startup_commands=_helper_prompt_step("hello"),
+            ),
+            _log(),
+        )
+        assert result["prompt_call_failed"] is True
+        assert result["validation_passed"] is False
+
+    def test_disabled_llm_judge_is_skipped_not_failed(self):
+        env = _env()
+        result = run_llama_cli_evaluation(
+            env,
+            _cfg(llm_helper_enabled=False, startup_commands=_helper_prompt_step("hello")),
+            _log(),
+        )
+        assert result["prompt_call_failed"] is False
+        assert result["validation_passed"] is None
+
+    def test_completion_prompt_failure_overrides_passed_validation(self):
+        """Startup/Completion prompt steps aren't validation commands, so
+        _run_validation_sets never sees them — this must still flip an
+        otherwise-passing validation result to failed."""
+        env = _env(exit_code=0)
+        result = run_llama_cli_evaluation(
+            env,
+            _cfg(
+                validation_sets=[_command_set("check")],
+                llm_helper_enabled=True, llm_helper_backend="OpenAI-Compatible",
+                llm_helper_openai_url="",
+                completion_commands=_helper_prompt_step("cleanup prompt"),
+            ),
+            _log(),
+        )
+        assert result["validation_passed"] is False
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 
 class TestRunLlamaCLIValidation:

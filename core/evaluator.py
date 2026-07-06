@@ -894,6 +894,7 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
         "validation_passed":    None,
         "validation_results":   [],
         "run_aborted":          False,
+        "prompt_call_failed":   False,
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
 
@@ -982,6 +983,9 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
                         on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.")
                         continue
                     res = execute_helper_prompt(cmd_obj, config, helper_context, on_log)
+                    if res.get("exit_code", -1) != 0:
+                        telemetry["prompt_call_failed"] = True
+                        on_log(f"[ERROR] Prompt step failed — marking execution as failed ({res.get('stderr', 'unknown error')})")
                     telemetry["tool_calls"].append({
                         "tool":      "llm_helper",
                         "args":      {"prompt": cmd_obj},
@@ -1051,6 +1055,13 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     # Completion / cleanup commands
     if not cancel_ref[0]:
         _run_step_list(completion, label="CLEANUP")
+
+    # A failed/unreachable LLM Judge prompt call in Startup or Completion is not
+    # itself a validation command, so _run_validation_sets never sees it — but it
+    # still means the run didn't do what it was supposed to, so it must fail the
+    # run rather than being silently swallowed into a tool_call log entry.
+    if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
+        telemetry["validation_passed"] = False
 
     telemetry["total_latency"] = round(time.time() - start_t, 3)
     on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")
@@ -1129,6 +1140,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         "validation_passed":    None,
         "run_aborted":          False,
         "interrupted_by_user":  False,
+        "prompt_call_failed":   False,
         "metrics_matrix":       config.get("metrics_matrix", []),
     }
 
@@ -1317,6 +1329,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                         on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.", "shell")
                         continue
                     res = execute_helper_prompt(cmd_obj, config, helper_context, lambda m, src="shell": on_log(m, src))
+                    if res.get("exit_code", -1) != 0:
+                        telemetry["prompt_call_failed"] = True
+                        on_log(f"[ERROR] Prompt step failed — marking execution as failed ({res.get('stderr', 'unknown error')})", "shell")
                     telemetry["tool_calls"].append({
                         "tool":      "llm_helper",
                         "args":      {"prompt": cmd_obj},
@@ -1407,6 +1422,13 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
     if not cancel_ref[0]:
         _run_step_list(completion, label="CLEANUP")
+
+    # A failed/unreachable LLM Judge prompt call in Startup or Completion is not
+    # itself a validation command, so _run_validation_sets never sees it — but it
+    # still means the run didn't do what it was supposed to, so it must fail the
+    # run rather than being silently swallowed into a tool_call log entry.
+    if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
+        telemetry["validation_passed"] = False
 
     telemetry["total_latency"] = round(time.time() - start_t, 3)
     on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")

@@ -507,7 +507,7 @@ def sync_project(project_id: str) -> None:
     across projects do not bleed the previous project's content into the next
     render.
 
-    The current run's logs (including the Bash-Bot/Llama-Server-Bot per-phase
+    The current run's logs (including the Bash-Bot/Llama-CLI-Bot per-phase
     run_logs_setup / run_logs_validation panes), completion flag, and telemetry
     are saved under the outgoing project's key and restored from the incoming
     project's key, so each project retains its own log history.  Only the
@@ -525,7 +525,7 @@ def sync_project(project_id: str) -> None:
     # restored when the user switches back.  _last_active_project_id still
     # holds the outgoing ID here — it is updated only at the end of this fn.
     #
-    # run_logs_setup / run_logs_validation are the Bash-Bot and Llama-Server-Bot
+    # run_logs_setup / run_logs_validation are the Bash-Bot and Llama-CLI-Bot
     # Execute tabs' per-phase log panes — they must round-trip per project
     # exactly like run_logs, run_completed, and telemetry, or the previous
     # project's Setup and Validation logs stay on screen after switching.
