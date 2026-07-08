@@ -4,7 +4,7 @@ import streamlit as st
 from core.state import init_state, sync_project
 from core import llama_server
 from core.logsetup import configure_logging
-from core.settings_store import load_settings, save_settings
+from core.settings_store import load_settings
 from ui.components import status_pill
 from ui.styles import inject
 from ui import config_tab, execute_tab, dashboard_tab
@@ -239,23 +239,6 @@ with st.sidebar:
         ):
             st.session_state["active_project_id"] = _proj["id"]
             st.rerun()
-
-
-
-    if st.button("💾 Save Settings", key="btn_save_settings", use_container_width=True,
-                 help="Save current configuration to ~/.modelscope/settings.json"):
-        _active_proj = next(
-            (p for p in st.session_state.get("projects", []) if p["id"] == st.session_state.get("active_project_id")),
-            None,
-        )
-        if _active_proj is not None:
-            if _active_proj.get("type") == "bash_bot":
-                config_tab._flush_bash_config(_active_proj)
-            elif _active_proj.get("type") == "llama_cli_bot":
-                config_tab._flush_llama_cli_config(_active_proj)
-        save_settings(st.session_state)
-        st.toast("Settings saved!", icon="✅")
-
     if st.button("＋  New Project", use_container_width=True):
         _show_add_project_dialog()
 

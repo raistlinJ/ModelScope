@@ -16,6 +16,14 @@ dependencies = [
 [project.scripts]
 modelscope = "cli:main"
 
+[tool.setuptools]
+py-modules = ["cli"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["config*", "core*", "ui*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
