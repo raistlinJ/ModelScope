@@ -1,6 +1,10 @@
 """
-Frontier/cloud model judge for qualitative evaluation.
-Scores open-ended responses and generates synthetic ground truth.
+LLM judge for qualitative evaluation.
+
+Scores open-ended responses and generates synthetic ground truth using the
+project's LLM Judge connection (the ``llm_helper_*`` config bundle) — an
+OpenAI-compatible or Ollama endpoint.  This replaced the old cloud-SDK
+"FrontierJudge" so one per-project panel configures all judge functionality.
 """
 from __future__ import annotations
 
@@ -9,17 +13,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-try:
-    import anthropic as _anthropic
-    _ANTHROPIC_AVAILABLE = True
-except ImportError:
-    _ANTHROPIC_AVAILABLE = False
+import requests
 
-try:
-    import openai as _openai
-    _OPENAI_AVAILABLE = True
-except ImportError:
-    _OPENAI_AVAILABLE = False
+from core.utils import effective_verify_ssl
 
 
 @dataclass
@@ -64,37 +60,91 @@ Provide scores and a brief justification for each. Output ONLY valid JSON:
 }"""
 
 
-class FrontierJudge:
-    SUPPORTED_PROVIDERS = ["anthropic", "openai"]
+class LLMJudge:
+    """Response judge backed by the project's LLM Judge endpoint.
+
+    Uses the same transport conventions as ``execute_helper_prompt`` in
+    core/evaluator.py: OpenAI-Compatible → POST {url}/v1/chat/completions
+    with an optional Bearer key; Ollama → POST {url}/api/chat.
+    """
+
+    SUPPORTED_BACKENDS = ["OpenAI-Compatible", "Ollama"]
 
     def __init__(
         self,
-        provider: str,
+        backend: str,
         model: str,
-        api_key: str,
+        openai_url: str = "",
+        api_key: str = "",
+        verify_ssl: bool = True,
+        ollama_url: str = "",
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ):
-        self.provider = provider
+        if backend not in self.SUPPORTED_BACKENDS:
+            raise ValueError(
+                f"Unsupported backend: {backend}. Choose from {self.SUPPORTED_BACKENDS}"
+            )
+        self.backend = backend
         self.model = model
+        self.openai_url = (openai_url or "").rstrip("/")
+        self.api_key = api_key or ""
+        self.verify_ssl = verify_ssl
+        self.ollama_url = (ollama_url or "").rstrip("/")
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self._client = self._init_client(api_key)
+        if backend == "OpenAI-Compatible" and not self.openai_url:
+            raise ValueError("No URL configured for the LLM Judge.")
+        if backend == "Ollama" and not self.ollama_url:
+            raise ValueError("No Ollama URL configured for the LLM Judge.")
 
-    def _init_client(self, api_key: str):
-        if self.provider == "anthropic":
-            if not _ANTHROPIC_AVAILABLE:
-                raise ImportError(
-                    "anthropic SDK not installed. Run: pip install anthropic"
-                )
-            return _anthropic.Anthropic(api_key=api_key)
-        if self.provider == "openai":
-            if not _OPENAI_AVAILABLE:
-                raise ImportError(
-                    "openai SDK not installed. Run: pip install openai"
-                )
-            return _openai.OpenAI(api_key=api_key)
-        raise ValueError(f"Unsupported provider: {self.provider}. Choose from {self.SUPPORTED_PROVIDERS}")
+    @classmethod
+    def from_config(cls, config: dict) -> "LLMJudge":
+        """Build a judge from a run config carrying the llm_helper_* bundle."""
+        return cls(
+            backend=config.get("llm_helper_backend", "OpenAI-Compatible"),
+            model=config.get("llm_helper_model", ""),
+            openai_url=config.get("llm_helper_openai_url") or "",
+            api_key=config.get("llm_helper_openai_apikey") or "",
+            verify_ssl=config.get("llm_helper_openai_verify_ssl", True),
+            ollama_url=config.get("llm_helper_ollama_url") or "http://localhost:11434",
+        )
+
+    # ── Transport ──────────────────────────────────────────────────────────────
+
+    def _chat(self, messages: list[dict]) -> str:
+        if self.backend == "OpenAI-Compatible":
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            resp = requests.post(
+                f"{self.openai_url}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                verify=effective_verify_ssl(self.openai_url, self.verify_ssl),
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": self.temperature},
+        }
+        resp = requests.post(f"{self.ollama_url}/api/chat", json=payload, timeout=120)
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "") or ""
+
+    # ── Scoring ────────────────────────────────────────────────────────────────
 
     def _build_judge_system_prompt(self, rubric: Optional[str] = None) -> str:
         if rubric:
@@ -152,25 +202,10 @@ class FrontierJudge:
         system = self._build_judge_system_prompt(rubric)
         user_content = self._format_evaluation_request(prompt, response, ground_truth)
         try:
-            if self.provider == "anthropic":
-                msg = self._client.messages.create(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user_content}],
-                )
-                raw = msg.content[0].text if msg.content else ""
-            else:
-                completion = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user_content},
-                    ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
-                raw = completion.choices[0].message.content or ""
+            raw = self._chat([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ])
             return self._parse_judge_output(raw)
         except Exception as exc:
             print(f"[JUDGE ERROR] {exc}")
@@ -197,21 +232,7 @@ For each case, provide a JSON array:
 
 Return ONLY the JSON array."""
         try:
-            if self.provider == "anthropic":
-                msg = self._client.messages.create(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                raw = msg.content[0].text if msg.content else "[]"
-            else:
-                completion = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=self.max_tokens,
-                )
-                raw = completion.choices[0].message.content or "[]"
-
+            raw = self._chat([{"role": "user", "content": prompt}]) or "[]"
             cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
             match = re.search(r"\[.*\]", cleaned, re.DOTALL)
             if not match:

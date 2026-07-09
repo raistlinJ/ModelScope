@@ -56,12 +56,14 @@ class TestSessionLogIndexParam:
             "target_ssh_password": "secret",
             "ssh_key_path": "/path/to/key",
             "judge_api_key": "sk-xxx",
+            "llm_helper_openai_apikey": "sk-helper",
         }
         sl.save_config(cfg)
         data = json.loads((sl.session_dir / "config.json").read_text())
         assert "target_ssh_password" not in data
         assert "ssh_key_path" not in data
         assert "judge_api_key" not in data
+        assert "llm_helper_openai_apikey" not in data
         assert data["backend_type"] == "llama.cpp"
 
     def test_lazy_dir_creation(self, tmp_path):

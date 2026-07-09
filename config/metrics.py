@@ -463,7 +463,7 @@ METRIC_TYPES: dict[str, dict] = {
     "judge_correctness": {
         "label": "Judge: Correctness",
         "category": "AI-Judge",
-        "description": "Frontier model judge score for response correctness (0-100)",
+        "description": "LLM judge score for response correctness (0-100)",
         "params": [
             {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
         ],
@@ -471,7 +471,7 @@ METRIC_TYPES: dict[str, dict] = {
     "judge_coherence": {
         "label": "Judge: Coherence",
         "category": "AI-Judge",
-        "description": "Frontier model judge score for reasoning coherence (0-100)",
+        "description": "LLM judge score for reasoning coherence (0-100)",
         "params": [
             {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
         ],
@@ -479,7 +479,7 @@ METRIC_TYPES: dict[str, dict] = {
     "judge_goal_alignment": {
         "label": "Judge: Goal Alignment",
         "category": "AI-Judge",
-        "description": "Frontier model judge score for goal alignment (0-100)",
+        "description": "LLM judge score for goal alignment (0-100)",
         "params": [
             {"name": "min_score", "type": "int", "label": "Min score (0-100)", "default": 70},
         ],
@@ -487,7 +487,7 @@ METRIC_TYPES: dict[str, dict] = {
     "judge_aggregate": {
         "label": "Judge: Aggregate Score",
         "category": "AI-Judge",
-        "description": "Frontier model judge aggregate score (mean of all dimensions)",
+        "description": "LLM judge aggregate score (mean of all dimensions)",
         "params": [
             {"name": "min_score", "type": "int", "label": "Min aggregate score (0-100)", "default": 70},
         ],

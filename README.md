@@ -67,13 +67,6 @@ requests>=2.32.0
 paramiko>=3.0.0
 ```
 
-Optional — required only for AI Judge:
-
-```
-anthropic      # pip install anthropic
-openai         # pip install openai
-```
-
 Optional — required only for `~/.modelscope/cli.yaml` config file support:
 
 ```
@@ -303,9 +296,9 @@ All metrics return `True` (pass), `False` (fail), or `None` (not applicable / in
 
 | Metric ID | Name | Description |
 |-----------|------|-------------|
-| `judge_correctness` | Judge: Correctness | Frontier model scores factual correctness (0–100) |
-| `judge_coherence` | Judge: Coherence | Frontier model scores logical coherence (0–100) |
-| `judge_goal_alignment` | Judge: Goal Alignment | Frontier model scores alignment with stated goal (0–100) |
+| `judge_correctness` | Judge: Correctness | LLM judge scores factual correctness (0–100) |
+| `judge_coherence` | Judge: Coherence | LLM judge scores logical coherence (0–100) |
+| `judge_goal_alignment` | Judge: Goal Alignment | LLM judge scores alignment with stated goal (0–100) |
 | `judge_aggregate` | Judge: Aggregate | Average of all judge dimension scores |
 
 ### MCP Metric Presets
@@ -432,7 +425,7 @@ The default base directory is `ModelScope/logs/sessions/`. Override it with `--s
 
 Before writing, the following keys are removed:
 
-- `config.json`: `target_ssh_password`, `target_ssh_key_path`, `ssh_password`, `ssh_key_path`, `judge_api_key`
+- `config.json`: `target_ssh_password`, `target_ssh_key_path`, `ssh_password`, `ssh_key_path`, `sudo_password`, `openai_api_key`, `llm_helper_openai_apikey`, `judge_api_key`
 
 The `logs/` directory is `.gitignored` and never committed.
 
@@ -615,7 +608,6 @@ ModelScope/
 │   ├── target_tab.py          # Target tab: execution target (Local / SSH credential fields)
 │   ├── execute_tab.py         # Execute tab: run orchestration and live terminal output
 │   ├── dashboard_tab.py       # Analytical Dashboard: metric badges, tool traces, response
-│   ├── judge_config.py        # AI Judge configuration and ground truth generation
 │   ├── workflow_config.py     # Per-scenario-type config panels; MCP preset/schema registry UI
 │   ├── preflight_tab.py       # Pre-flight check UI
 │   ├── test_suite_tab.py      # Test suite visual dashboard

@@ -1,15 +1,15 @@
 """
-Unit tests for core.judge — FrontierJudge, JudgeScore, GroundTruthCase.
+Unit tests for core.judge — LLMJudge, JudgeScore, GroundTruthCase.
 
-All provider API calls are patched so no real network calls are made.
-The tests exercise JSON parsing, score aggregation, and error handling.
+All HTTP calls are patched so no real network calls are made.  The tests
+exercise config plumbing, JSON parsing, score aggregation, and error handling.
 """
 import json
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from core.judge import (
-    FrontierJudge,
+    LLMJudge,
     JudgeScore,
     GroundTruthCase,
     _JUDGE_SYSTEM_PROMPT,
@@ -44,59 +44,71 @@ def _make_gt_output(num=1) -> str:
     return json.dumps(cases)
 
 
-# ── FrontierJudge initialisation ──────────────────────────────────────────────
+def _openai_judge(**kwargs) -> LLMJudge:
+    return LLMJudge("OpenAI-Compatible", "judge-model",
+                    openai_url="http://judge.local:8080", **kwargs)
 
-class TestFrontierJudgeInit:
-    def test_invalid_provider_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unsupported provider"):
-            FrontierJudge("bad_provider", "model", "key")
 
-    def test_anthropic_init_when_sdk_present(self):
-        mock_client = MagicMock()
-        mock_anthropic_mod = MagicMock()
-        mock_anthropic_mod.Anthropic.return_value = mock_client
-        with patch("core.judge._ANTHROPIC_AVAILABLE", True), \
-             patch("core.judge._anthropic", mock_anthropic_mod, create=True):
-            judge = FrontierJudge("anthropic", "claude-opus-4-5", "fake_key")
-            assert judge.provider == "anthropic"
-            assert judge._client is mock_client
+def _ollama_judge(**kwargs) -> LLMJudge:
+    return LLMJudge("Ollama", "judge-model",
+                    ollama_url="http://localhost:11434", **kwargs)
 
-    def test_openai_init_when_sdk_present(self):
-        mock_client = MagicMock()
-        mock_openai_mod = MagicMock()
-        mock_openai_mod.OpenAI.return_value = mock_client
-        with patch("core.judge._OPENAI_AVAILABLE", True), \
-             patch("core.judge._openai", mock_openai_mod, create=True):
-            judge = FrontierJudge("openai", "gpt-4o", "fake_key")
-            assert judge.provider == "openai"
-            assert judge._client is mock_client
 
-    def test_anthropic_unavailable_raises_import_error(self):
-        with patch("core.judge._ANTHROPIC_AVAILABLE", False):
-            with pytest.raises(ImportError, match="anthropic"):
-                FrontierJudge("anthropic", "model", "key")
+def _openai_response(text: str) -> MagicMock:
+    resp = MagicMock()
+    resp.json.return_value = {"choices": [{"message": {"content": text}}]}
+    return resp
 
-    def test_openai_unavailable_raises_import_error(self):
-        with patch("core.judge._OPENAI_AVAILABLE", False):
-            with pytest.raises(ImportError, match="openai"):
-                FrontierJudge("openai", "model", "key")
+
+def _ollama_response(text: str) -> MagicMock:
+    resp = MagicMock()
+    resp.json.return_value = {"message": {"content": text}}
+    return resp
+
+
+# ── LLMJudge initialisation / from_config ─────────────────────────────────────
+
+class TestLLMJudgeInit:
+    def test_invalid_backend_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unsupported backend"):
+            LLMJudge("anthropic", "model", openai_url="http://x")
+
+    def test_openai_backend_requires_url(self):
+        with pytest.raises(ValueError, match="No URL"):
+            LLMJudge("OpenAI-Compatible", "model")
+
+    def test_ollama_backend_requires_url(self):
+        with pytest.raises(ValueError, match="No Ollama URL"):
+            LLMJudge("Ollama", "model")
+
+    def test_from_config_builds_openai_judge(self):
+        judge = LLMJudge.from_config({
+            "llm_helper_backend": "OpenAI-Compatible",
+            "llm_helper_model": "judge-model",
+            "llm_helper_openai_url": "https://judge.local:8443/",
+            "llm_helper_openai_apikey": "sk-helper",
+            "llm_helper_openai_verify_ssl": False,
+        })
+        assert judge.backend == "OpenAI-Compatible"
+        assert judge.model == "judge-model"
+        assert judge.openai_url == "https://judge.local:8443"
+        assert judge.api_key == "sk-helper"
+        assert judge.verify_ssl is False
+
+    def test_from_config_builds_ollama_judge_with_default_url(self):
+        judge = LLMJudge.from_config({
+            "llm_helper_backend": "Ollama",
+            "llm_helper_model": "llama3",
+        })
+        assert judge.backend == "Ollama"
+        assert judge.ollama_url == "http://localhost:11434"
 
 
 # ── _parse_judge_output ───────────────────────────────────────────────────────
 
 class TestParseJudgeOutput:
-    def _make_judge(self):
-        """Build a FrontierJudge without calling _init_client (SDK may not be installed)."""
-        judge = object.__new__(FrontierJudge)
-        judge.provider = "anthropic"
-        judge.model = "test-model"
-        judge.temperature = 0.0
-        judge.max_tokens = 4096
-        judge._client = MagicMock()
-        return judge
-
     def test_parses_valid_json(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         raw = _make_judge_output(correctness=80, coherence=75)
         score = judge._parse_judge_output(raw)
         assert isinstance(score, JudgeScore)
@@ -104,31 +116,31 @@ class TestParseJudgeOutput:
         assert score.coherence == 75
 
     def test_aggregate_is_mean_of_five_dims(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         raw = _make_judge_output(80, 80, 80, 80, 80)
         score = judge._parse_judge_output(raw)
         assert score.aggregate_score == 80.0
 
     def test_invalid_json_returns_empty_score(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         score = judge._parse_judge_output("not json at all")
         assert isinstance(score, JudgeScore)
         assert score.correctness == 0
         assert score.raw_response == "not json at all"
 
     def test_json_with_no_matching_block_returns_empty(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         score = judge._parse_judge_output("[]")  # valid JSON but no { }
         assert score.correctness == 0
 
     def test_code_fenced_json_parsed(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         raw = "```json\n" + _make_judge_output(90) + "\n```"
         score = judge._parse_judge_output(raw)
         assert score.correctness == 90
 
     def test_justifications_populated(self):
-        judge = self._make_judge()
+        judge = _openai_judge()
         raw = _make_judge_output()
         score = judge._parse_judge_output(raw)
         assert "correctness" in score.justifications
@@ -137,95 +149,95 @@ class TestParseJudgeOutput:
 
 # ── score_response ────────────────────────────────────────────────────────────
 
-def _make_judge_bypass(provider: str = "anthropic") -> "FrontierJudge":
-    """Construct a FrontierJudge without invoking _init_client."""
-    judge = object.__new__(FrontierJudge)
-    judge.provider = provider
-    judge.model = "test-model"
-    judge.temperature = 0.0
-    judge.max_tokens = 4096
-    judge._client = MagicMock()
-    return judge
-
-
 class TestScoreResponse:
-    def _make_anthropic_judge(self, raw_response: str):
-        judge = _make_judge_bypass("anthropic")
-        mock_content = MagicMock()
-        mock_content.text = raw_response
-        judge._client.messages.create.return_value.content = [mock_content]
-        return judge
-
-    def _make_openai_judge(self, raw_response: str):
-        judge = _make_judge_bypass("openai")
-        judge._client.chat.completions.create.return_value.choices[0].message.content = raw_response
-        return judge
-
-    def test_anthropic_returns_judge_score(self):
-        judge = self._make_anthropic_judge(_make_judge_output(80))
-        result = judge.score_response("prompt", "response")
+    @patch("core.judge.requests.post")
+    def test_openai_compatible_returns_judge_score(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output(80))
+        result = _openai_judge().score_response("prompt", "response")
         assert isinstance(result, JudgeScore)
         assert result.correctness == 80
+        url = mock_post.call_args[0][0]
+        assert url == "http://judge.local:8080/v1/chat/completions"
 
-    def test_openai_returns_judge_score(self):
-        judge = self._make_openai_judge(_make_judge_output(70))
-        result = judge.score_response("prompt", "response")
+    @patch("core.judge.requests.post")
+    def test_ollama_returns_judge_score(self, mock_post):
+        mock_post.return_value = _ollama_response(_make_judge_output(70))
+        result = _ollama_judge().score_response("prompt", "response")
         assert isinstance(result, JudgeScore)
         assert result.correctness == 70
+        url = mock_post.call_args[0][0]
+        assert url == "http://localhost:11434/api/chat"
 
-    def test_api_exception_returns_none(self):
-        judge = _make_judge_bypass("anthropic")
-        judge._client.messages.create.side_effect = Exception("API error")
-        result = judge.score_response("prompt", "response")
+    @patch("core.judge.requests.post")
+    def test_api_key_sent_as_bearer_header(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output())
+        _openai_judge(api_key="sk-helper").score_response("p", "r")
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer sk-helper"
+
+    @patch("core.judge.requests.post")
+    def test_no_auth_header_without_api_key(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output())
+        _openai_judge().score_response("p", "r")
+        headers = mock_post.call_args[1]["headers"]
+        assert "Authorization" not in headers
+
+    @patch("core.judge.requests.post")
+    def test_api_exception_returns_none(self, mock_post):
+        mock_post.side_effect = Exception("API error")
+        result = _openai_judge().score_response("prompt", "response")
         assert result is None
 
-    def test_ground_truth_included_in_request(self):
-        judge = self._make_anthropic_judge(_make_judge_output())
-        judge.score_response("prompt", "response", ground_truth="expected answer")
+    @patch("core.judge.requests.post")
+    def test_ground_truth_included_in_request(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output())
+        _openai_judge().score_response("prompt", "response", ground_truth="expected answer")
+        messages = mock_post.call_args[1]["json"]["messages"]
+        assert "expected answer" in messages[-1]["content"]
 
-        call_args = judge._client.messages.create.call_args
-        messages = call_args[1]["messages"]
-        assert "expected answer" in messages[0]["content"]
+    @patch("core.judge.requests.post")
+    def test_system_prompt_sent(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output())
+        _openai_judge().score_response("prompt", "response")
+        messages = mock_post.call_args[1]["json"]["messages"]
+        assert messages[0]["role"] == "system"
+        assert "expert evaluator" in messages[0]["content"]
 
 
 # ── generate_ground_truth ─────────────────────────────────────────────────────
 
 class TestGenerateGroundTruth:
-    def _make_anthropic_judge(self, raw_response: str):
-        judge = _make_judge_bypass("anthropic")
-        mock_content = MagicMock()
-        mock_content.text = raw_response
-        judge._client.messages.create.return_value.content = [mock_content]
-        return judge
-
-    def test_returns_list_of_ground_truth_cases(self):
-        judge = self._make_anthropic_judge(_make_gt_output(2))
-        cases = judge.generate_ground_truth("Test scenario", num_variants=2)
+    @patch("core.judge.requests.post")
+    def test_returns_list_of_ground_truth_cases(self, mock_post):
+        mock_post.return_value = _openai_response(_make_gt_output(2))
+        cases = _openai_judge().generate_ground_truth("Test scenario", num_variants=2)
         assert len(cases) == 2
         assert all(isinstance(c, GroundTruthCase) for c in cases)
 
-    def test_case_fields_populated(self):
-        judge = self._make_anthropic_judge(_make_gt_output(1))
-        cases = judge.generate_ground_truth("Test scenario")
+    @patch("core.judge.requests.post")
+    def test_case_fields_populated(self, mock_post):
+        mock_post.return_value = _openai_response(_make_gt_output(1))
+        cases = _openai_judge().generate_ground_truth("Test scenario")
         assert cases[0].input_text == "input 0"
         assert cases[0].expected_output == "expected 0"
         assert cases[0].synthetic is True
 
-    def test_api_exception_returns_empty_list(self):
-        judge = _make_judge_bypass("anthropic")
-        judge._client.messages.create.side_effect = Exception("rate limit")
-        cases = judge.generate_ground_truth("scenario")
+    @patch("core.judge.requests.post")
+    def test_api_exception_returns_empty_list(self, mock_post):
+        mock_post.side_effect = Exception("rate limit")
+        cases = _openai_judge().generate_ground_truth("scenario")
         assert cases == []
 
-    def test_malformed_response_returns_empty_list(self):
-        judge = self._make_anthropic_judge("not json")
-        cases = judge.generate_ground_truth("scenario")
+    @patch("core.judge.requests.post")
+    def test_malformed_response_returns_empty_list(self, mock_post):
+        mock_post.return_value = _openai_response("not json")
+        cases = _openai_judge().generate_ground_truth("scenario")
         assert cases == []
 
-    def test_code_fenced_json_parsed(self):
-        raw = "```json\n" + _make_gt_output(1) + "\n```"
-        judge = self._make_anthropic_judge(raw)
-        cases = judge.generate_ground_truth("scenario")
+    @patch("core.judge.requests.post")
+    def test_code_fenced_json_parsed(self, mock_post):
+        mock_post.return_value = _openai_response("```json\n" + _make_gt_output(1) + "\n```")
+        cases = _openai_judge().generate_ground_truth("scenario")
         assert len(cases) == 1
 
 

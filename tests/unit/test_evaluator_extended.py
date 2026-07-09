@@ -200,13 +200,13 @@ class TestValidationStdoutLog:
 
 
 class TestAiJudgeIntegration:
-    @patch("core.judge.FrontierJudge")
+    @patch("core.judge.LLMJudge")
     @patch("core.evaluator.stream_llama_cpp")
     def test_enabled_judge_populates_telemetry(self, mock_stream, mock_judge_cls):
         mock_stream.return_value = _text_resp("final answer")
-        judge = mock_judge_cls.return_value
-        judge.provider = "anthropic"
-        judge.model = "claude-test"
+        judge = mock_judge_cls.from_config.return_value
+        judge.backend = "OpenAI-Compatible"
+        judge.model = "judge-model"
         judge.score_response.return_value = JudgeScore(
             correctness=88,
             coherence=77,
@@ -221,12 +221,10 @@ class TestAiJudgeIntegration:
         tel = evaluator.run_evaluation(
             MagicMock(),
             _config(
-                judge_enabled=True,
-                judge_provider="anthropic",
-                judge_model="claude-test",
-                judge_api_key="test-key",
-                judge_temperature=0.0,
-                judge_mode="Score all responses",
+                llm_helper_enabled=True,
+                llm_helper_backend="OpenAI-Compatible",
+                llm_helper_openai_url="http://judge.local:8080",
+                llm_helper_model="judge-model",
             ),
             lambda _: None,
         )
@@ -235,3 +233,13 @@ class TestAiJudgeIntegration:
         assert tel["judge_scores"]["correctness"]["justification"] == "good"
         assert tel["judge_aggregate_score"] == 86.6
         judge.score_response.assert_called_once()
+
+    @patch("core.judge.LLMJudge")
+    @patch("core.evaluator.stream_llama_cpp")
+    def test_disabled_helper_skips_judge(self, mock_stream, mock_judge_cls):
+        mock_stream.return_value = _text_resp("final answer")
+
+        tel = evaluator.run_evaluation(MagicMock(), _config(), lambda _: None)
+
+        mock_judge_cls.from_config.assert_not_called()
+        assert "judge_scores" not in tel

@@ -358,6 +358,13 @@ examples:
         default=None,
         help="Override the OpenAI API key (also reads MODELSCOPE_OPENAI_API_KEY).",
     )
+    project_p.add_argument(
+        "--llm-helper-api-key",
+        dest="llm_helper_api_key",
+        default=None,
+        help="Override the LLM Judge / prompt-helper API key "
+             "(also reads MODELSCOPE_LLM_HELPER_API_KEY).",
+    )
 
     # ── batch subcommand ──────────────────────────────────────────────────────
     batch_p = subparsers.add_parser(
@@ -667,6 +674,21 @@ def _cmd_project(args: argparse.Namespace) -> int:
     # Inject required keys for run_evaluation loop
     config.setdefault("cancel_requested_ref", [False])
 
+    # Mirror the GUI's run-config assembly (ui/execute_tab.py) so a project
+    # file runs identically from the CLI.  The evaluator reads alias keys
+    # (backend_type/selected_model/llm_url/context_size) that the exported
+    # config stores under their flushed names.
+    if bot_type == "llama_cli_bot":
+        config.setdefault("type", "llama_cli_bot")
+        config.setdefault("backend_type", config.get("backend", "llama.cpp"))
+        config.setdefault("selected_model", config.get("model_name", ""))
+        config.setdefault("context_size", config.get("tokens", 2048))
+        config.setdefault("llm_url", config.get("openai_base_url", ""))
+        config.setdefault("mcp_server_url", "http://127.0.0.1:9191")
+        config["mcp_servers"] = [
+            s for s in config.get("mcp_servers", []) if s.get("enabled")
+        ]
+
     # Merge sensitive credentials (Flags > Env > JSON)
     def _resolve_secret(key: str, flag_name: str, env_name: str):
         flag_val = getattr(args, flag_name, None)
@@ -680,6 +702,7 @@ def _cmd_project(args: argparse.Namespace) -> int:
     _resolve_secret("ssh_key_path", "ssh_key_path", "MODELSCOPE_SSH_KEY_PATH")
     _resolve_secret("sudo_password", "sudo_password", "MODELSCOPE_SUDO_PASSWORD")
     _resolve_secret("openai_api_key", "openai_api_key", "MODELSCOPE_OPENAI_API_KEY")
+    _resolve_secret("llm_helper_openai_apikey", "llm_helper_api_key", "MODELSCOPE_LLM_HELPER_API_KEY")
 
     # Prefer key over password if both are present
     if config.get("ssh_key_path") and config.get("ssh_password"):
@@ -687,8 +710,12 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
     # Dry-run: print config and exit
     if getattr(args, "dry_run", False):
-        safe_config = {k: ("***REDACTED***" if "password" in k.lower() else v)
-                       for k, v in config.items()}
+        safe_config = {
+            k: ("***REDACTED***"
+                if ("password" in k.lower() or "api_key" in k.lower() or "apikey" in k.lower())
+                else v)
+            for k, v in config.items()
+        }
         print(_c(f"Dry-run config for project '{proj.get('name', 'Unknown')}' (no evaluation will run):", _BOLD))
         print(json.dumps(safe_config, indent=2, default=str))
         return 0
@@ -780,8 +807,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Dry-run: print config and exit
     if getattr(args, "dry_run", False):
         config = _build_config(args)
-        safe_config = {k: ("***REDACTED***" if "password" in k.lower() else v)
-                       for k, v in config.items()}
+        safe_config = {
+            k: ("***REDACTED***"
+                if ("password" in k.lower() or "api_key" in k.lower() or "apikey" in k.lower())
+                else v)
+            for k, v in config.items()
+        }
         # Also surface SSH connection params (they go to the env, not config dict)
         if args.ssh_host:
             safe_config["_ssh_params"] = {

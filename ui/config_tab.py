@@ -17,9 +17,10 @@ def _push_undo(snapshot: dict) -> None:
 
 
 def _export_project_json(project: dict) -> str:
-    SENSITIVE = {"ssh_password", "openai_api_key"}
+    # Same secret set the settings store strips before writing to disk
+    from core.settings_store import NESTED_SENSITIVE
     proj_copy = copy.deepcopy(project)
-    for k in SENSITIVE:
+    for k in NESTED_SENSITIVE:
         proj_copy.get("config", {}).pop(k, None)
     return json.dumps(proj_copy, indent=2)
 
@@ -255,12 +256,6 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", []),
-        # Judge configuration (scoped to project, not global)
-        "judge_enabled":     st.session_state.get("judge_enabled", False),
-        "judge_provider":    st.session_state.get("judge_provider", "anthropic"),
-        "judge_model":       st.session_state.get("judge_model", "claude-sonnet-4-6"),
-        "judge_temperature": st.session_state.get("judge_temperature", 0.0),
-        "judge_mode":        st.session_state.get("judge_mode", "Score all responses"),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1010,37 +1005,13 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     st.toast("⚠️ Enter a valid URL.")
                 st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
                 st.rerun()
-
-        st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
-        _is_https = _url.strip().lower().startswith("https://")
-        _ssl = st.checkbox(
-            "Require SSL Certificate Verification",
-            key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
-            help="Only applies to https:// URLs — ignored for plain HTTP. Uncheck for self-signed certs.",
-            disabled=(not _is_enabled) or not _is_https,
-        )
-        st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
-        _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
-        if _models:
-            _model_names = [m["name"] for m in _models]
-            _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
-            st.session_state.setdefault(f"{pfx}_llm_helper_openai_model_sel", _cur if _cur in _model_names else _model_names[0])
-            _chosen = st.selectbox("Model", options=_model_names, key=f"{pfx}_llm_helper_openai_model_sel", disabled=not _is_enabled)
-            st.session_state[f"{pfx}_llm_helper_model"] = _chosen
-        else:
-            st.session_state.setdefault(f"{pfx}_llm_helper_openai_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget", disabled=not _is_enabled)
-            st.session_state[f"{pfx}_llm_helper_model"] = _man
-
-        if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True, disabled=not _is_enabled):
-            if _url.strip():
-                from core.llama_server import get_server_info
-                _info = get_server_info(_url.strip(), verify_ssl=_ssl)
-                if _info:
-                    _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                    st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
-                else:
-                    st.error("Could not reach server.")
+            _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
+            if _models:
+                _model_names = [m["name"] for m in _models]
+                _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
+                st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_sel", _cur if _cur in _model_names else _model_names[0])
+                _chosen = st.selectbox("Model", options=_model_names, key=f"{pfx}_llm_helper_ollama_model_sel")
+                st.session_state[f"{pfx}_llm_helper_model"] = _chosen
             else:
                 st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
                 _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget")
@@ -1092,10 +1063,12 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     st.rerun()
 
             st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+            _is_https = _url.strip().lower().startswith("https://")
             _ssl = st.checkbox(
                 "Require SSL Certificate Verification",
                 key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
-                help="Uncheck for self-signed certs or plain HTTP servers.",
+                help="Only applies to https:// URLs — ignored for plain HTTP. Uncheck for self-signed certs.",
+                disabled=not _is_https,
             )
             st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
             _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
@@ -1528,6 +1501,11 @@ def _flush_llama_cli_config(project: dict) -> None:
         "ssh_password":        st.session_state.get("llama_cli_ssh_password", ""),
         "ssh_key_path":        st.session_state.get("llama_cli_ssh_key_path", ""),
         "sudo":                st.session_state.get("llama_cli_sudo", False),
+        "sudo_password":       (
+            st.session_state.get("llama_cli_ssh_password", "")
+            if st.session_state.get("llama_cli_execution_target", "local") in ("ssh", "pct")
+            else st.session_state.get("llama_cli_sudo_password", "")
+        ) if st.session_state.get("llama_cli_sudo") else "",
         "backend":             st.session_state.get("llama_cli_backend", "llama.cpp"),
         "binary_path":         st.session_state.get("llama_cli_binary_path", ""),
         "model_dir":           st.session_state.get("llama_cli_model_dir", ""),
@@ -1562,6 +1540,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "en_seed":             st.session_state.get("llama_cli_en_seed", False),
         "flash_attn":          st.session_state.get("llama_cli_flash_attn", False),
         "custom_flags":        st.session_state.get("llama_cli_custom_flags", ""),
+        "mcp_enabled":         st.session_state.get("llama_cli_mcp_enabled", False),
         "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
         "mcp_servers":         st.session_state.get("llama_cli_mcp_servers", []),
         "startup_commands":    _clean_steps(st.session_state.get("llama_cli_startup_commands", [])),
@@ -1582,12 +1561,6 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", []),
-        # Judge configuration (scoped to project, not global)
-        "judge_enabled":     st.session_state.get("judge_enabled", False),
-        "judge_provider":    st.session_state.get("judge_provider", "anthropic"),
-        "judge_model":       st.session_state.get("judge_model", "claude-sonnet-4-6"),
-        "judge_temperature": st.session_state.get("judge_temperature", 0.0),
-        "judge_mode":        st.session_state.get("judge_mode", "Score all responses"),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)

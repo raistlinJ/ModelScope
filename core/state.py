@@ -83,6 +83,8 @@ _DEFAULTS: dict = {
     "bash_metrics_matrix":      [],
     "bash_validation_sets":     [],
     "bash_sudo":                False,
+    "bash_sudo_password":       "",
+    "bash_pct_vmid":            "",
 
     # Llama-CLI-bot working-copy keys (synced from active project on project switch)
     "llama_cli_execution_target":    "local",
@@ -93,6 +95,7 @@ _DEFAULTS: dict = {
     "llama_cli_ssh_key_path":        "",
     "llama_cli_sudo":                False,
     "llama_cli_sudo_password":       "",
+    "llama_cli_pct_vmid":            "",
     "llama_cli_backend":             "llama.cpp",
     "llama_cli_binary_path":         "",
     "llama_cli_model_dir":           "",
@@ -128,6 +131,7 @@ _DEFAULTS: dict = {
     "llama_cli_openai_base_url":     "",
     "llama_cli_openai_verify_ssl":   True,
     "llama_cli_openai_api_key":      "",
+    "llama_cli_mcp_enabled":         False,
     "llama_cli_mcp_config_path":     "",
     "llama_cli_mcp_servers":         [],
     "llama_cli_prompts":             [],
@@ -157,6 +161,11 @@ _DEFAULTS: dict = {
     "cancel_requested":  False,
     "_run_in_progress":  False,
     "_exec_phase":       "",
+    "bash_exec_config_expanded":  True,
+    "llama_exec_config_expanded": True,
+
+    # Config-tab test-run flag (llama test run in progress)
+    "_llama_cli_testing": False,
 
     # Telemetry (current run)
     "telemetry": {},
@@ -177,14 +186,6 @@ _DEFAULTS: dict = {
     "caf_urgency":            "Speed",
     "caf_allowed_subnets":    [],
     "caf_target_credentials": [],
-
-    # AI Judge configuration
-    "judge_enabled":     False,
-    "judge_provider":    "anthropic",
-    "judge_model":       "claude-sonnet-4-6",
-    "judge_api_key":     "",
-    "judge_temperature": 0.0,
-    "judge_mode":        "Score all responses",
 
     # RAG configuration
     "rag_corpus_path":          "",
@@ -234,9 +235,7 @@ _GLOBAL_KEYS: frozenset = frozenset({
     # Internal trackers that must survive the switch
     "_last_backend", "_last_active_project_id", "_css_injected",
     "_show_new_project_dialog",
-    # AI Judge / CAF / RAG / Workflow — user-level preferences, not per-project
-    "judge_enabled", "judge_provider", "judge_model", "judge_api_key",
-    "judge_temperature", "judge_mode",
+    # CAF / RAG / Workflow — user-level preferences, not per-project
     "caf_scope", "caf_urgency", "caf_allowed_subnets", "caf_target_credentials",
     "rag_corpus_path", "rag_retrieval_k", "rag_query",
     "rag_ground_truth_answer", "rag_ground_truth_doc_ids",
@@ -286,6 +285,17 @@ _APP_OWNED_PREFIXES: tuple = (
     "_llama_preset_sel",  # preset selector
     "llama_cli_llm_helper_",  # llama-cli LLM helper widgets
     "bash_llm_helper_",     # bash LLM helper widgets
+    "bash_exec_vset_",      # execute-tab validation-set selection (index-keyed)
+    "llama_exec_vset_",     # execute-tab validation-set selection (index-keyed)
+    "bash_is_fetching_",    # transient LLM-helper fetch flags
+    "llama_cli_is_fetching_",  # transient LLM-helper fetch flags
+    "testing_",             # connection-test in-progress flags
+)
+
+# Dynamic keys purged by suffix — connection-test results are named
+# {state_prefix}_{target_type}_test_result and must not survive a switch.
+_APP_OWNED_SUFFIXES: tuple = (
+    "_test_result",
 )
 
 
@@ -305,7 +315,8 @@ def _purge_project_state() -> None:
     to_delete = [
         k for k in list(st.session_state.keys())
         if k not in _DEFAULTS
-        and any(k.startswith(pfx) for pfx in _APP_OWNED_PREFIXES)
+        and (any(k.startswith(pfx) for pfx in _APP_OWNED_PREFIXES)
+             or any(k.endswith(sfx) for sfx in _APP_OWNED_SUFFIXES))
     ]
     for k in to_delete:
         del st.session_state[k]
@@ -333,6 +344,8 @@ _BASH_KEY_MAP: dict = {
     "bash_metrics_matrix":      "metrics_matrix",
     "bash_validation_sets":     "validation_sets",
     "bash_sudo":                "sudo",
+    "bash_sudo_password":       "sudo_password",
+    "bash_pct_vmid":            "pct_vmid",
     "bash_llm_helper_backend":  "llm_helper_backend",
     "bash_llm_helper_openai_url": "llm_helper_openai_url",
     "bash_llm_helper_openai_apikey": "llm_helper_openai_apikey",
@@ -353,6 +366,7 @@ _LLAMA_KEY_MAP: dict = {
     "llama_cli_ssh_key_path":        "ssh_key_path",
     "llama_cli_sudo":                "sudo",
     "llama_cli_sudo_password":       "sudo_password",
+    "llama_cli_pct_vmid":            "pct_vmid",
     "llama_cli_backend":             "backend",
     "llama_cli_binary_path":         "binary_path",
     "llama_cli_model_dir":           "model_dir",
@@ -388,6 +402,7 @@ _LLAMA_KEY_MAP: dict = {
     "llama_cli_openai_base_url":     "openai_base_url",
     "llama_cli_openai_verify_ssl":   "openai_verify_ssl",
     "llama_cli_openai_api_key":      "openai_api_key",
+    "llama_cli_mcp_enabled":         "mcp_enabled",
     "llama_cli_mcp_config_path":     "mcp_config_path",
     "llama_cli_mcp_servers":         "mcp_servers",
     "llama_cli_prompts":             "prompts",

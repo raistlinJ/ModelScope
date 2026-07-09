@@ -41,6 +41,9 @@ _SENSITIVE_KEYS = frozenset({
     "ssh_password",
     "ssh_key_path",
     "judge_api_key",
+    "sudo_password",
+    "openai_api_key",
+    "llm_helper_openai_apikey",
 })
 
 

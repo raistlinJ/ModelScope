@@ -677,16 +677,8 @@ def _finalize_telemetry(telemetry: dict, start_t: float) -> None:
 
 
 def _run_ai_judge(telemetry: dict, config: dict, on_log: Callable[[str], None]) -> None:
-    """Score the final response with the optional frontier-model judge."""
-    if not config.get("judge_enabled"):
-        return
-    if config.get("judge_mode") == "Generate ground truth only":
-        on_log("[JUDGE] Skipped — ground-truth generation mode is selected")
-        return
-    api_key = (config.get("judge_api_key") or "").strip()
-    if not api_key:
-        on_log("[JUDGE] Skipped — no API key configured")
-        telemetry["judge_error"] = "No API key configured"
+    """Score the final response with the project's LLM Judge (llm_helper_* config)."""
+    if not config.get("llm_helper_enabled"):
         return
     response = telemetry.get("llm_response", "")
     if not response.strip():
@@ -695,14 +687,9 @@ def _run_ai_judge(telemetry: dict, config: dict, on_log: Callable[[str], None]) 
         return
 
     try:
-        from core.judge import FrontierJudge
-        judge = FrontierJudge(
-            provider=config.get("judge_provider", "anthropic"),
-            model=config.get("judge_model", ""),
-            api_key=api_key,
-            temperature=float(config.get("judge_temperature", 0.0)),
-        )
-        on_log(f"[JUDGE] Scoring response with {judge.provider}/{judge.model}")
+        from core.judge import LLMJudge
+        judge = LLMJudge.from_config(config)
+        on_log(f"[JUDGE] Scoring response with {judge.backend}/{judge.model or '(server default)'}")
         score = judge.score_response(
             prompt=config.get("user_prompt", ""),
             response=response,

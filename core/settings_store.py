@@ -130,13 +130,15 @@ PERSIST_KEYS: frozenset[str] = frozenset({
 })
 
 # Keys that must never be written even if they accidentally appear in PERSIST_KEYS.
+# Also stripped from per-run config.json by core.session_log.
 _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "target_ssh_password",
     "target_ssh_key_path",
-    "judge_api_key",
+    "judge_api_key",   # legacy frontier-judge key — may exist in old exports
     "bash_ssh_password",
     "llama_cli_ssh_password",
     "llama_cli_openai_api_key",
+    "llm_helper_openai_apikey",
 })
 
 # Sensitive keys nested inside project config dicts.
@@ -144,6 +146,8 @@ NESTED_SENSITIVE: frozenset[str] = frozenset({
     "ssh_password",
     "openai_api_key",
     "ssh_key_path",
+    # For ssh/pct targets this holds a copy of ssh_password — must not hit disk
+    "sudo_password",
 })
 
 

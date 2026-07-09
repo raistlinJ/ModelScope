@@ -26,8 +26,9 @@ You can export a bot's configuration from the ModelScope UI as a JSON file and r
 | `--ssh-key-path PATH` | Override the SSH key path |
 | `--sudo-password PASS` | Override the sudo password |
 | `--openai-api-key KEY` | Override the OpenAI API key |
+| `--llm-helper-api-key KEY` | Override the LLM Judge / prompt-helper API key |
 
-> **Note on Credentials:** Passwords (like SSH and OpenAI keys) are automatically stripped from the JSON when exported from the UI for security. You can either manually edit the JSON file, or pass them securely at runtime via the override flags above or their corresponding environment variables (e.g. `MODELSCOPE_SSH_PASSWORD`).
+> **Note on Credentials:** Passwords (like SSH and OpenAI keys) are automatically stripped from the JSON when exported from the UI for security. You can either manually edit the JSON file, or pass them securely at runtime via the override flags above or their corresponding environment variables (e.g. `MODELSCOPE_SSH_PASSWORD`, `MODELSCOPE_LLM_HELPER_API_KEY`).
 > **If both a password and an SSH key path are provided, the SSH key is preferred.**
 
 ---

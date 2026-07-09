@@ -246,12 +246,14 @@ def _run_bash_bot(project: dict, shared: dict) -> None:
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
         "bash_sudo":           cfg.get("sudo", False),
+        # The evaluator reads "sudo"; keep "bash_sudo" for telemetry/back-compat
+        "sudo":                cfg.get("sudo", False),
         "sudo_password":       cfg.get("sudo_password", ""),
         "cancel_requested_ref": cancel_ref,
         "execution_mode": "bash",
         "active_project_id":   project.get("id"),
     }
-    # Inherit LLM Judge configurations
+    # LLM Judge connection — also drives final-response scoring (_run_ai_judge)
     bash_config.update({k: v for k, v in cfg.items() if k.startswith("llm_helper_")})
 
     telemetry: dict | None = None
@@ -622,7 +624,7 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
         "cancel_requested_ref": cancel_ref,
         "active_project_id":   project.get("id"),
     }
-    # Inherit LLM Judge configurations
+    # LLM Judge connection — also drives final-response scoring (_run_ai_judge)
     llama_config.update({k: v for k, v in cfg.items() if k.startswith("llm_helper_")})
 
     telemetry: dict | None = None
