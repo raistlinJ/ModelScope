@@ -21,6 +21,16 @@ def ensure_http_scheme(url: str) -> str:
     return url
 
 
+def effective_verify_ssl(url: str, verify_ssl: bool) -> bool:
+    """Return the ``verify`` flag to use when requesting *url*.
+
+    Certificate verification only applies to https:// URLs, so the user's
+    "require SSL verification" setting is ignored (treated as True) for plain
+    http — including scheme-less URLs, which default to http.
+    """
+    return verify_ssl if ensure_http_scheme(url).startswith("https://") else True
+
+
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences (colour codes, cursor moves) from text."""
     return _ANSI_RE.sub('', text)

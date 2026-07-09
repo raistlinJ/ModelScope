@@ -11,7 +11,7 @@ import time
 import requests
 import streamlit as st
 from config.defaults import LLAMA_SERVER_BIN, LLAMA_CPP_DEFAULT_URL
-from core.utils import ensure_http_scheme
+from core.utils import ensure_http_scheme, effective_verify_ssl
 
 
 def is_running(url: str = LLAMA_CPP_DEFAULT_URL, timeout: float = 2.0) -> bool:
@@ -29,7 +29,8 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True) -
     Reads /props endpoint: default_generation_settings.n_ctx + model_path.
     """
     try:
-        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3, verify=verify_ssl)
+        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3,
+                         verify=effective_verify_ssl(url, verify_ssl))
         if not r.ok:
             return None
         d = r.json()

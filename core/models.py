@@ -10,7 +10,7 @@ import subprocess
 import sys
 import requests
 
-from core.utils import ensure_http_scheme
+from core.utils import ensure_http_scheme, effective_verify_ssl
 
 
 # Vocab-only GGUF files shipped with llama.cpp — not inference models
@@ -232,7 +232,8 @@ def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list
     if not url:
         return [], "Server URL is empty."
     try:
-        resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8, verify=verify_ssl)
+        resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8,
+                            verify=effective_verify_ssl(url, verify_ssl))
         resp.raise_for_status()
         data = resp.json()
         # Parse /v1/models: check both top-level `data` (OpenAI list format) and `models`

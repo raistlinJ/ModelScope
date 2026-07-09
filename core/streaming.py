@@ -15,6 +15,8 @@ from typing import Callable
 
 import requests
 
+from core.utils import effective_verify_ssl
+
 
 def _normalize_openai_url(url: str) -> str:
     """Strip trailing /v1 or /v1/ so appending /v1/... never doubles it."""
@@ -144,7 +146,8 @@ def stream_llama_cpp(
 
     resp = requests.post(
         _normalize_openai_url(base_url) + "/v1/chat/completions",
-        json=payload, headers=headers or None, stream=True, timeout=(10, None), verify=verify,
+        json=payload, headers=headers or None, stream=True, timeout=(10, None),
+        verify=effective_verify_ssl(base_url, verify),
     )
     resp.raise_for_status()
 

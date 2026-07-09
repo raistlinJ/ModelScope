@@ -186,18 +186,10 @@ def render() -> None:
             st.info(f"Target: `{user}@{host}` | CAF dir: `{caf_dir}`")
 
         st.divider()
-        col_save, col_note = st.columns([2, 5])
-        with col_save:
-            if st.button("💾 Save Settings", key="btn_target_save", use_container_width=True,
-                         help="Save current target configuration to ~/.modelscope/settings.json"):
-                from core.settings_store import save_settings
-                save_settings(st.session_state)
-                st.toast("Settings saved!", icon="💾")
-        with col_note:
-            st.caption(
-                "Host, port, username, and CAF directory are saved. "
-                "**Password and key path are never written to disk** (security)."
-            )
+        st.caption(
+            "Host, port, username, and CAF directory are saved automatically. "
+            "**Password and key path are never written to disk** (security)."
+        )
     else:
         st.info(
             "Running locally on this machine. "

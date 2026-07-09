@@ -1009,11 +1009,12 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 st.rerun()
 
         st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+        _is_https = _url.strip().lower().startswith("https://")
         _ssl = st.checkbox(
             "Require SSL Certificate Verification",
             key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
-            help="Uncheck for self-signed certs or plain HTTP servers.",
-            disabled=not _is_enabled,
+            help="Only applies to https:// URLs — ignored for plain HTTP. Uncheck for self-signed certs.",
+            disabled=(not _is_enabled) or not _is_https,
         )
         st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
         _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
@@ -1942,7 +1943,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 "Require SSL Certificate Verification",
                 key="_llama_openai_ssl_widget",
                 value=st.session_state.get("llama_cli_openai_verify_ssl", True),
-                help="Uncheck for self-signed certs or plain HTTP servers.",
+                help="Only applies to https:// URLs — ignored for plain HTTP. Uncheck for self-signed certs.",
+                disabled=not _url.strip().lower().startswith("https://"),
             )
             st.session_state["llama_cli_openai_verify_ssl"] = _ssl
 

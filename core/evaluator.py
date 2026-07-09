@@ -25,6 +25,7 @@ from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
 from core.streaming import stream_ollama, stream_llama_cpp
+from core.utils import effective_verify_ssl
 from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported for callers/tests
 
 
@@ -817,8 +818,8 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             "messages": messages,
             "temperature": 0.2
         }
-        verify_ssl = config.get("llm_helper_openai_verify_ssl", True)
-        
+        verify_ssl = effective_verify_ssl(url, config.get("llm_helper_openai_verify_ssl", True))
+
         on_log(f"[PROMPT HELPER] Sending to {url}/v1/chat/completions", "llama")
         try:
             resp = requests.post(f"{url}/v1/chat/completions", json=payload, headers=headers, verify=verify_ssl, timeout=120)
