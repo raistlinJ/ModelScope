@@ -31,9 +31,6 @@ _DEFAULTS: dict = {
 
     # Model source mode — "pre_compiled_local", "pre_compiled_remote", or "compile"
     "model_source_mode":     "pre_compiled_local",
-    
-    # Navigation / UI State
-    "active_tab":            0,
 
     # External (pre-compiled remote) endpoint
     "external_llm_url":      EXTERNAL_LLAMA_CPP_URL,
@@ -85,12 +82,6 @@ _DEFAULTS: dict = {
     "validation_command": "",
     "fail_patterns":      [],
     "metrics_matrix":     [],
-    
-    # Discovered models
-    "llama_cli_discovered_models": [],
-    "llama_cli_openai_models":     [],
-    "_llama_svc_result":           None,
-    "_llama_svc_cmd":              "",
 
     # Execute
     "sys_prompt":        "",
