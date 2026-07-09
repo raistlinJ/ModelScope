@@ -5,11 +5,13 @@ subprocess. Process handles and readiness flags are stashed in Streamlit session
 state, so this module is UI-coupled and must not be imported by the CLI path.
 """
 import os
+import socket
 import subprocess
 import tempfile
 import time
 import requests
 import streamlit as st
+from urllib.parse import urlsplit
 from config.defaults import LLAMA_SERVER_BIN, LLAMA_CPP_DEFAULT_URL
 from core.utils import ensure_http_scheme, effective_verify_ssl
 
@@ -23,20 +25,81 @@ def is_running(url: str = LLAMA_CPP_DEFAULT_URL, timeout: float = 2.0) -> bool:
         return False
 
 
+def port_open(url: str, timeout: float = 1.5) -> bool:
+    """Return True if a bare TCP connection succeeds to url's host:port.
+
+    Used to tell "nothing is listening here" (managed server not started yet)
+    apart from "something is listening but didn't answer the HTTP probe
+    correctly" — the two failure modes need very different user-facing
+    messages in get_server_info() callers.
+    """
+    parsed = urlsplit(ensure_http_scheme(url))
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True) -> dict | None:
     """
-    Return {n_ctx, model_path} from the running server, or None. (fix #28)
-    Reads /props endpoint: default_generation_settings.n_ctx + model_path.
+    Return {n_ctx, model_path} from a running OpenAI-compatible server, or None.
+
+    llama.cpp exposes detailed metadata at /props. Servers such as vLLM expose
+    only the OpenAI-compatible /v1/models endpoint, so fall back to that before
+    reporting the server as unreachable.
     """
+    base = ensure_http_scheme(url).rstrip("/")
+    if not base:
+        return None
+    verify = effective_verify_ssl(base, verify_ssl)
+
+    def _coerce_int(value):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     try:
-        r = requests.get(ensure_http_scheme(url).rstrip("/") + "/props", timeout=3,
-                         verify=effective_verify_ssl(url, verify_ssl))
+        r = requests.get(base + "/props", timeout=3, verify=verify)
+        if r.ok:
+            d = r.json()
+            return {
+                "n_ctx":      _coerce_int(d.get("default_generation_settings", {}).get("n_ctx")),
+                "model_path": d.get("model_path", ""),
+                "source":     "props",
+            }
+    except Exception:
+        pass
+
+    try:
+        r = requests.get(base + "/v1/models", timeout=3, verify=verify)
         if not r.ok:
             return None
         d = r.json()
+        raw_models = d.get("data") or d.get("models") or []
+        model_path = ""
+        n_ctx = None
+        for model in raw_models:
+            if not isinstance(model, dict):
+                continue
+            model_path = model.get("id") or model.get("name") or ""
+            meta = model.get("meta") or {}
+            n_ctx = (
+                _coerce_int(meta.get("n_ctx"))
+                or _coerce_int(meta.get("context_length"))
+                or _coerce_int(model.get("n_ctx"))
+                or _coerce_int(model.get("context_length"))
+                or _coerce_int(model.get("max_model_len"))
+            )
+            if model_path:
+                break
         return {
-            "n_ctx":      d.get("default_generation_settings", {}).get("n_ctx"),
-            "model_path": d.get("model_path", ""),
+            "n_ctx":      n_ctx,
+            "model_path": model_path,
+            "source":     "v1/models",
         }
     except Exception:
         return None

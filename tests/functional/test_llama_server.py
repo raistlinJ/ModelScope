@@ -22,6 +22,38 @@ def clean_state():
     _reset_state()
 
 
+# ── server info ───────────────────────────────────────────────────────────────
+
+@patch("requests.get")
+def test_get_server_info_falls_back_to_v1_models_for_vllm(mock_get):
+    def side_effect(url, **kw):
+        response = MagicMock()
+        if url.endswith("/props"):
+            response.ok = False
+            response.status_code = 404
+            return response
+        if url.endswith("/v1/models"):
+            response.ok = True
+            response.json.return_value = {
+                "object": "list",
+                "data": [{"id": "Qwen/Qwen2.5-Coder-7B-Instruct", "object": "model"}],
+            }
+            return response
+        raise AssertionError(f"unexpected URL: {url}")
+
+    mock_get.side_effect = side_effect
+
+    info = llama_server.get_server_info("http://localhost:8000")
+
+    assert info == {
+        "n_ctx": None,
+        "model_path": "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "source": "v1/models",
+    }
+    assert mock_get.call_args_list[0].args[0].endswith("/props")
+    assert mock_get.call_args_list[1].args[0].endswith("/v1/models")
+
+
 # ── start — new server ────────────────────────────────────────────────────────
 
 @patch("subprocess.Popen")

@@ -27,13 +27,19 @@ def _log():
     return lambda msg, tag=None: None
 
 
-def _prompt_set(*user_prompts, name="Prompt Set"):
+def _prompt_set(*user_prompts, name="Prompt Set", preserve_context=True):
     """A validation set with one LLM-Judge prompt step per prompt given."""
     return {
         "name": name, "enabled": True,
         "steps": [
             {"delay_seconds": 0, "commands": [
-                {"type": "prompt", "enabled": True, "system_prompt": "", "user_prompt": p}
+                {
+                    "type": "prompt",
+                    "enabled": True,
+                    "system_prompt": "",
+                    "user_prompt": p,
+                    "preserve_context": preserve_context,
+                }
             ]}
             for p in user_prompts
         ],
@@ -132,8 +138,47 @@ class TestRunLlamaCLIOpenAIBackend:
                 _cfg(backend="openai", openai_base_url="http://localhost:1234",
                      validation_sets=[_prompt_set("What colour is the sky?")]),
                 _log(),
-            )
+        )
         assert result["prompt_responses"][0]["response"] == "The sky is blue."
+
+    def test_openai_backend_preserves_context_between_prompt_steps(self):
+        env = _env()
+        with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+            mock_stream.side_effect = [
+                self._stream_result("first response"),
+                self._stream_result("second response"),
+            ]
+            result = run_llama_cli_evaluation(
+                env,
+                _cfg(backend="openai", openai_base_url="http://localhost:1234",
+                     validation_sets=[_prompt_set("first prompt", "second prompt")]),
+                _log(),
+            )
+
+        assert result["validation_passed"] is True
+        second_messages = mock_stream.call_args_list[1].kwargs["messages"]
+        assert second_messages == [
+            {"role": "user", "content": "first prompt"},
+            {"role": "assistant", "content": "first response"},
+            {"role": "user", "content": "second prompt"},
+        ]
+
+    def test_openai_backend_does_not_preserve_context_when_disabled(self):
+        env = _env()
+        with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+            mock_stream.side_effect = [
+                self._stream_result("first response"),
+                self._stream_result("second response"),
+            ]
+            run_llama_cli_evaluation(
+                env,
+                _cfg(backend="openai", openai_base_url="http://localhost:1234",
+                     validation_sets=[_prompt_set("first prompt", "second prompt", preserve_context=False)]),
+                _log(),
+            )
+
+        second_messages = mock_stream.call_args_list[1].kwargs["messages"]
+        assert second_messages == [{"role": "user", "content": "second prompt"}]
 
     def test_openai_backend_dispatch_with_real_selectbox_value(self):
         """Production path: selectbox stores 'OpenAI-compatible HTTP', not bare 'openai'.
@@ -185,6 +230,43 @@ class TestRunLlamaCLILocalBinary:
             env, _cfg(validation_sets=[_prompt_set("p1", "p2", "p3")]), _log()
         )
         assert len(result["prompt_responses"]) == 3
+
+    def test_llama_cli_preserves_context_between_prompt_steps(self):
+        env = _env()
+        env.execute.side_effect = [
+            {"stdout": "first response", "stderr": "", "exit_code": 0},
+            {"stdout": "second response", "stderr": "", "exit_code": 0},
+        ]
+
+        result = run_llama_cli_evaluation(
+            env, _cfg(validation_sets=[_prompt_set("first prompt", "second prompt")]), _log()
+        )
+
+        assert result["validation_passed"] is True
+        second_cmd = env.execute.call_args_list[1].args[0]
+        assert "Conversation so far:" in second_cmd
+        assert "User: first prompt" in second_cmd
+        assert "Assistant: first response" in second_cmd
+        assert "Current user prompt:" in second_cmd
+        assert "second prompt" in second_cmd
+
+    def test_llama_cli_does_not_preserve_context_when_disabled(self):
+        env = _env()
+        env.execute.side_effect = [
+            {"stdout": "first response", "stderr": "", "exit_code": 0},
+            {"stdout": "second response", "stderr": "", "exit_code": 0},
+        ]
+
+        run_llama_cli_evaluation(
+            env,
+            _cfg(validation_sets=[_prompt_set("first prompt", "second prompt", preserve_context=False)]),
+            _log(),
+        )
+
+        second_cmd = env.execute.call_args_list[1].args[0]
+        assert "Conversation so far:" not in second_cmd
+        assert "Assistant: first response" not in second_cmd
+        assert "second prompt" in second_cmd
 
     def test_cancel_stops_after_first_prompt(self):
         env = _env()
@@ -261,6 +343,158 @@ class TestRunLlamaCLIBinaryAutoCorrect:
             assert call_args[0] == fake_server_bin, (
                 f"Managed backend should use llama-server, got: {call_args[0]}"
             )
+
+    def test_llama_server_bot_managed_backend_starts_server_and_uses_http(self):
+        env = _env()
+        proc = MagicMock()
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
+            mock_start.return_value = proc
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {
+                    "message": {"content": "server response"},
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+                result = run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        tokens=4096,
+                        server_host="0.0.0.0",
+                        server_port=19191,
+                        openai_base_url="",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        mock_start.assert_called_once()
+        args = mock_start.call_args.args
+        assert args[:5] == (
+            "/opt/llama.cpp/llama-server",
+            "/models/server.gguf",
+            4096,
+            19191,
+            "0.0.0.0",
+        )
+        assert mock_stream.call_args.kwargs["base_url"] == "http://127.0.0.1:19191"
+        assert result["run_bot_type"] == "llama_server_bot"
+        assert result["prompt_responses"][0]["response"] == "server response"
+        proc.terminate.assert_called_once()
+
+    def test_llama_server_bot_forwards_advanced_options_to_launch(self):
+        """Advanced Options (llama-cli parity) must reach the managed
+        llama-server launch command, gated by their en_* toggles."""
+        env = _env()
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
+            mock_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        en_temp=True, temperature=0.55,
+                        en_gpu_layers=True, gpu_layers=20,
+                        en_top_k=False, top_k=999,  # disabled — must NOT appear
+                        flash_attn=True,
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        advanced_flags = mock_start.call_args.kwargs["advanced_flags"]
+        assert "--temp 0.55" in advanced_flags
+        assert "-ngl 20" in advanced_flags
+        assert "-fa on" in advanced_flags
+        assert "top-k" not in advanced_flags
+
+    def test_llama_server_bot_advanced_flags_precede_custom_flags(self):
+        """Advanced Options come first so custom_flags can still override them
+        (matches ordering convention: gated flags, then user-supplied ones)."""
+        env = _env()
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
+            mock_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        en_temp=True, temperature=0.55,
+                        custom_flags="--temp 0.1",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        kwargs = mock_start.call_args.kwargs
+        assert kwargs["advanced_flags"] == "--temp 0.55"
+        assert kwargs["custom_flags"] == "--temp 0.1"
+
+
+class TestManagedLlamaServerAdvancedFlags:
+    """core.evaluator._managed_llama_server_advanced_flags in isolation."""
+
+    def _base_cfg(self, **overrides):
+        cfg = {
+            "en_temp": False, "temperature": 0.8,
+            "en_gpu_layers": False, "gpu_layers": 99,
+            "en_threads": False, "threads": 4,
+            "flash_attn": False,
+            "en_top_k": False, "top_k": 40,
+            "en_top_p": False, "top_p": 0.9,
+            "en_min_p": False, "min_p": 0.1,
+            "en_repeat_penalty": False, "repeat_penalty": 1.1,
+            "en_freq_penalty": False, "freq_penalty": 0.0,
+            "en_predict": False, "predict": 512,
+            "en_seed": False, "seed": -1,
+            "en_rope_freq_base": False, "rope_freq_base": 10000.0,
+            "en_rope_freq_scale": False, "rope_freq_scale": 1.0,
+        }
+        cfg.update(overrides)
+        return cfg
+
+    def test_all_disabled_yields_empty_string(self):
+        from core.evaluator import _managed_llama_server_advanced_flags
+        assert _managed_llama_server_advanced_flags(self._base_cfg()) == ""
+
+    def test_predict_never_included(self):
+        """-n/--predict is llama-cli-specific (bounds a single CLI call) and
+        must never leak into the managed llama-server launch flags."""
+        from core.evaluator import _managed_llama_server_advanced_flags
+        flags = _managed_llama_server_advanced_flags(
+            self._base_cfg(en_predict=True, predict=256)
+        )
+        assert flags == ""
+
+    def test_all_enabled_includes_every_flag_except_predict(self):
+        from core.evaluator import _managed_llama_server_advanced_flags
+        cfg = self._base_cfg(**{k: True for k in self._base_cfg() if k.startswith("en_")})
+        flags = _managed_llama_server_advanced_flags(cfg)
+        for expected in (
+            "--temp 0.8", "-ngl 99", "-t 4", "--top-k 40", "--top-p 0.9",
+            "--min-p 0.1", "--repeat-penalty 1.1", "--freq-penalty 0.0",
+            "--seed -1", "--rope-freq-base 10000.0", "--rope-freq-scale 1.0",
+        ):
+            assert expected in flags, f"missing {expected!r} in {flags!r}"
+        assert "-n " not in flags
+
+    def test_flash_attn_independent_of_en_flags(self):
+        from core.evaluator import _managed_llama_server_advanced_flags
+        assert "-fa on" in _managed_llama_server_advanced_flags(self._base_cfg(flash_attn=True))
+        assert "-fa" not in _managed_llama_server_advanced_flags(self._base_cfg(flash_attn=False))
 
 
 # ── Startup/Completion shell command steps ────────────────────────────────────

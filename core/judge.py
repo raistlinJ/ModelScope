@@ -15,6 +15,7 @@ from typing import Optional
 
 import requests
 
+from core.models import normalize_openai_base_url
 from core.utils import effective_verify_ssl
 
 
@@ -86,8 +87,8 @@ class LLMJudge:
                 f"Unsupported backend: {backend}. Choose from {self.SUPPORTED_BACKENDS}"
             )
         self.backend = backend
-        self.model = model
-        self.openai_url = (openai_url or "").rstrip("/")
+        self.model = model or ""
+        self.openai_url = normalize_openai_base_url(openai_url)
         self.api_key = api_key or ""
         self.verify_ssl = verify_ssl
         self.ollama_url = (ollama_url or "").rstrip("/")
@@ -114,11 +115,15 @@ class LLMJudge:
 
     def _chat(self, messages: list[dict]) -> str:
         if self.backend == "OpenAI-Compatible":
+            model = str(self.model or "").strip()
+            if not model:
+                raise ValueError("No model selected for the LLM Judge.")
+
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             payload = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,

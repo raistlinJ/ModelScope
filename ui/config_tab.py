@@ -1,9 +1,11 @@
 import copy
+import html
 import json
 import re
 import uuid
 import pandas as pd
 import streamlit as st
+from core.bot_types import get_bot_plugin
 from core import llama_server
 
 
@@ -33,6 +35,26 @@ def _strip_step_ids(config: dict) -> None:
             step.pop("_id", None)
             for cmd in step.get("commands", []):
                 cmd.pop("_id", None)
+
+
+def _bot_prefix_from_state_key(state_key: str) -> str:
+    if state_key.startswith("llama_server"):
+        return "llama_server"
+    if state_key.startswith("llama_cli"):
+        return "llama_cli"
+    return "bash"
+
+
+def _validation_bot_supports_prompts(bot_type: str) -> bool:
+    return bot_type in ("llama_cli", "llama_server")
+
+
+def _validation_bot_prompt_title(bot_type: str) -> str:
+    if bot_type == "llama_server":
+        return "Configured LLAMA-SERVER LLM"
+    if bot_type == "llama_cli":
+        return "Configured LLAMA-CLI LLM"
+    return "Configured LLM"
 
 
 def _duplicate_project(project_id: str) -> None:
@@ -182,10 +204,9 @@ def render() -> None:
         return
 
     bot_type = proj.get("type", "bash_bot")
-    if bot_type == "bash_bot":
-        _render_bash_bot_config(proj)
-    elif bot_type == "llama_cli_bot":
-        _render_llama_cli_bot_config(proj)
+    plugin = get_bot_plugin(bot_type)
+    if plugin is not None:
+        plugin.render_config(proj)
     else:
         st.info(
             f"**{proj['name']}** ({bot_type}) — configuration coming soon."
@@ -351,6 +372,8 @@ def _coerce_steps(raw: list) -> list:
                         entry["expected_output_type"] = str(c["expected_output_type"])
                     if "expected_output" in c:
                         entry["expected_output"] = str(c["expected_output"])
+                    if "checks" in c and isinstance(c["checks"], list):
+                        entry["checks"] = copy.deepcopy(c["checks"])
                     if "_id" in c:
                         entry["_id"] = c["_id"]
                     cmds.append(entry)
@@ -401,6 +424,246 @@ def _ensure_step_ids(steps: list) -> list:
     return steps
 
 
+def _step_commands_preview(commands: list, max_len: int = 35) -> str:
+    """Return a collapsed step preview for command and prompt entries."""
+    for cmd in commands:
+        if isinstance(cmd, str):
+            text = cmd.strip()
+        elif isinstance(cmd, dict) and cmd.get("type", "command") == "prompt":
+            text = (cmd.get("user_prompt") or cmd.get("system_prompt") or "").strip()
+            text = f"LLM Judge: {text}" if text else "LLM Judge"
+        elif isinstance(cmd, dict):
+            text = cmd.get("command", "").strip()
+        else:
+            text = ""
+
+        if text:
+            return (text[:max_len] + "…") if len(text) > max_len else text
+    return ""
+
+
+_VALIDATION_CHECK_TYPES = ("Ignore", "Regex", "Exact String", "No output")
+_VALIDATION_CHECK_TYPE_ICONS = {
+    "Ignore": "⊘",
+    "Regex": ".*",
+    "Exact String": "≡",
+    "No output": "∅",
+}
+_VALIDATION_CHECK_TYPE_DESCRIPTIONS = {
+    "Ignore": "Ignore command output.",
+    "Regex": "Pass when stdout or stderr matches the regex.",
+    "Exact String": "Pass when stdout exactly matches the expected value.",
+    "No output": "Pass only when stdout and stderr are empty.",
+}
+
+
+def _validation_check_type_label(check_type: str) -> str:
+    return _VALIDATION_CHECK_TYPE_ICONS.get(check_type, "?")
+
+
+def _validation_check_type_help() -> str:
+    return "\n".join(
+        f"{_validation_check_type_label(check_type)} {check_type}: {_VALIDATION_CHECK_TYPE_DESCRIPTIONS[check_type]}"
+        for check_type in _VALIDATION_CHECK_TYPES
+    )
+
+
+def _validation_check_type_tooltip(check_type: str) -> str:
+    description = _VALIDATION_CHECK_TYPE_DESCRIPTIONS.get(check_type, "Unknown check type.")
+    return f"{check_type}: {description}"
+
+
+def _validation_check_type_icon_html(check_type: str) -> str:
+    icon = html.escape(_validation_check_type_label(check_type))
+    tooltip = html.escape(_validation_check_type_tooltip(check_type), quote=True)
+    return (
+        f'<span title="{tooltip}" '
+        'style="display:inline-flex;align-items:center;justify-content:center;'
+        'min-width:1.65rem;height:1.45rem;border:1px solid rgba(49, 51, 63, 0.22);'
+        'border-radius:6px;font-weight:700;font-size:0.9rem;cursor:help;">'
+        f"{icon}</span>"
+    )
+
+
+def _validation_check_type_legend_html() -> str:
+    icons = "".join(_validation_check_type_icon_html(check_type) for check_type in _VALIDATION_CHECK_TYPES)
+    return (
+        '<div style="display:flex;gap:0.35rem;margin:0.15rem 0 0.65rem 0;align-items:center;">'
+        f"{icons}</div>"
+    )
+
+
+def _clear_llm_helper_model_selection(pfx: str, backend: str) -> None:
+    st.session_state[f"{pfx}_llm_helper_model"] = ""
+    if backend == "Ollama":
+        st.session_state[f"{pfx}_llm_helper_ollama_models"] = []
+        st.session_state[f"{pfx}_llm_helper_ollama_model_manual_widget"] = ""
+        st.session_state.pop(f"{pfx}_llm_helper_ollama_model_sel", None)
+    else:
+        st.session_state[f"{pfx}_llm_helper_openai_models"] = []
+        st.session_state[f"{pfx}_llm_helper_openai_model_manual_widget"] = ""
+        st.session_state.pop(f"{pfx}_llm_helper_openai_model_sel", None)
+
+
+def _clear_llama_openai_model_selection() -> None:
+    st.session_state["llama_cli_openai_models"] = []
+    st.session_state["llama_cli_model_name"] = ""
+    st.session_state["_llama_openai_model_manual"] = ""
+    st.session_state.pop("_llama_openai_model_sel", None)
+
+
+def _normalize_validation_checks(cmd: dict) -> list[dict]:
+    checks = []
+    raw_checks = cmd.get("checks", [])
+    if isinstance(raw_checks, list):
+        if "checks" in cmd and not raw_checks:
+            return []
+        for check in raw_checks:
+            if not isinstance(check, dict):
+                continue
+            check_type = str(check.get("expected_output_type", check.get("type", "Ignore")))
+            if check_type not in _VALIDATION_CHECK_TYPES:
+                check_type = "Ignore"
+            normalized = {
+                "expected_output_type": check_type,
+                "expected_output": str(check.get("expected_output", check.get("value", ""))),
+            }
+            if "_id" in check:
+                normalized["_id"] = check["_id"]
+            checks.append(normalized)
+
+    if checks:
+        return checks
+
+    legacy_type = str(cmd.get("expected_output_type", "Ignore"))
+    if legacy_type not in _VALIDATION_CHECK_TYPES:
+        legacy_type = "Ignore"
+    return [{
+        "expected_output_type": legacy_type,
+        "expected_output": str(cmd.get("expected_output", "")),
+    }]
+
+
+def _actionable_validation_checks(cmd: dict) -> list[dict]:
+    return [
+        check for check in _normalize_validation_checks(cmd)
+        if check.get("expected_output_type", "Ignore") != "Ignore"
+    ]
+
+
+def _validation_checks_button_label(cmd: dict) -> str:
+    count = len(_actionable_validation_checks(cmd))
+    if count == 0:
+        return "Output ignored"
+    return f"{count} check" if count == 1 else f"{count} checks"
+
+
+def _sync_validation_checks(cmd: dict, checks: list[dict]) -> None:
+    cmd["checks"] = copy.deepcopy(checks)
+    first = checks[0] if checks else {"expected_output_type": "Ignore", "expected_output": ""}
+    cmd["expected_output_type"] = first.get("expected_output_type", "Ignore")
+    cmd["expected_output"] = first.get("expected_output", "")
+
+
+def _validation_checks_summary(cmd: dict, max_len: int = 70) -> str:
+    actionable = _actionable_validation_checks(cmd)
+    if not actionable:
+        return "Ignore output"
+    parts = []
+    for check in actionable:
+        check_type = check.get("expected_output_type", "Ignore")
+        expected = check.get("expected_output", "")
+        if check_type == "No output":
+            parts.append("No output")
+        else:
+            parts.append(f"{check_type}: {expected}")
+    summary = " OR ".join(parts)
+    return (summary[:max_len] + "...") if len(summary) > max_len else summary
+
+
+def _render_validation_checks_control(cmd: dict, key_prefix: str, disabled: bool = False) -> None:
+    checks = _normalize_validation_checks(cmd)
+    _sync_validation_checks(cmd, checks)
+    for check in cmd["checks"]:
+        if "_id" not in check:
+            check["_id"] = _next_step_id()
+
+    with st.popover(_validation_checks_button_label(cmd), use_container_width=True, disabled=disabled):
+        st.markdown("**Accepted Output Checks**")
+        st.caption("The command passes when any one check matches.")
+        st.markdown(_validation_check_type_legend_html(), unsafe_allow_html=True)
+
+        def _add_check() -> None:
+            cmd["checks"].append({
+                "_id": _next_step_id(),
+                "expected_output_type": "Regex",
+                "expected_output": "",
+            })
+            _sync_validation_checks(cmd, cmd["checks"])
+
+        def _remove_check(check_id: int) -> None:
+            cmd["checks"] = [c for c in cmd["checks"] if c.get("_id") != check_id]
+            _sync_validation_checks(cmd, cmd["checks"])
+
+        if st.button(
+            "＋ Add Accepted Output",
+            key=f"{key_prefix}_add",
+            use_container_width=True,
+            on_click=_add_check,
+        ):
+            pass
+
+        for idx, check in enumerate(cmd["checks"]):
+            if "_id" not in check:
+                check["_id"] = _next_step_id()
+            check_id = check["_id"]
+            with st.container(border=True):
+                col_type, col_value, col_remove = st.columns([0.9, 4.0, 1.0])
+                with col_type:
+                    type_key = f"{key_prefix}_{check_id}_type"
+                    current_type = check.get("expected_output_type", "Ignore")
+                    if current_type not in _VALIDATION_CHECK_TYPES:
+                        current_type = "Ignore"
+                    st.session_state.setdefault(type_key, current_type)
+                    display_type = st.session_state.get(type_key, current_type)
+                    if display_type not in _VALIDATION_CHECK_TYPES:
+                        display_type = "Ignore"
+                    st.markdown(_validation_check_type_icon_html(display_type), unsafe_allow_html=True)
+                    new_type = st.selectbox(
+                        "Check Type",
+                        options=list(_VALIDATION_CHECK_TYPES),
+                        key=type_key,
+                        format_func=_validation_check_type_label,
+                        help=_validation_check_type_help(),
+                        label_visibility="collapsed",
+                    )
+                    check["expected_output_type"] = new_type
+                with col_value:
+                    value_key = f"{key_prefix}_{check_id}_value"
+                    st.session_state.setdefault(value_key, check.get("expected_output", ""))
+                    check["expected_output"] = st.text_input(
+                        "Expected Value",
+                        key=value_key,
+                        disabled=new_type in ("Ignore", "No output"),
+                        placeholder="Value or regex to accept",
+                    )
+                    if new_type in ("Ignore", "No output"):
+                        check["expected_output"] = ""
+                with col_remove:
+                    st.write("")
+                    st.write("")
+                    st.button(
+                        "×",
+                        key=f"{key_prefix}_{check_id}_remove",
+                        use_container_width=True,
+                        help="Remove accepted output check",
+                        on_click=_remove_check,
+                        args=(check_id,),
+                    )
+
+    _sync_validation_checks(cmd, cmd["checks"])
+
+
 def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
     """
     Step-based command editor for startup/completion lists.
@@ -430,8 +693,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
             hc1, hcl_delay, hcv_delay, hc2, hc3, hc4 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
             with hc1:
                 _open = st.session_state.get(f"_sc_{pfx}_{step_id}_open", True)
-                _first_cmd = commands[0].get("command", "").strip() if commands else ""
-                _preview = (_first_cmd[:35] + "…") if len(_first_cmd) > 35 else _first_cmd
+                _preview = _step_commands_preview(commands)
                 _label = f"{'▼' if _open else '▶'} Step {si + 1}{(' — ' + _preview) if _preview else ' — (empty)'}"
                 if st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True,
                              help="Collapse/expand this step"):
@@ -470,7 +732,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 # ── Commands ────────────────────────────────────────────────
                 if not commands:
                     st.caption("No commands. Click the buttons below to begin.")
-                    _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+                    _bot_pfx = _bot_prefix_from_state_key(state_key)
                     _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
                     if _llm_enabled:
                         ca, cb, _ = st.columns([2, 2, 6])
@@ -595,7 +857,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     if st.session_state.pop(_addcmd_flag_key, False):
                         mutation = ("add_cmd", si)
                     else:
-                        _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+                        _bot_pfx = _bot_prefix_from_state_key(state_key)
                         _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
                         if _llm_enabled:
                             ca, cb, _ = st.columns([1.5, 1.5, 7.0])
@@ -624,7 +886,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     "state_key": state_key, "data": copy.deepcopy(steps)})
         m = mutation
         if m[0] == "add_step":
-            _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+            _bot_pfx = _bot_prefix_from_state_key(state_key)
             _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
 
             new_step = {
@@ -745,7 +1007,8 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
             "enabled": True,
             "timeout_seconds": 60,
             "expected_output_type": "Ignore",
-            "expected_output": ""
+            "expected_output": "",
+            "checks": [],
         })
 
     def _val_add_prompt(si):
@@ -760,7 +1023,8 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
             "preserve_context": True,
             "enabled": True,
             "expected_output_type": "Ignore",
-            "expected_output": ""
+            "expected_output": "",
+            "checks": [],
         })
 
     def _val_del_cmd(si, ci):
@@ -781,8 +1045,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
             with hc1:
                 _open_key = f"_sc_{pfx}_{step_id}_open"
                 _open = st.session_state.get(_open_key, True)
-                _first_cmd = commands[0].get("command", "").strip() if commands else ""
-                _preview = (_first_cmd[:35] + "…") if len(_first_cmd) > 35 else _first_cmd
+                _preview = _step_commands_preview(commands)
                 _label = f"{'▼' if _open else '▶'} Step {si + 1}{(' — ' + _preview) if _preview else ' — (empty)'}"
                 st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True, help="Collapse/expand this step", on_click=_val_toggle, args=(_open_key, not _open))
             with hcl_delay:
@@ -806,18 +1069,18 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
             if st.session_state.get(f"_sc_{pfx}_{step_id}_open", True):
                 if not commands:
                     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-                    if bot_type == "llama_cli":
+                    if _validation_bot_supports_prompts(bot_type):
                         _ca, _cb, _ = st.columns([2, 2, 5])
                         with _ca:
                             st.button(
-                                "+ Add Command/Output",
+                                "+COMMAND/CHECK",
                                 key=f"_sc_{pfx}_{step_id}_choice_cmd",
                                 use_container_width=True,
                                 on_click=_val_add_cmd, args=(si,),
                             )
                         with _cb:
                             st.button(
-                                "+ Add Prompt",
+                                "+PROMPT",
                                 key=f"_sc_{pfx}_{step_id}_choice_prompt",
                                 use_container_width=True,
                                 on_click=_val_add_prompt, args=(si,),
@@ -826,7 +1089,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                         _ca, _ = st.columns([2, 7])
                         with _ca:
                             st.button(
-                                "+ Add Command/Output",
+                                "+COMMAND/CHECK",
                                 key=f"_sc_{pfx}_{step_id}_choice_cmd",
                                 use_container_width=True,
                                 on_click=_val_add_cmd, args=(si,),
@@ -846,7 +1109,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                 with cc0:
                                     st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                                 with cc1:
-                                    _title = "Configured LLAMA-CLI LLM" if bot_type == "llama_cli" else "Configured LLM"
+                                    _title = _validation_bot_prompt_title(bot_type)
                                     st.markdown(f"**{_title}**")
                                 with cc2:
                                     pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
@@ -870,16 +1133,15 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                     cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
                         else:
                             if not first_cmd_seen:
-                                hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                                hc_cmd, hc_to, hc_checks, hc_en, hc_del = st.columns([3.0, 0.8, 3.5, 0.8, 0.6])
                                 hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
                                 hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
-                                hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
-                                hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
+                                hc_checks.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Accepted Checks</div>", unsafe_allow_html=True)
                                 hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
                                 st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
                                 first_cmd_seen = True
 
-                            cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                            cc_cmd, cc_to, cc_checks, cc_en, cc_del = st.columns([3.0, 0.8, 3.5, 0.8, 0.6])
                             
                             with cc_cmd:
                                 cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
@@ -902,26 +1164,13 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                 if to_key not in st.session_state:
                                     st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
                                 cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
-                                
-                            with cc_chk:
-                                chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
-                                if chk_key not in st.session_state:
-                                    _init_type = cmd.get("expected_output_type", "Ignore")
-                                    if _init_type not in ["Regex", "Exact String"]:
-                                        _init_type = "Ignore"
-                                    st.session_state[chk_key] = _init_type
-                                cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
-                                
-                            with cc_exp:
-                                exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
-                                if exp_key not in st.session_state:
-                                    st.session_state[exp_key] = cmd.get("expected_output", "")
-                                    
-                                # Disable expected value if row is disabled OR check type is Ignore
-                                chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
-                                exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
-                                
-                                cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
+
+                            with cc_checks:
+                                _render_validation_checks_control(
+                                    cmd,
+                                    key_prefix=f"_sc_{pfx}_{step_id}_{cmd_id}_checks",
+                                    disabled=is_disabled,
+                                )
                                 
                             with cc_en:
                                 en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
@@ -930,19 +1179,19 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                             with cc_del:
                                 st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
 
-                    # "+ Add Prompt" (LLM Judge validation step) is only meaningful for
-                    # Llama-CLI-Bot projects, which have a main LLM under test —
-                    # Bash-Bot validation is deterministic command/output checks only.
-                    if bot_type == "llama_cli":
+                    # "+PROMPT" (LLM Judge validation step) is only meaningful for
+                    # Llama-backed projects have a main LLM under test; Bash-Bot
+                    # validation is deterministic command/output checks only.
+                    if _validation_bot_supports_prompts(bot_type):
                         ca, cb, _ = st.columns([1.5, 2.0, 6.5])
                         with ca:
-                            st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                            st.button("+COMMAND/CHECK", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
                         with cb:
-                            st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
+                            st.button("+PROMPT", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
                     else:
                         ca, _ = st.columns([2.0, 7.5])
                         with ca:
-                            st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                            st.button("+COMMAND/CHECK", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
 
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
@@ -1000,8 +1249,10 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                         st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
                         st.toast(f"✅ Found {len(_found)} models.")
                     else:
+                        _clear_llm_helper_model_selection(pfx, "Ollama")
                         st.toast(f"❌ {_err or 'No models returned.'}")
                 else:
+                    _clear_llm_helper_model_selection(pfx, "Ollama")
                     st.toast("⚠️ Enter a valid URL.")
                 st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
                 st.rerun()
@@ -1056,19 +1307,19 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                             st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
                             st.toast(f"✅ Found {len(_found)} models.")
                         else:
+                            _clear_llm_helper_model_selection(pfx, "OpenAI-Compatible")
                             st.toast(f"❌ {_err or 'No models returned.'}")
                     else:
+                        _clear_llm_helper_model_selection(pfx, "OpenAI-Compatible")
                         st.toast("⚠️ Enter a valid URL.")
                     st.session_state[f"{pfx}_is_fetching_openai_models"] = False
                     st.rerun()
 
             st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
-            _is_https = _url.strip().lower().startswith("https://")
             _ssl = st.checkbox(
                 "Require SSL Certificate Verification",
                 key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
-                help="Only applies to https:// URLs — ignored for plain HTTP. Uncheck for self-signed certs.",
-                disabled=not _is_https,
+                help="Used for https:// URLs; plain HTTP endpoints ignore certificate verification. Uncheck for self-signed certificates.",
             )
             st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
             _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
@@ -1089,7 +1340,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     _info = get_server_info(_url.strip(), verify_ssl=_ssl)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
+                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`")
                     else:
                         st.error("Could not reach server.")
                 else:
@@ -1203,6 +1454,18 @@ def _render_bash_runtime(project: dict) -> None:
     _flush_bash_config(project)
 
 
+def _state_prefix_from_test_result_key(result_key: str) -> str:
+    """Recover the state_prefix passed to _render_test_button from its derived
+    result_key (f"{state_prefix}_{target_type}_test_result").  A naive
+    split("_")[0] breaks for multi-word prefixes like "llama_cli"/"llama_server",
+    so strip the known "_local"/"_pct" + "_test_result" suffix instead."""
+    prefix = result_key.removesuffix("_test_result")
+    for target_suffix in ("_local", "_pct"):
+        if prefix.endswith(target_suffix):
+            return prefix[: -len(target_suffix)]
+    return prefix.split("_")[0]
+
+
 def _test_local_connection(result_key: str) -> None:
     from core.environment import LocalEnvironment
     import shlex
@@ -1213,7 +1476,7 @@ def _test_local_connection(result_key: str) -> None:
             st.session_state[result_key] = {"status": "warning", "message": f"Unexpected response: {res!r}"}
             return
 
-        prefix = "llama_cli" if result_key.startswith("llama_cli") else result_key.split("_")[0]
+        prefix = _state_prefix_from_test_result_key(result_key)
         use_sudo = st.session_state.get(f"{prefix}_sudo")
         if use_sudo:
             sudo_pw = (st.session_state.get(f"{prefix}_sudo_password") or "").strip()
@@ -1244,7 +1507,7 @@ def _test_pct_connection(vmid_key: str, result_key: str) -> None:
             st.session_state[result_key] = {"status": "warning", "message": f"Unexpected response: {res!r}"}
             return
 
-        prefix = "llama_cli" if result_key.startswith("llama_cli") else result_key.split("_")[0]
+        prefix = _state_prefix_from_test_result_key(result_key)
         use_sudo = st.session_state.get(f"{prefix}_sudo")
         if use_sudo:
             sudo_pw = (st.session_state.get(f"{prefix}_sudo_password") or "").strip()
@@ -1612,6 +1875,52 @@ def _test_llama_cli_ssh_connection() -> None:
         _store("error", f"Connection failed: {exc}")
 
 
+def _test_llama_server_ssh_connection() -> None:
+    """Quick SSH connectivity check for llama_server_ssh_* credentials. Stores result in session state."""
+    import socket
+    import paramiko
+
+    host     = st.session_state.get("llama_server_ssh_host", "").strip()
+    port     = int(st.session_state.get("llama_server_ssh_port", 22))
+    user     = st.session_state.get("llama_server_ssh_user", "root").strip()
+    password = st.session_state.get("llama_server_ssh_password", "").strip() or None
+    key_path = st.session_state.get("llama_server_ssh_key_path", "").strip() or None
+
+    def _store(status: str, msg: str) -> None:
+        st.session_state["llama_server_ssh_test_result"] = {"status": status, "message": msg}
+
+    if not host:
+        _store("error", "Host is required.")
+        return
+
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs: dict = {"hostname": host, "port": port, "username": user, "timeout": 10}
+        if key_path:
+            connect_kwargs["key_filename"] = key_path
+        if password:
+            connect_kwargs["password"] = password
+        client.connect(**connect_kwargs)
+        _, stdout, _ = client.exec_command("echo ok")
+        result = stdout.read().decode().strip()
+        client.close()
+        if result == "ok":
+            _store("success", f"Connection test succeeded for {user}@{host}:{port} ✓")
+        else:
+            _store("warning", f"Connected but unexpected echo response: {result!r}")
+    except socket.gaierror:
+        _store("error", f"Could not find server '{host}' — check hostname or DNS")
+    except (ConnectionRefusedError, paramiko.ssh_exception.NoValidConnectionsError):
+        _store("error", f"Connection refused at {host}:{port} — SSH service may be down")
+    except paramiko.AuthenticationException:
+        _store("error", f"Authentication failed for {user}@{host} — check credentials")
+    except socket.timeout:
+        _store("error", f"Connection timed out reaching {host}:{port} — check firewall or VPN")
+    except Exception as exc:
+        _store("error", f"Connection failed: {exc}")
+
+
 def _scan_models(project: dict) -> None:
     """Scan local or remote machine for .gguf models and populate discovered list."""
     model_dir = st.session_state.get("llama_cli_model_dir", "").strip()
@@ -1931,19 +2240,16 @@ def _render_llama_cli_runtime(project: dict) -> None:
             default_idx = model_names.index(current) if current in model_names else 0
 
             if model_names:
-                chosen = st.selectbox(
+                st.selectbox(
                     "Model", options=model_names, index=default_idx,
-                    key="_llama_model_sel_widget",
+                    key="llama_cli_model_name",
                 )
-                st.session_state["llama_cli_model_name"] = chosen
             else:
-                chosen = st.text_input(
-                    "Model", 
-                    value=current,
-                    key="_llama_model_sel_widget",
+                st.text_input(
+                    "Model",
+                    key="llama_cli_model_name",
                     help="Enter model name manually, or use Scan to find models."
                 )
-                st.session_state["llama_cli_model_name"] = chosen
 
             st.session_state.setdefault("llama_cli_tokens", 32768)
             st.number_input(
@@ -1982,8 +2288,10 @@ def _render_llama_cli_runtime(project: dict) -> None:
                             st.session_state["llama_cli_openai_models"] = _found
                             st.success(f"{len(_found)} model(s) found")
                         else:
+                            _clear_llama_openai_model_selection()
                             st.error(_err or "No models returned — is the server running?")
                     else:
+                        _clear_llama_openai_model_selection()
                         st.warning("Enter an Instance URL first.")
 
             _ssl = st.checkbox(
@@ -2029,7 +2337,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     _info = llama_server.get_server_info(_base)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
+                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`")
                     else:
                         st.error("Could not reach server.")
                 else:
@@ -2130,7 +2438,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
                                 _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
                                 st.session_state["_llama_svc_result"] = (
                                     "ok",
-                                    f"Online  |  model: `{_mn}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`",
+                                    f"Online  |  model: `{_mn}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`",
                                     "",
                                 )
                             else:
@@ -2404,3 +2712,648 @@ def _render_llama_cli_bot_config(project: dict) -> None:
         _render_llama_cli_runtime(project)
     with sub_val:
         _render_llama_cli_validation(project)
+
+
+# ── Llama-Server Bot configuration ────────────────────────────────────────────
+
+def _llama_server_client_base_url(host: str, port: int) -> str:
+    host = (host or "127.0.0.1").strip()
+    client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+    return f"http://{client_host}:{int(port)}"
+
+
+def _flush_llama_server_config(project: dict) -> None:
+    """Write flat llama_server_* working keys back into the project's config bundle."""
+    _steps = st.session_state.get("llama_server_steps", [])
+    _prompts = [s["content"] for s in _steps if s.get("type") == "prompt" and s.get("enabled", True)]
+    _commands = [s["content"] for s in _steps if s.get("type") == "command" and s.get("enabled", True)]
+    if not _steps:
+        _prompts = st.session_state.get("llama_server_prompts", [])
+        _commands = st.session_state.get("llama_server_commands", [])
+
+    host = (st.session_state.get("llama_server_server_host") or "127.0.0.1").strip()
+    port = int(st.session_state.get("llama_server_server_port") or 18080)
+    base_url = _llama_server_client_base_url(host, port)
+    st.session_state["llama_server_openai_base_url"] = base_url
+
+    project["config"].update({
+        "execution_target":    st.session_state.get("llama_server_execution_target", "local"),
+        "pct_vmid":            st.session_state.get("llama_server_pct_vmid", ""),
+        "ssh_host":            st.session_state.get("llama_server_ssh_host", ""),
+        "ssh_port":            st.session_state.get("llama_server_ssh_port", 22),
+        "ssh_user":            st.session_state.get("llama_server_ssh_user", "root"),
+        "ssh_password":        st.session_state.get("llama_server_ssh_password", ""),
+        "ssh_key_path":        st.session_state.get("llama_server_ssh_key_path", ""),
+        "sudo":                st.session_state.get("llama_server_sudo", False),
+        "sudo_password":       st.session_state.get("llama_server_sudo_password", "") if st.session_state.get("llama_server_sudo") else "",
+        "backend":             "llama-server (managed)",
+        "binary_path":         st.session_state.get("llama_server_binary_path", ""),
+        "model_dir":           st.session_state.get("llama_server_model_dir", ""),
+        "model_name":          st.session_state.get("llama_server_model_name", ""),
+        "tokens":              st.session_state.get("llama_server_tokens", 32768),
+        "en_temp":             st.session_state.get("llama_server_en_temp", False),
+        "temperature":         st.session_state.get("llama_server_temperature", 0.8),
+        "en_gpu_layers":       st.session_state.get("llama_server_en_gpu_layers", False),
+        "gpu_layers":          st.session_state.get("llama_server_gpu_layers", 99),
+        "en_threads":          st.session_state.get("llama_server_en_threads", False),
+        "threads":             st.session_state.get("llama_server_threads", 4),
+        "flash_attn":          st.session_state.get("llama_server_flash_attn", False),
+        "en_top_k":            st.session_state.get("llama_server_en_top_k", False),
+        "top_k":               st.session_state.get("llama_server_top_k", 40),
+        "en_top_p":            st.session_state.get("llama_server_en_top_p", False),
+        "top_p":               st.session_state.get("llama_server_top_p", 0.9),
+        "en_min_p":            st.session_state.get("llama_server_en_min_p", False),
+        "min_p":               st.session_state.get("llama_server_min_p", 0.1),
+        "en_repeat_penalty":   st.session_state.get("llama_server_en_repeat_penalty", False),
+        "repeat_penalty":      st.session_state.get("llama_server_repeat_penalty", 1.1),
+        "en_freq_penalty":     st.session_state.get("llama_server_en_freq_penalty", False),
+        "freq_penalty":        st.session_state.get("llama_server_freq_penalty", 0.0),
+        "en_predict":          st.session_state.get("llama_server_en_predict", False),
+        "predict":             st.session_state.get("llama_server_predict", 512),
+        "en_rope_freq_base":   st.session_state.get("llama_server_en_rope_freq_base", False),
+        "rope_freq_base":      st.session_state.get("llama_server_rope_freq_base", 10000.0),
+        "en_rope_freq_scale":  st.session_state.get("llama_server_en_rope_freq_scale", False),
+        "rope_freq_scale":     st.session_state.get("llama_server_rope_freq_scale", 1.0),
+        "en_seed":             st.session_state.get("llama_server_en_seed", False),
+        "seed":                st.session_state.get("llama_server_seed", -1),
+        "custom_flags":        st.session_state.get("llama_server_custom_flags", ""),
+        "server_host":         host,
+        "server_port":         port,
+        "openai_base_url":     base_url,
+        "openai_api_key":      st.session_state.get("llama_server_openai_api_key", ""),
+        "openai_verify_ssl":   st.session_state.get("llama_server_openai_verify_ssl", True),
+        "mcp_enabled":         st.session_state.get("llama_server_mcp_enabled", False),
+        "mcp_config_path":     st.session_state.get("llama_server_mcp_config_path", ""),
+        "mcp_servers":         st.session_state.get("llama_server_mcp_servers", []),
+        "startup_commands":    _clean_steps(st.session_state.get("llama_server_startup_commands", [])),
+        "completion_commands": _clean_steps(st.session_state.get("llama_server_completion_commands", [])),
+        "steps":               _steps,
+        "prompts":             _prompts,
+        "commands":            _commands,
+        "timeout":             st.session_state.get("llama_server_timeout", 120),
+        "validation_sets":     st.session_state.get("llama_server_validation_sets", []),
+        "metrics_matrix":      st.session_state.get("llama_server_metrics_matrix", []),
+        "system_prompt":       st.session_state.get("llama_server_system_prompt", ""),
+        "llm_helper_backend": st.session_state.get("llama_server_llm_helper_backend", "OpenAI-Compatible"),
+        "llm_helper_openai_url": st.session_state.get("llama_server_llm_helper_openai_url", ""),
+        "llm_helper_openai_apikey": st.session_state.get("llama_server_llm_helper_openai_apikey", ""),
+        "llm_helper_openai_verify_ssl": st.session_state.get("llama_server_llm_helper_openai_verify_ssl", True),
+        "llm_helper_ollama_url": st.session_state.get("llama_server_llm_helper_ollama_url", "http://localhost:11434"),
+        "llm_helper_model": st.session_state.get("llama_server_llm_helper_model", ""),
+        "llm_helper_enabled": st.session_state.get("llama_server_llm_helper_enabled", False),
+        "llm_helper_openai_models": st.session_state.get("llama_server_llm_helper_openai_models", []),
+        "llm_helper_ollama_models": st.session_state.get("llama_server_llm_helper_ollama_models", []),
+    })
+    from core.settings_store import save_settings
+    save_settings(st.session_state)
+
+
+def _scan_llama_server_models(project: dict) -> None:
+    """Scan local or remote machine for .gguf models for managed llama-server.
+
+    The Model Directory is scanned wherever Execution Target points (local/ssh);
+    the managed llama-server process itself always starts on the ModelScope
+    host regardless of this setting (see core.evaluator's managed-server path).
+    """
+    model_dir = st.session_state.get("llama_server_model_dir", "").strip()
+    target    = st.session_state.get("llama_server_execution_target", "local")
+    if not model_dir:
+        st.warning("Set Model Directory first.")
+        return
+    if target == "local":
+        from core.models import scan_gguf_models
+        models = scan_gguf_models(model_dir)
+    else:
+        _flush_llama_server_config(project)
+        cfg = project["config"]
+        from core.environment import SSHEnvironment
+        env = SSHEnvironment(
+            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
+            username=cfg.get("ssh_user", "root"),
+            password=cfg.get("ssh_password") or None,
+            key_path=cfg.get("ssh_key_path") or None,
+            remote_cwd=".",
+        )
+        try:
+            if model_dir.startswith("~/"):
+                model_dir_sh = '"$HOME/' + model_dir[2:] + '"'
+            else:
+                model_dir_sh = f'"{model_dir}"'
+            res   = env.execute(
+                f'find {model_dir_sh} -name "*.gguf" -not -name "ggml-vocab-*"',
+                timeout=15,
+            )
+            paths  = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
+
+            # resolve the base dir on the remote so we can make relative paths
+            base_dir = model_dir
+            if base_dir.startswith("~/"):
+                try:
+                    home_res = env.execute("echo $HOME")
+                    home = home_res["stdout"].strip()
+                    base_dir = home + "/" + base_dir[2:]
+                except Exception:
+                    pass
+
+            models = []
+            for p in paths:
+                rel = p
+                if p.startswith(base_dir):
+                    rel = p[len(base_dir):].lstrip("/")
+                if not rel:
+                    rel = p.split("/")[-1]
+                models.append({"name": rel, "path": p})
+        finally:
+            env.close()
+
+    st.session_state["llama_server_discovered_models"] = models
+    if not models:
+        st.session_state["llama_server_model_name"] = ""
+        st.warning("No .gguf models found in that directory.")
+    else:
+        current = st.session_state.get("llama_server_model_name", "")
+        new_names = [m["name"] for m in models]
+        if current not in new_names:
+            st.session_state["llama_server_model_name"] = new_names[0]
+        st.success(f"Found {len(models)} model(s).")
+    _flush_llama_server_config(project)
+    st.rerun()
+
+
+def _fetch_llama_server_mcp_servers(project: dict) -> None:
+    """Read a local mcp_config.json and populate llama-server MCP server choices."""
+    cfg_path = st.session_state.get("llama_server_mcp_config_path", "").strip()
+    if not cfg_path:
+        st.warning("Set MCP Config Path first.")
+        return
+    import pathlib
+    try:
+        raw = json.loads(pathlib.Path(cfg_path).expanduser().read_text())
+    except Exception as exc:
+        st.error(f"Could not read {cfg_path}: {exc}")
+        return
+    if not isinstance(raw, dict):
+        st.error(
+            f"Expected a JSON object in that file but got `{type(raw).__name__}`. "
+            'MCP config must be `{"mcpServers": {"name": {"command": "...", "args": [...]}}}`.'
+        )
+        return
+    servers = []
+    for name, spec in raw.get("mcpServers", {}).items():
+        servers.append({
+            "name": name,
+            "command": spec.get("command", ""),
+            "args": spec.get("args", []),
+            "enabled": True,
+        })
+    st.session_state["llama_server_mcp_servers"] = servers
+    _flush_llama_server_config(project)
+    st.success(f"Fetched {len(servers)} MCP server(s).")
+    st.rerun()
+
+
+def _test_llama_server_run(project: dict) -> None:
+    """Prove the current managed-server configuration actually launches.
+
+    Mirrors _test_llama_cli_run's "run it for real, report the result" pattern,
+    adapted for a long-lived server process instead of a one-shot CLI call:
+    start llama-server with the current binary/model/flags, confirm it
+    responds, then stop it again — unless a server is already listening at
+    this host:port (e.g. an Execute run is active), in which case that live
+    server is queried instead of attempting a conflicting second launch.
+
+    The managed server always launches on the ModelScope host itself, so this
+    test does too, regardless of the configured Execution Target (which only
+    governs startup/completion/validation commands and model-directory scans).
+    """
+    import os
+    import subprocess
+    from core import llama_server as _llama_server_mod
+    from core.evaluator import _start_managed_llama_server, _managed_llama_server_advanced_flags
+
+    _flush_llama_server_config(project)
+    cfg = project["config"]
+
+    host = (cfg.get("server_host") or "127.0.0.1").strip()
+    port = int(cfg.get("server_port") or 18080)
+    client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+    url = f"http://{client_host}:{port}"
+    verify_ssl = cfg.get("openai_verify_ssl", True)
+
+    if _llama_server_mod.port_open(url, timeout=1.5):
+        info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
+        if info:
+            model = (info.get("model_path") or "").split("/")[-1] or "?"
+            st.session_state["_llama_server_svc_result"] = (
+                "ok",
+                f"A server is already running here (e.g. an active Execute run)  |  "
+                f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
+                "",
+            )
+        else:
+            st.session_state["_llama_server_svc_result"] = (
+                "error",
+                "A server is already listening at this address but didn't return model info.",
+                "",
+            )
+        return
+
+    model_name = cfg.get("model_name", "")
+    if not model_name:
+        st.session_state["_llama_server_svc_result"] = ("error", "No model selected.", "")
+        return
+    model_dir  = cfg.get("model_dir", "")
+    model_path = os.path.join(model_dir, model_name) if model_dir else model_name
+    model_path = os.path.abspath(os.path.expanduser(model_path))
+
+    binary = (cfg.get("binary_path") or "").strip() or "llama-server"
+    if binary and os.path.isdir(binary):
+        binary = os.path.join(binary, "llama-server")
+
+    context_size   = int(cfg.get("tokens") or 32768)
+    custom_flags   = cfg.get("custom_flags", "")
+    advanced_flags = _managed_llama_server_advanced_flags(cfg)
+
+    logs: list[str] = []
+    try:
+        proc = _start_managed_llama_server(
+            binary, model_path, context_size, port, host,
+            logs.append,
+            custom_flags=custom_flags,
+            advanced_flags=advanced_flags,
+        )
+    except Exception as exc:
+        st.session_state["_llama_server_svc_result"] = ("error", str(exc), "\n".join(logs))
+        return
+
+    try:
+        info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
+        if info:
+            model = (info.get("model_path") or "").split("/")[-1] or "?"
+            st.session_state["_llama_server_svc_result"] = (
+                "ok",
+                f"Test successful! Server started and responded correctly  |  "
+                f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
+                "\n".join(logs),
+            )
+        else:
+            st.session_state["_llama_server_svc_result"] = (
+                "error", "Server started but didn't return model info.", "\n".join(logs),
+            )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _render_llama_server_runtime(project: dict) -> None:
+    """Runtime sub-tab for Llama-Server-Bot: target, model setup, server bind, commands, MCP."""
+
+    with st.expander("Execution Target", expanded=True):
+        target = st.radio(
+            "Mode",
+            options=["local", "ssh", "pct"],
+            format_func=lambda v: {"local": "Local", "ssh": "SSH (Remote)", "pct": "PCT (Proxmox LXC)"}.get(v, v),
+            key="llama_server_execution_target",
+            help=(
+                "Where startup/completion/validation commands run and where the model "
+                "directory is scanned. The managed llama-server process itself always "
+                "starts on the ModelScope host regardless of this setting."
+            ),
+            horizontal=True,
+        )
+        st.checkbox(
+            "Run commands with sudo",
+            key="llama_server_sudo",
+            help="Prefix shell commands with `sudo`.",
+        )
+        if st.session_state.get("llama_server_sudo"):
+            if target in ("local", "pct"):
+                st.text_input(
+                    "Sudo password",
+                    key="llama_server_sudo_password",
+                    type="password",
+                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
+                )
+            else:
+                st.caption("SSH password will be reused for sudo.")
+        if target == "local":
+            st.divider()
+            _render_test_button("local", "llama_server")
+        elif target == "pct":
+            st.divider()
+            st.text_input("LXC Container ID (VMID)", key="llama_server_pct_vmid", placeholder="100")
+            _render_test_button("pct", "llama_server", "llama_server_pct_vmid")
+        elif target == "ssh":
+            st.divider()
+            st.markdown("**SSH Credentials**")
+            c_host, c_port = st.columns([4, 1])
+            with c_host:
+                st.text_input("Host", key="llama_server_ssh_host", placeholder="192.168.1.100")
+            with c_port:
+                st.number_input("Port", min_value=1, max_value=65535, key="llama_server_ssh_port")
+            c_user, c_pass = st.columns([1, 1])
+            with c_user:
+                st.text_input("Username", key="llama_server_ssh_user")
+            with c_pass:
+                st.text_input("Password", key="llama_server_ssh_password",
+                              type="password",
+                              help="Leave empty to use key-based auth.")
+            st.text_input("Key Path", key="llama_server_ssh_key_path",
+                          placeholder="~/.ssh/id_rsa")
+            _is_testing_llama_server = st.session_state.get("testing_llama_server_ssh", False)
+            _, col_test, _ = st.columns([1, 2, 1])
+            with col_test:
+                if st.button("Test Connection", key="btn_llama_server_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing_llama_server):
+                    st.session_state["testing_llama_server_ssh"] = True
+                    st.rerun()
+
+            if _is_testing_llama_server:
+                st.session_state.pop("llama_server_ssh_test_result", None)
+                with st.spinner("Please wait..."):
+                    _test_llama_server_ssh_connection()
+                st.session_state["testing_llama_server_ssh"] = False
+                st.rerun()
+
+            _llama_server_ssh_result = st.session_state.get("llama_server_ssh_test_result")
+            if _llama_server_ssh_result:
+                _ls, _lm = _llama_server_ssh_result["status"], _llama_server_ssh_result["message"]
+                if _ls == "success":
+                    st.success(_lm)
+                elif _ls == "warning":
+                    st.warning(_lm)
+                else:
+                    st.error(_lm)
+
+    with st.expander("Server Setup", expanded=True):
+        st.session_state["llama_server_backend"] = "llama-server (managed)"
+        st.text_input(
+            "llama-server Binary Path",
+            key="llama_server_binary_path",
+            placeholder="/usr/local/bin/llama-server",
+            help="Full path to the llama-server executable. Leave blank to use `llama-server` from PATH.",
+        )
+
+        col_dir, col_scan = st.columns([4, 1])
+        with col_dir:
+            st.text_input(
+                "Model Directory",
+                key="llama_server_model_dir",
+                placeholder="/home/user/models",
+                help="Local directory to scan for .gguf model files.",
+            )
+        with col_scan:
+            st.write("")
+            st.write("")
+            if st.button("Scan", key="btn_llama_server_scan_models", use_container_width=True):
+                _scan_llama_server_models(project)
+
+        discovered: list = st.session_state.get("llama_server_discovered_models", [])
+        model_names = []
+        for model in discovered:
+            if model["name"] not in model_names:
+                model_names.append(model["name"])
+
+        current = st.session_state.get("llama_server_model_name", "")
+        default_idx = model_names.index(current) if current in model_names else 0
+
+        if model_names:
+            st.selectbox(
+                "Model",
+                options=model_names,
+                index=default_idx,
+                key="llama_server_model_name",
+            )
+        else:
+            st.text_input(
+                "Model",
+                key="llama_server_model_name",
+                help="Enter a local model filename/path manually, or use Scan to find models.",
+            )
+
+        col_host, col_port = st.columns([3, 1])
+        with col_host:
+            st.text_input(
+                "Listen Host",
+                key="llama_server_server_host",
+                placeholder="127.0.0.1",
+                help="Interface llama-server binds to. Use 127.0.0.1 for local-only or 0.0.0.0 to listen on all interfaces.",
+            )
+        with col_port:
+            st.number_input(
+                "Listen Port",
+                min_value=1,
+                max_value=65535,
+                step=1,
+                key="llama_server_server_port",
+            )
+
+        host = st.session_state.get("llama_server_server_host", "127.0.0.1")
+        port = int(st.session_state.get("llama_server_server_port") or 18080)
+        base_url = _llama_server_client_base_url(host, port)
+        st.session_state["llama_server_openai_base_url"] = base_url
+        st.caption(f"ModelScope will call `{base_url}` after starting the server.")
+
+        st.session_state.setdefault("llama_server_tokens", 32768)
+        st.number_input(
+            "Context Window (tokens)",
+            min_value=128,
+            max_value=131072,
+            step=256,
+            key="llama_server_tokens",
+            help="Maximum context length passed to llama-server via -c.",
+        )
+
+        st.text_input(
+            "Custom Flags",
+            key="llama_server_custom_flags",
+            placeholder="--jinja --parallel 1 -ngl 99",
+            help="Additional flags to pass to llama-server.",
+        )
+
+        with st.expander("Advanced Options", expanded=False):
+            def _adv_opt(
+                col,
+                label,
+                key_suffix,
+                min_v,
+                max_v,
+                step,
+                help_text,
+                is_float=False,
+                value_key_suffix=None,
+                default_value=None,
+            ):
+                with col:
+                    st.session_state.setdefault(f"llama_server_en_{key_suffix}", False)
+                    value_key = f"llama_server_{value_key_suffix or key_suffix}"
+                    if default_value is not None:
+                        st.session_state.setdefault(value_key, default_value)
+                    c1, c2 = st.columns([0.2, 0.8], gap="small")
+                    with c1:
+                        st.write("")
+                        st.write("")
+                        _en = st.checkbox(f"en_{key_suffix}", key=f"llama_server_en_{key_suffix}", label_visibility="collapsed", help=f"Enable {label}")
+                    with c2:
+                        st.number_input(
+                            label,
+                            min_value=float(min_v) if is_float else int(min_v),
+                            max_value=float(max_v) if is_float else int(max_v),
+                            step=float(step) if is_float else int(step),
+                            key=value_key,
+                            disabled=not _en,
+                            help=help_text,
+                            format="%.2f" if is_float else None
+                        )
+
+            adv_cols = st.columns(4)
+            _adv_opt(
+                adv_cols[0],
+                "Temperature",
+                "temp",
+                0.0,
+                2.0,
+                0.1,
+                "Higher values = more random (--temp).",
+                True,
+                value_key_suffix="temperature",
+                default_value=0.8,
+            )
+            _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).", default_value=99)
+            _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).", default_value=4)
+            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
+
+            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
+            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
+            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
+            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
+
+            _adv_opt(adv_cols[0], "Predict", "predict", -1, 131072, 128, "Default tokens to predict when a request doesn't specify max_tokens (-n).", default_value=512)
+            _adv_opt(adv_cols[1], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
+            _adv_opt(adv_cols[2], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
+            _adv_opt(adv_cols[3], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
+
+            with adv_cols[0]:
+                st.session_state.setdefault("llama_server_flash_attn", False)
+                st.write("")
+                st.write("")
+                st.checkbox("Flash Attn", key="llama_server_flash_attn", help="Use Flash Attention (-fa).")
+
+        _, col_status, _ = st.columns([1, 2, 1])
+        with col_status:
+            _is_testing_server = st.session_state.get("_llama_server_testing", False)
+            if st.button(
+                "Check Status",
+                key="btn_llama_server_check_status",
+                use_container_width=True,
+                type="primary",
+                disabled=_is_testing_server,
+                help="Launches the managed llama-server with the current settings to verify "
+                     "they work, then stops it again (unless a server is already running here).",
+            ):
+                st.session_state["_llama_server_testing"] = True
+                st.rerun()
+
+            if _is_testing_server:
+                st.session_state.pop("_llama_server_svc_result", None)
+                with st.spinner("Starting llama-server... (loading the model into memory may take a few minutes)"):
+                    _test_llama_server_run(project)
+                st.session_state["_llama_server_testing"] = False
+                st.rerun()
+
+        _svc_result = st.session_state.get("_llama_server_svc_result")
+        if _svc_result:
+            _level, _msg, _cmd = _svc_result
+            if _level == "ok":
+                st.success(_msg)
+                if _cmd:
+                    st.code(_cmd, language="bash")
+            else:
+                st.error(_msg)
+                if _cmd:
+                    st.code(_cmd, language="bash")
+
+    with st.expander("Commands", expanded=True):
+        tab_llm, tab_startup, tab_completion = st.tabs(
+            ["🤖 LLM Judge", "▶  Startup", "⏹  Completion"]
+        )
+        with tab_llm:
+            _render_llm_prompt_helper_tab("llama_server")
+        with tab_startup:
+            st.caption(
+                "Commands run when execution starts, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="llama_server_startup_commands",
+                pfx="llama_server_startup",
+                placeholder="e.g. /bin/bash setup.sh",
+            )
+        with tab_completion:
+            st.caption(
+                "Cleanup commands run after startup and validation finish, organised as steps. "
+                "Each step runs its commands sequentially after the configured delay."
+            )
+            _render_command_steps(
+                state_key="llama_server_completion_commands",
+                pfx="llama_server_completion",
+                placeholder="e.g. rm -rf /tmp/test_workdir",
+            )
+
+    mcp_enabled = st.session_state.get("llama_server_mcp_enabled", False)
+    with st.expander("MCP Servers", expanded=mcp_enabled):
+        enabled = st.toggle(
+            "Enable MCP Servers",
+            key="llama_server_mcp_enabled",
+            help="Turn on MCP support for this runtime.",
+        )
+        st.caption("Discover MCP servers available on the local machine.")
+        col_path, col_fetch = st.columns([4, 1])
+        with col_path:
+            st.text_input(
+                "MCP Config Path",
+                key="llama_server_mcp_config_path",
+                placeholder="/home/user/.mcp/config.json",
+                help="Path to a local mcp_config.json file.",
+                label_visibility="collapsed",
+                disabled=not enabled,
+            )
+        with col_fetch:
+            if st.button("Fetch", key="btn_llama_server_fetch_mcp", use_container_width=True, disabled=not enabled):
+                _fetch_llama_server_mcp_servers(project)
+
+        servers: list = st.session_state.get("llama_server_mcp_servers", [])
+        if servers:
+            st.caption(f"{len(servers)} server(s) discovered. Enable the ones to use:")
+            for i, server in enumerate(servers):
+                server_enabled = st.checkbox(
+                    server["name"],
+                    value=server.get("enabled", True),
+                    key=f"llama_server_mcp_en_{i}",
+                    disabled=not enabled,
+                )
+                servers[i]["enabled"] = server_enabled
+            st.session_state["llama_server_mcp_servers"] = servers
+        else:
+            st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
+
+    _flush_llama_server_config(project)
+
+
+def _render_llama_server_validation(project: dict) -> None:
+    """Validation sub-tab for Llama-Server-Bot pass/fail sets."""
+    _render_validation_sets_ui(project, "llama_server", _flush_llama_server_config)
+    _flush_llama_server_config(project)
+
+
+def _render_llama_server_bot_config(project: dict) -> None:
+    """Top-level renderer for Llama-Server bot configuration."""
+    st.divider()
+
+    sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
+    with sub_runtime:
+        _render_llama_server_runtime(project)
+    with sub_val:
+        _render_llama_server_validation(project)

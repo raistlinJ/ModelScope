@@ -1,7 +1,8 @@
 import threading
 import streamlit as st
+from core.bot_types import get_bot_plugin
 from ui.terminal import render_terminal
-from ui.config_tab import _flush_bash_config, _flush_llama_cli_config
+from ui.config_tab import _flush_bash_config, _flush_llama_cli_config, _flush_llama_server_config
 
 
 _LOG_TAG_MAP = {
@@ -90,6 +91,26 @@ def _get_selected_validation_sets(cfg: dict) -> list:
                 cmd_obj["enabled"] = st.session_state.get(key, cmd_obj.get("enabled", True))
         filtered.append(vset_copy)
     return filtered
+
+
+def _validation_checks_summary(cmd_obj: dict) -> str:
+    raw_checks = cmd_obj.get("checks", [])
+    checks = raw_checks if isinstance(raw_checks, list) and raw_checks else [{
+        "expected_output_type": cmd_obj.get("expected_output_type", "Ignore"),
+        "expected_output": cmd_obj.get("expected_output", ""),
+    }]
+    parts = []
+    for check in checks:
+        check_type = check.get("expected_output_type", check.get("type", "Ignore"))
+        expected = check.get("expected_output", check.get("value", ""))
+        if check_type == "Ignore":
+            continue
+        if check_type == "No output":
+            parts.append("no output")
+        elif expected:
+            short = expected[:40] + ("…" if len(expected) > 40 else "")
+            parts.append(f"{check_type.lower()}: {short}")
+    return "  # accept " + " OR ".join(parts) if parts else ""
 
 
 def _phase_label(title: str, phase_key: str) -> str:
@@ -346,12 +367,7 @@ def _render_bash_execute(project: dict) -> None:
                                                 continue
                                         cmd_key  = f"bash_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
                                         cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
-                                        exp_type = cmd_obj.get("expected_output_type", "Ignore")
-                                        exp_out  = cmd_obj.get("expected_output", "")
-                                        hint = ""
-                                        if exp_type != "Ignore" and exp_out:
-                                            short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
-                                            hint = f"  # expect {exp_type.lower()}: {short}"
+                                        hint = _validation_checks_summary(cmd_obj)
 
                                         col_cc, col_cl = st.columns([0.3, 10.7])
                                         with col_cc:
@@ -512,8 +528,8 @@ def _render_bash_execute(project: dict) -> None:
 
 # ── Llama-CLI Bot execute ──────────────────────────────────────────────────────
 
-def _run_llama_cli_bot(project: dict, shared: dict) -> None:
-    """Build environment and run llama_cli evaluation.
+def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_bot") -> None:
+    """Build environment and run a llama-backed evaluation.
 
     ``shared`` is a plain dict visible to both this thread and the main
     Streamlit thread.  We never touch ``st.session_state`` here.
@@ -565,16 +581,21 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
         pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
     )
 
+    is_llama_server = bot_type == "llama_server_bot"
+    default_backend = "llama-server (managed)" if is_llama_server else "llama.cpp"
+    default_binary = "llama-server" if is_llama_server else "llama-cli"
+
     llama_config = {
-        "type":                "llama_cli_bot",
-        "backend":             cfg.get("backend", "llama.cpp"),
-        "backend_type":        cfg.get("backend", "llama.cpp"),
-        "binary_path":         cfg.get("binary_path", "llama-cli"),
+        "type":                bot_type,
+        "backend":             cfg.get("backend", default_backend),
+        "backend_type":        cfg.get("backend", default_backend),
+        "binary_path":         cfg.get("binary_path", default_binary),
         "model_dir":           cfg.get("model_dir", ""),
         "model_name":          cfg.get("model_name", ""),
         "selected_model":      cfg.get("model_name", ""),
         "tokens":              cfg.get("tokens", 2048),
         "context_size":        cfg.get("tokens", 2048),
+        "server_host":         cfg.get("server_host", "127.0.0.1"),
         "server_port":         cfg.get("server_port", 18080),
         "mcp_server_url":      "http://127.0.0.1:9191",
         "openai_base_url":     cfg.get("openai_base_url", ""),
@@ -588,7 +609,10 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
         "completion_commands": cfg.get("completion_commands", []),
         "timeout":             cfg.get("timeout", 60),
         "validation_commands": cfg.get("validation_commands", []),
-        "validation_sets":     _get_llama_selected_validation_sets(cfg),
+        "validation_sets":     _get_llama_selected_validation_sets(
+            cfg,
+            exec_prefix="llama_server_exec" if is_llama_server else "llama_exec",
+        ),
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
         "sudo":                cfg.get("sudo", False),
@@ -650,40 +674,48 @@ def _run_llama_cli_bot(project: dict, shared: dict) -> None:
     shared["project_id"] = project.get("id")
 
 
-def _get_llama_selected_validation_sets(cfg: dict) -> list:
-    """Return a filtered deep-copy of cfg['validation_sets'] based on llama execute-tab checkboxes."""
+def _get_llama_selected_validation_sets(cfg: dict, exec_prefix: str = "llama_exec") -> list:
+    """Return a filtered deep-copy of cfg['validation_sets'] based on execute-tab checkboxes."""
     import copy
     filtered = []
     for idx, vset in enumerate(cfg.get("validation_sets", [])):
-        if not st.session_state.get(f"llama_exec_vset_{idx}_selected", True):
+        if not st.session_state.get(f"{exec_prefix}_vset_{idx}_selected", True):
             continue
         vset_copy = copy.deepcopy(vset)
         vset_copy["steps"] = _clean_steps(vset_copy.get("steps", []))
         for sidx, step in enumerate(vset_copy.get("steps", [])):
             for cidx, cmd_obj in enumerate(step.get("commands", [])):
-                key = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                key = f"{exec_prefix}_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
                 cmd_obj["enabled"] = st.session_state.get(key, cmd_obj.get("enabled", True))
         filtered.append(vset_copy)
     return filtered
 
 
-def _render_llama_cli_execute(project: dict) -> None:
-    """Execute view for Llama-CLI-Bot: collapsible config sub-blocks + Execute button + log."""
+def _render_llama_cli_execute(
+    project: dict,
+    bot_type: str = "llama_cli_bot",
+    llm_label: str = "LLAMA-CLI",
+    state_prefix: str = "llama_cli",
+    exec_prefix: str = "llama_exec",
+    flush_fn=_flush_llama_cli_config,
+) -> None:
+    """Execute view for llama-backed bots: config summary + Execute button + log."""
     cfg = project.get("config", {})
 
     st.markdown(f"### {project['name']}")
 
     # ── Two-column configuration panel ───────────────────────────────────────
-    _cfg_open = st.session_state.get("llama_exec_config_expanded", True)
+    config_expanded_key = f"{exec_prefix}_config_expanded"
+    _cfg_open = st.session_state.get(config_expanded_key, True)
     with st.container(border=True):
         col_hdr_outer, col_tog_outer = st.columns([9, 1])
         with col_hdr_outer:
             st.markdown("**⚙️ Run Configuration**")
         with col_tog_outer:
             if st.button("▼" if _cfg_open else "▶",
-                         key="btn_llama_exec_outer_toggle", use_container_width=True,
+                         key=f"btn_{exec_prefix}_outer_toggle", use_container_width=True,
                          help="Expand/collapse all"):
-                st.session_state["llama_exec_config_expanded"] = not _cfg_open
+                st.session_state[config_expanded_key] = not _cfg_open
                 st.rerun()
 
         if _cfg_open:
@@ -700,7 +732,11 @@ def _render_llama_cli_execute(project: dict) -> None:
                 with st.expander("**Model Info**", expanded=True):
                     st.caption(f"Backend: **{backend}**")
                     st.caption(f"Model: **{model_name}**")
-                    if backend == "llama-cli":
+                    if bot_type == "llama_server_bot":
+                        st.caption(f"Binary: `{cfg.get('binary_path', 'llama-server') or 'llama-server'}`")
+                        st.caption(f"Listen: `{cfg.get('server_host', '127.0.0.1')}:{cfg.get('server_port', 18080)}`")
+                        st.caption(f"Client URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
+                    elif backend == "llama-cli":
                         st.caption(f"Binary: `{cfg.get('binary_path', 'llama-cli')}`")
                     else:
                         st.caption(f"URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
@@ -717,7 +753,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                         st.caption("No validation sets configured — add them in the Config tab (Validation).")
                     else:
                         for idx, vset in enumerate(val_sets):
-                            set_sel_key = f"llama_exec_vset_{idx}_selected"
+                            set_sel_key = f"{exec_prefix}_vset_{idx}_selected"
                             set_selected = st.session_state.get(set_sel_key, True)
 
                             desc = vset.get("description", "")
@@ -744,19 +780,14 @@ def _render_llama_cli_execute(project: dict) -> None:
                                             usr_p = cmd_obj.get("user_prompt", "")
                                             if not sys_p and not usr_p:
                                                 continue
-                                            cmd_text = f"Configured LLAMA-CLI LLM: {sys_p[:20]}... | {usr_p[:20]}..."
+                                            cmd_text = f"Configured {llm_label} LLM: {sys_p[:20]}... | {usr_p[:20]}..."
                                         else:
                                             cmd_text = cmd_obj.get("command", "")
                                             if not cmd_text:
                                                 continue
-                                        cmd_key  = f"llama_exec_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
+                                        cmd_key  = f"{exec_prefix}_vset_{idx}_step_{sidx}_cmd_{cidx}_selected"
                                         cmd_sel  = st.session_state.get(cmd_key, cmd_obj.get("enabled", True))
-                                        exp_type = cmd_obj.get("expected_output_type", "Ignore")
-                                        exp_out  = cmd_obj.get("expected_output", "")
-                                        hint = ""
-                                        if exp_type != "Ignore" and exp_out:
-                                            short = exp_out[:40] + ("…" if len(exp_out) > 40 else "")
-                                            hint = f"  # expect {exp_type.lower()}: {short}"
+                                        hint = _validation_checks_summary(cmd_obj)
 
                                         col_cc, col_cl = st.columns([0.3, 10.7])
                                         with col_cc:
@@ -771,7 +802,7 @@ def _render_llama_cli_execute(project: dict) -> None:
                                         with col_cl:
                                             if _type == "prompt":
                                                 with st.container(border=True):
-                                                    st.markdown(f"💬 **Configured LLAMA-CLI LLM**")
+                                                    st.markdown(f"💬 **Configured {llm_label} LLM**")
                                                     if sys_p:
                                                         with st.expander("System Prompt", expanded=False):
                                                             st.code(sys_p, language="text")
@@ -789,17 +820,18 @@ def _render_llama_cli_execute(project: dict) -> None:
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
     # ── Scenario system prompt (editable, persisted) ──────────────────────────
-    st.session_state.setdefault("llama_cli_system_prompt", cfg.get("system_prompt", ""))
+    system_prompt_key = f"{state_prefix}_system_prompt"
+    st.session_state.setdefault(system_prompt_key, cfg.get("system_prompt", ""))
     sys_prompt = st.text_area(
         "System Prompt",
-        key="llama_cli_system_prompt",
+        key=system_prompt_key,
         height=100,
         placeholder="Optional system prompt sent to the model before evaluation prompts.",
         help="Custom system prompt. Leave empty for no system prompt.",
     )
     # Persist back to config
     project["config"]["system_prompt"] = sys_prompt
-    _flush_llama_cli_config(project)
+    flush_fn(project)
 
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
@@ -807,18 +839,18 @@ def _render_llama_cli_execute(project: dict) -> None:
     with col_run:
         run_btn = st.button(
             "▶  Execute",
-            key="btn_llama_exec_run",
+            key=f"btn_{exec_prefix}_run",
             type="primary",
             use_container_width=True,
             disabled=run_in_progress,
         )
     with col_cancel:
-        if st.button("⏹  Stop", key="btn_llama_exec_cancel",
+        if st.button("⏹  Stop", key=f"btn_{exec_prefix}_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
             st.rerun()
     with col_clear:
-        if st.button("Clear Log", key="btn_llama_exec_clear", use_container_width=True):
+        if st.button("Clear Log", key=f"btn_{exec_prefix}_clear", use_container_width=True):
             st.session_state["run_logs_setup"]   = []
             st.session_state["run_logs_validation"]   = []
             st.session_state["run_completed"]    = False
@@ -848,7 +880,7 @@ def _render_llama_cli_execute(project: dict) -> None:
         llama_placeholder.empty()
         
         # Flush config in the main thread before launching background execution
-        _flush_llama_cli_config(project)
+        flush_fn(project)
         
         # Launch in background thread so the UI stays responsive
         shared_state = {
@@ -860,7 +892,7 @@ def _render_llama_cli_execute(project: dict) -> None:
             "telemetry": {},
         }
         st.session_state["_run_shared"] = shared_state
-        thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state), daemon=True)
+        thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state, bot_type), daemon=True)
         thread.start()
         st.session_state["_run_thread"] = thread
         st.rerun()
@@ -933,22 +965,30 @@ def _render_llama_cli_execute(project: dict) -> None:
                 st.info("📊 Execution complete.")
 
 
+def _render_llama_server_execute(project: dict) -> None:
+    """Execute view for Llama-Server-Bot."""
+    _render_llama_cli_execute(
+        project,
+        bot_type="llama_server_bot",
+        llm_label="LLAMA-SERVER",
+        state_prefix="llama_server",
+        exec_prefix="llama_server_exec",
+        flush_fn=_flush_llama_server_config,
+    )
+
+
 def render() -> None:
     st.header("Execute Evaluation")
 
     # Dispatch to bot-type-specific execute view
     _proj = _get_active_project()
-    if _proj and _proj.get("type") == "bash_bot":
-        _render_bash_execute(_proj)
-        return
-    if _proj and _proj.get("type") == "llama_cli_bot":
-        _render_llama_cli_execute(_proj)
-        return
-
     if _proj is None:
         st.info("No project selected. Use the sidebar to add or select a project.")
         return
 
-    st.info(
-        f"**{_proj['name']}** ({_proj.get('type', '?')}) — execution coming soon."
-    )
+    plugin = get_bot_plugin(_proj.get("type", "bash_bot"))
+    if plugin is not None:
+        plugin.render_execute(_proj)
+        return
+
+    st.info(f"**{_proj['name']}** ({_proj.get('type', '?')}) — execution coming soon.")

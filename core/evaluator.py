@@ -24,6 +24,7 @@ from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
+from core.models import normalize_openai_base_url
 from core.streaming import stream_ollama, stream_llama_cpp
 from core.utils import effective_verify_ssl
 from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported for callers/tests
@@ -98,12 +99,53 @@ def _load_tool_schemas(
 
 # ── Managed llama-server startup ───────────────────────────────────────────────
 
+def _managed_llama_server_advanced_flags(config: dict) -> str:
+    """Build sampling/perf CLI flags for a managed llama-server launch.
+
+    llama-server shares llama.cpp's common argument parser with llama-cli, so
+    the flag names below match the raw llama-cli command built further down
+    in this module. `-n`/`--predict` is intentionally omitted: llama-cli needs
+    a hard default to bound a single CLI call, but llama-server is a
+    long-lived process where each request's own max_tokens should govern
+    generation length instead of a fixed server-wide default.
+    """
+    parts = []
+    if config.get("en_temp"):
+        parts.append(f"--temp {config.get('temperature', 0.8)}")
+    if config.get("en_gpu_layers"):
+        parts.append(f"-ngl {config.get('gpu_layers', 99)}")
+    if config.get("en_threads"):
+        parts.append(f"-t {config.get('threads', 4)}")
+    if config.get("en_top_k"):
+        parts.append(f"--top-k {config.get('top_k', 40)}")
+    if config.get("en_top_p"):
+        parts.append(f"--top-p {config.get('top_p', 0.9)}")
+    if config.get("en_min_p"):
+        parts.append(f"--min-p {config.get('min_p', 0.1)}")
+    if config.get("en_repeat_penalty"):
+        parts.append(f"--repeat-penalty {config.get('repeat_penalty', 1.1)}")
+    if config.get("en_freq_penalty"):
+        parts.append(f"--freq-penalty {config.get('freq_penalty', 0.0)}")
+    if config.get("en_seed"):
+        parts.append(f"--seed {config.get('seed', -1)}")
+    if config.get("en_rope_freq_base"):
+        parts.append(f"--rope-freq-base {config.get('rope_freq_base', 10000.0)}")
+    if config.get("en_rope_freq_scale"):
+        parts.append(f"--rope-freq-scale {config.get('rope_freq_scale', 1.0)}")
+    if config.get("flash_attn"):
+        parts.append("-fa on")
+    return " ".join(parts)
+
+
 def _start_managed_llama_server(
     binary: str,
     model_path: str,
     context_size: int,
     port: int,
+    host: str,
     on_log: Callable[[str], None],
+    custom_flags: str = "",
+    advanced_flags: str = "",
 ) -> subprocess.Popen:
     """Start llama-server binary and wait for readiness.
 
@@ -115,27 +157,48 @@ def _start_managed_llama_server(
         "-m", model_path,
         "-c", str(context_size),
         "--port", str(port),
-        "--host", "127.0.0.1",
+        "--host", host,
     ]
+    if advanced_flags.strip():
+        cmd.extend(shlex.split(advanced_flags.strip()))
+    if custom_flags.strip():
+        cmd.extend(shlex.split(custom_flags.strip()))
     on_log(f"[SERVER] Starting: {' '.join(cmd)}")
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as exc:
         raise RuntimeError(f"Failed to start server: {exc}")
 
+    client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
     # Poll for readiness
     for attempt in range(30):
         try:
-            resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=1.0)
+            resp = requests.get(f"http://{client_host}:{port}/health", timeout=1.0)
             if resp.status_code == 200:
-                on_log(f"[SERVER] Ready on port {port}")
+                on_log(f"[SERVER] Ready on {host}:{port}")
                 return proc
         except requests.exceptions.RequestException:
             pass
         time.sleep(1)
 
     proc.terminate()
-    raise RuntimeError(f"Server did not become ready after 30s on port {port}")
+    raise RuntimeError(f"Server did not become ready after 30s on {host}:{port}")
+
+
+def _is_managed_llama_server_backend(backend: str) -> bool:
+    normalized = (backend or "").lower().replace("_", "-")
+    return "llama-server" in normalized and "managed" in normalized
+
+
+def _llama_server_client_host(bind_host: str) -> str:
+    host = (bind_host or "127.0.0.1").strip()
+    if host in ("0.0.0.0", "::", "[::]"):
+        return "127.0.0.1"
+    return host
+
+
+def _llama_server_base_url(bind_host: str, port: int) -> str:
+    return f"http://{_llama_server_client_host(bind_host)}:{int(port)}"
 
 
 # ── Agent loop for tool-aware evaluation ───────────────────────────────────────
@@ -153,9 +216,11 @@ def _run_llm_agent_loop(
     on_log: Callable[[str], None],
     max_turns: int = 8,
     deadline: float | None = None,
+    history: list[dict] | None = None,
 ) -> tuple:
     """Run agentic loop with tool calls. Returns (tool_calls_log, final_response)."""
-    messages: list[dict] = [{"role": "user", "content": prompt}]
+    messages: list[dict] = [dict(msg) for msg in (history or [])]
+    messages.append({"role": "user", "content": prompt})
     tool_calls_log = []
     final_response = ""
 
@@ -225,6 +290,20 @@ def _run_llm_agent_loop(
             })
 
     return tool_calls_log, final_response
+
+
+def _format_preserved_llama_cli_prompt(history: list[dict], prompt: str) -> str:
+    """Embed prior configured-LLM exchanges into a single llama-cli prompt."""
+    if not history:
+        return prompt
+    parts = ["Conversation so far:"]
+    for msg in history:
+        role = "Assistant" if msg.get("role") == "assistant" else "User"
+        content = str(msg.get("content", "")).strip()
+        if content:
+            parts.append(f"{role}: {content}")
+    parts.extend(["Current user prompt:", prompt])
+    return "\n\n".join(parts)
 
 
 # ── Tool execution ─────────────────────────────────────────────────────────────
@@ -313,6 +392,79 @@ def _run_validation(
     }
 
 
+_EXPECTED_CHECK_TYPES = ("Ignore", "Regex", "Exact String", "No output")
+
+
+def _normalize_expected_checks(cmd_obj: dict) -> list[dict]:
+    """Return validation checks, upgrading legacy single-check fields."""
+    raw_checks = cmd_obj.get("checks", [])
+    checks: list[dict] = []
+    if isinstance(raw_checks, list):
+        if "checks" in cmd_obj and not raw_checks:
+            return []
+        for check in raw_checks:
+            if not isinstance(check, dict):
+                continue
+            out_type = str(check.get("expected_output_type", check.get("type", "Ignore")))
+            if out_type not in _EXPECTED_CHECK_TYPES:
+                out_type = "Ignore"
+            checks.append({
+                "expected_output_type": out_type,
+                "expected_output": str(check.get("expected_output", check.get("value", ""))),
+            })
+
+    if checks:
+        return checks
+
+    out_type = str(cmd_obj.get("expected_output_type", "Ignore"))
+    if out_type not in _EXPECTED_CHECK_TYPES:
+        out_type = "Ignore"
+    return [{
+        "expected_output_type": out_type,
+        "expected_output": str(cmd_obj.get("expected_output", "")),
+    }]
+
+
+def _evaluate_expected_check(stdout: str, check: dict) -> tuple[bool, str]:
+    out_type = check.get("expected_output_type", "Ignore")
+    expected = check.get("expected_output", "")
+
+    if out_type == "Ignore":
+        return True, ""
+    if out_type == "Exact String":
+        if stdout.strip() == expected.strip():
+            return True, ""
+        return False, f"Output did not match exact string. Expected: {expected!r}, Got: {stdout!r}"
+    if out_type == "Regex":
+        try:
+            if re.search(expected, stdout):
+                return True, ""
+            return False, f"Output did not match regex pattern {expected!r}. Got: {stdout!r}"
+        except re.error as exc:
+            return False, f"Invalid regex pattern: {expected!r} ({exc})"
+    if out_type == "No output":
+        if not stdout.strip():
+            return True, ""
+        return False, f"Output was expected to be empty, but got: {stdout!r}"
+    return True, ""
+
+
+def _evaluate_expected_checks(stdout: str, checks: list[dict]) -> tuple[bool, str, dict]:
+    """Evaluate checks as accepted alternatives; any passing check succeeds."""
+    actionable = [check for check in checks if check.get("expected_output_type", "Ignore") != "Ignore"]
+    if not actionable:
+        return True, "", checks[0] if checks else {"expected_output_type": "Ignore", "expected_output": ""}
+
+    failures = []
+    for check in actionable:
+        passed, reason = _evaluate_expected_check(stdout, check)
+        if passed:
+            return True, "", check
+        if reason:
+            failures.append(reason)
+    return False, "No expected output checks matched. " + " | ".join(failures), actionable[0]
+
+
 def _run_validation_sets(
     env: BaseEnvironment,
     validation_sets: list,
@@ -373,11 +525,11 @@ def _run_validation_sets(
                     cmd_text = f"Prompt: {sys_p[:20]}... | {usr_p[:20]}..."
                     on_log(f"[VALIDATE CMD] Running Configured LLM: {cmd_text}")
                     
-                    use_main = (config.get("type") == "llama_cli_bot")
+                    use_main = config.get("type") in ("llama_cli_bot", "llama_server_bot")
                     cb = config.get("execute_prompt_callback")
                     if use_main and cb:
                         prompt_str = f"{sys_p}\n\n{usr_p}" if sys_p else usr_p
-                        res = cb(prompt_str, "VALIDATE CMD")
+                        res = cb(prompt_str, "VALIDATE CMD", cmd_obj.get("preserve_context", True))
                     else:
                         res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=use_main)
                     stdout = res.get("stdout", "")
@@ -396,31 +548,20 @@ def _run_validation_sets(
                     stderr = res.get("stderr", "")
                     exit_code = res.get("exit_code", -1)
 
-                # Verify output
-                out_type = cmd_obj.get("expected_output_type", "Ignore")
-                expected = cmd_obj.get("expected_output", "")
+                # Verify output. Multiple checks are accepted alternatives:
+                # any one matching check passes the command.
+                checks = _normalize_expected_checks(cmd_obj)
                 cmd_passed = (exit_code == 0)
+                matched_check = checks[0] if checks else {
+                    "expected_output_type": "Ignore",
+                    "expected_output": "",
+                }
 
                 reason = ""
                 if not cmd_passed:
                     reason = f"Exit code was {exit_code}"
                 else:
-                    if out_type == "Exact String":
-                        if stdout.strip() != expected.strip():
-                            cmd_passed = False
-                            reason = f"Output did not match exact string. Expected: {expected!r}, Got: {stdout!r}"
-                    elif out_type == "Regex":
-                        try:
-                            if not re.search(expected, stdout):
-                                cmd_passed = False
-                                reason = f"Output did not match regex pattern {expected!r}. Got: {stdout!r}"
-                        except re.error as e:
-                            cmd_passed = False
-                            reason = f"Invalid regex pattern: {expected!r} ({e})"
-                    elif out_type == "No output":
-                        if stdout.strip():
-                            cmd_passed = False
-                            reason = f"Output was expected to be empty, but got: {stdout!r}"
+                    cmd_passed, reason, matched_check = _evaluate_expected_checks(stdout, checks)
 
                 status_str = "PASS ✓" if cmd_passed else f"FAIL ✗ ({reason})"
                 on_log(f"[VALIDATE CMD RESULT] {cmd_text!r} → {status_str}")
@@ -435,8 +576,10 @@ def _run_validation_sets(
                     "stderr": stderr,
                     "passed": cmd_passed,
                     "reason": reason,
-                    "expected_output_type": out_type,
-                    "expected_output": expected
+                    "checks": checks,
+                    "matched_check": matched_check if cmd_passed else None,
+                    "expected_output_type": matched_check.get("expected_output_type", "Ignore"),
+                    "expected_output": matched_check.get("expected_output", ""),
                 })
 
         if not set_passed:
@@ -737,6 +880,38 @@ _CAF_REEXPORTS = frozenset({
 })
 
 
+def _http_error_message(exc: requests.exceptions.HTTPError) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    body = (getattr(response, "text", "") or "").strip()
+    if not body:
+        return str(exc)
+
+    server_message = ""
+    try:
+        parsed = json.loads(body)
+        error = parsed.get("error", {})
+        if isinstance(error, dict):
+            server_message = str(error.get("message", "")).strip()
+        elif error:
+            server_message = str(error).strip()
+    except Exception:
+        pass
+
+    details = [str(exc)]
+    if server_message:
+        details.append(f"server message: {server_message}")
+    if "chat template" in (server_message or body).lower():
+        details.append(
+            "vLLM could not render chat messages because the selected model/tokenizer "
+            "does not define a chat template. Start vLLM with --chat-template "
+            "or select a chat/instruct model whose tokenizer_config.json includes chat_template."
+        )
+    details.append(f"response body: {body[:500]}")
+    return "; ".join(details)
+
+
 def __getattr__(name: str):
     if name in _CAF_REEXPORTS:
         from core import caf_runner
@@ -793,19 +968,27 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             return {"exit_code": 1, "stderr": str(e)}
     
     if backend == "OpenAI-Compatible":
-        url = config.get("llm_helper_openai_url", "").rstrip("/")
+        url = normalize_openai_base_url(config.get("llm_helper_openai_url", ""))
         if not url:
             return {"exit_code": 1, "stderr": "No URL configured for LLM Helper."}
         headers = {"Content-Type": "application/json"}
         apikey = config.get("llm_helper_openai_apikey")
         if apikey:
             headers["Authorization"] = f"Bearer {apikey}"
+        verify_ssl = effective_verify_ssl(url, config.get("llm_helper_openai_verify_ssl", True))
+
+        model = str(model or "").strip()
+        if not model:
+            return {
+                "exit_code": 1,
+                "stderr": "No model selected for LLM Helper. Fetch/select a model or enter one manually.",
+            }
+
         payload = {
             "model": model,
             "messages": messages,
             "temperature": 0.2
         }
-        verify_ssl = effective_verify_ssl(url, config.get("llm_helper_openai_verify_ssl", True))
 
         on_log(f"[PROMPT HELPER] Sending to {url}/v1/chat/completions", "llama")
         try:
@@ -821,6 +1004,10 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
                     context_list.append({"role": "user", "content": user_prompt})
                 context_list.append({"role": "assistant", "content": response_text})
             return {"stdout": response_text, "exit_code": 0}
+        except requests.exceptions.HTTPError as e:
+            msg = _http_error_message(e)
+            on_log(f"[ERROR] LLM Helper failed: {msg}", "llama")
+            return {"exit_code": 1, "stderr": msg}
         except Exception as e:
             on_log(f"[ERROR] LLM Helper failed: {e}", "llama")
             return {"exit_code": 1, "stderr": str(e)}
@@ -1076,6 +1263,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             max_iter = int(m.get("params", {}).get("max_iter", 8))
             break
     backend    = config.get("backend", "llama.cpp")
+    managed_llama_server = _is_managed_llama_server_backend(backend)
     binary     = config.get("binary_path", "") or "llama-cli"
     model_dir     = config.get("model_dir", "")
     model_name    = config.get("model_name", "")
@@ -1117,7 +1305,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
     telemetry: dict = {
         "run_timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "run_bot_type":         "llama_cli_bot",
+        "run_bot_type":         config.get("type", "llama_cli_bot"),
         "run_backend":          backend,
         "run_model":            model_name,
         "tool_calls":           [],
@@ -1149,12 +1337,16 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             on_log(f"[STDERR] {res['stderr'][:400]}", "shell")
         return res
 
-    def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT") -> dict:
+    main_llm_context: list[dict] = []
+
+    managed_server_proc: subprocess.Popen | None = None
+
+    def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
         if not prompt_text:
             return {}
         
         nonlocal binary
-        if backend.lower().startswith("openai"):
+        if backend.lower().startswith("openai") or managed_llama_server:
             base_url   = (config.get("openai_base_url") or "").strip()
             if not base_url:
                 on_log("[ERROR] No Base URL configured for OpenAI backend.", "llama")
@@ -1166,10 +1358,14 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     base_url, model_name, prompt_text, tools, tokens,
                     mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
                     max_turns=max_iter, deadline=eval_deadline,
+                    history=main_llm_context if preserve_context else None,
                 )
                 on_log(f"[RESPONSE] {response[:2000]}", "llama")
                 telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
                 telemetry["tool_calls"].extend(tool_calls)
+                if preserve_context:
+                    main_llm_context.append({"role": "user", "content": prompt_text})
+                    main_llm_context.append({"role": "assistant", "content": response})
                 return {"stdout": response, "exit_code": 0}
             except Exception as exc:
                 on_log(f"[ERROR] HTTP request failed: {exc}", "llama")
@@ -1205,7 +1401,11 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     sys_prompt_parts.append(f'  {fn["name"]}: {fn["description"]}')
             tool_sys_prompt = "\n".join(sys_prompt_parts) if tools else ""
 
-            safe_prompt = shlex.quote(prompt_text)
+            effective_prompt = (
+                _format_preserved_llama_cli_prompt(main_llm_context, prompt_text)
+                if preserve_context else prompt_text
+            )
+            safe_prompt = shlex.quote(effective_prompt)
             sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
             custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
             model_path_quoted = f'\"$HOME/\"{shlex.quote(model_path[2:])}' if model_path.startswith("~/") else shlex.quote(model_path)
@@ -1249,6 +1449,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             response = res.get("stdout", "").strip()
             on_log(f"[RESPONSE] {response}", "llama")
             telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
+            if preserve_context:
+                main_llm_context.append({"role": "user", "content": prompt_text})
+                main_llm_context.append({"role": "assistant", "content": response})
             telemetry["tool_calls"].append({
                 "tool": "llama-cli",
                 "args": {"prompt": prompt_text},
@@ -1355,9 +1558,51 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             telemetry["error"] = f"Sudo authentication failed: {err_clean}"
             return telemetry
 
-    # If binary_path is a directory, assume llama-cli lives inside it
+    # If binary_path is a directory, assume the relevant llama.cpp binary lives inside it
     if binary and os.path.isdir(binary):
-        binary = os.path.join(binary, "llama-cli")
+        binary_name = "llama-server" if managed_llama_server else "llama-cli"
+        binary = os.path.join(binary, binary_name)
+
+    if managed_llama_server:
+        if os.path.basename(binary) in ("llama-cli", "llama-cli.exe"):
+            corrected = os.path.join(os.path.dirname(binary), "llama-server")
+            on_log(f"[WARN] Auto-correcting llama-cli to llama-server: {corrected}", "llama")
+            binary = corrected
+
+        model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+        if config.get("execution_target", "local") == "local":
+            model_path = os.path.abspath(os.path.expanduser(model_path))
+        if not model_path:
+            on_log("[ERROR] No model selected.", "llama")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = "No model selected."
+            return telemetry
+
+        server_host = (config.get("server_host") or "127.0.0.1").strip()
+        server_port = int(config.get("server_port") or 18080)
+        config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
+        config["llm_url"] = config["openai_base_url"]
+        if config.get("execution_target", "local") != "local":
+            on_log(
+                "[WARN] Managed llama-server starts on the ModelScope host; shell commands still use the configured target.",
+                "llama",
+            )
+        try:
+            managed_server_proc = _start_managed_llama_server(
+                binary,
+                model_path,
+                int(tokens),
+                server_port,
+                server_host,
+                lambda msg: on_log(msg, "llama"),
+                custom_flags=custom_flags,
+                advanced_flags=_managed_llama_server_advanced_flags(config),
+            )
+        except Exception as exc:
+            on_log(f"[ERROR] Failed to start managed llama-server: {exc}", "llama")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = str(exc)
+            return telemetry
 
     mcp_servers    = config.get("mcp_servers", [])
     mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
@@ -1417,6 +1662,14 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # run rather than being silently swallowed into a tool_call log entry.
     if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
         telemetry["validation_passed"] = False
+
+    if managed_server_proc is not None:
+        on_log("[SERVER] Stopping managed llama-server", "llama")
+        managed_server_proc.terminate()
+        try:
+            managed_server_proc.wait(timeout=5)
+        except Exception:
+            managed_server_proc.kill()
 
     telemetry["total_latency"] = round(time.time() - start_t, 3)
     on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")

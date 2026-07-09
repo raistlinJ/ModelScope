@@ -160,6 +160,28 @@ class TestScoreResponse:
         assert url == "http://judge.local:8080/v1/chat/completions"
 
     @patch("core.judge.requests.post")
+    def test_openai_url_with_v1_suffix_is_not_doubled(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output(80))
+        LLMJudge(
+            "OpenAI-Compatible",
+            "judge-model",
+            openai_url="http://judge.local:8080/v1",
+        ).score_response("prompt", "response")
+        assert mock_post.call_args[0][0] == "http://judge.local:8080/v1/chat/completions"
+
+    @patch("core.judge.requests.post")
+    def test_openai_blank_model_errors(self, mock_post):
+        mock_post.return_value = _openai_response(_make_judge_output(80))
+        judge = LLMJudge(
+            "OpenAI-Compatible",
+            "",
+            openai_url="http://judge.local:8080",
+        )
+        result = judge.score_response("prompt", "response")
+        assert result is None
+        mock_post.assert_not_called()
+
+    @patch("core.judge.requests.post")
     def test_ollama_returns_judge_score(self, mock_post):
         mock_post.return_value = _ollama_response(_make_judge_output(70))
         result = _ollama_judge().score_response("prompt", "response")

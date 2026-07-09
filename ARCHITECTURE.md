@@ -34,6 +34,10 @@ Pure / CLI-safe:
 - **environment.py** — `BaseEnvironment` abstraction + `LocalEnvironment` and
   `SSHEnvironment` concretions, plus the `create_environment()` factory. The
   only place that decides which environment to build.
+- **bot_types/** — discovery-backed bot-type plugin registry. Each plugin owns
+  its project defaults, session-state hydration map, Streamlit render dispatch,
+  CLI normalisation, and evaluator dispatch. `BashBotPlugin` is the base
+  lifecycle; `LlamaCliBotPlugin` extends it as a plugin.
 - **evaluator.py** — the local LLM agent loop: send prompt → execute tool calls
   against the environment → accumulate telemetry → run validation.
 - **caf_runner.py** — remote CAF execution over SSH: build the CLI command,
@@ -119,6 +123,16 @@ the `_EVALUATORS` dict. No dispatch code changes.
 `delete_file` / `exists`, set the `is_remote_caf` capability flag, and teach
 `create_environment()` how to build it. Callers stay untouched because they go
 through the factory.
+
+**Add a new bot type** — create a `BotTypePlugin` subclass. Built-in plugins are
+auto-discovered from `core/bot_types/*.py`; external plugins can be exposed by
+Python entry point group `modelscope.bot_types`, dropped into
+`plugins/bot_types/` or `~/.modelscope/bot_types/`, or loaded from paths listed
+in `MODELSCOPE_BOT_PLUGIN_PATH` (use the platform path separator for multiple
+entries). A bot-type plugin provides the sidebar label/icon, new-project
+defaults, project sync map, optional template metadata, UI render dispatch, CLI
+config normalisation, and evaluator dispatch. The Streamlit app, configuration
+tab, execute tab, project sync, and `cli.py project` all route through discovery.
 
 
 ## Running tests

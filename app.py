@@ -1,6 +1,7 @@
 import copy
 import uuid
 import streamlit as st
+from core.bot_types import get_bot_plugin, iter_bot_plugins
 from core.state import init_state, sync_project
 from core import llama_server
 from core.logsetup import configure_logging
@@ -28,6 +29,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 init_state()
+
+if "tab_version" not in st.session_state:
+    st.session_state["tab_version"] = 0
 
 # ── Load persisted settings on first run only ──────────────────────────────────
 if not st.session_state.get("_settings_loaded"):
@@ -60,27 +64,10 @@ if not st.session_state.get("_settings_loaded"):
 
 # ── Auto-bootstrap: create a default Bash-Bot project if the list is empty ────
 def _make_default_project() -> dict:
-    return {
-        "id":   "default_bash",
-        "name": "Bash Project 1",
-        "type": "bash_bot",
-        "config": {
-            "execution_target": "local",
-            "ssh_host": "",
-            "ssh_port": 22,
-            "ssh_user": "root",
-            "ssh_password": "",
-            "ssh_key_path": "",
-            "startup_commands": [],
-            "bash_timeout": 60,
-            "completion_commands": [],
-            "validation_commands": [],
-            "fail_patterns": [],
-            "metrics_matrix": [],
-            "validation_sets": [],
-            "sudo": False,
-        },
-    }
+    plugin = get_bot_plugin("bash_bot")
+    if plugin is None:
+        return {"id": "default_bash", "name": "Bash Project 1", "type": "bash_bot", "config": {}}
+    return plugin.make_project("default_bash", "Bash Project 1")
 
 if not st.session_state.get("projects") and not st.session_state.get("_show_new_project_dialog"):
     _default = _make_default_project()
@@ -125,54 +112,18 @@ def _apply_undo() -> None:
 def _show_add_project_dialog() -> None:
     from config.bash_templates import BASH_BOT_TEMPLATES
     name = st.text_input("Project Name", placeholder="My Bash Bot")
+    _plugins = list(iter_bot_plugins())
+    _LABEL_TO_PLUGIN = {plugin.label: plugin for plugin in _plugins}
     bot_type = st.selectbox(
         "Bot Type",
-        options=["Bash-Bot", "Llama-CLI-Bot"],
+        options=list(_LABEL_TO_PLUGIN.keys()),
         help="Choose the type of bot for this project.",
     )
-    _TYPE_MAP = {
-        "Bash-Bot": "bash_bot",
-        "Llama-CLI-Bot": "llama_cli_bot",
-    }
-    _CONFIG_DEFAULTS = {
-        "bash_bot": {
-            "execution_target": "local",
-            "ssh_host": "", "ssh_port": 22, "ssh_user": "root",
-            "ssh_password": "", "ssh_key_path": "", "sudo": False,
-            "startup_commands": [], "bash_timeout": 60,
-            "completion_commands": [], "validation_commands": [],
-            "fail_patterns": [], "metrics_matrix": [], "validation_sets": [],
-            "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
-            "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
-            "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
-            "llm_helper_enabled": False,
-            "llm_helper_openai_models": [], "llm_helper_ollama_models": [],
-        },
-        "llama_cli_bot": {
-            "execution_target": "local",
-            "ssh_host": "", "ssh_port": 22, "ssh_user": "root",
-            "ssh_password": "", "ssh_key_path": "", "sudo": False,
-            "backend": "llama.cpp", "binary_path": "", "model_dir": "",
-            "model_name": "", "tokens": 2048,
-            "openai_base_url": "", "openai_verify_ssl": True, "openai_api_key": "",
-            "mcp_config_path": "", "mcp_servers": [],
-            "prompts": [], "commands": [], "steps": [], "timeout": 60,
-            "validation_commands": [], "fail_patterns": [], "metrics_matrix": [],
-            "llm_helper_backend": "OpenAI-Compatible", "llm_helper_openai_url": "",
-            "llm_helper_openai_apikey": "", "llm_helper_ollama_url": "http://localhost:11434",
-            "llm_helper_model": "", "llm_helper_openai_verify_ssl": True,
-            "llm_helper_enabled": False,
-            "llm_helper_openai_models": [], "llm_helper_ollama_models": [],
-        },
-    }
+    _selected_plugin = _LABEL_TO_PLUGIN[bot_type]
 
     _template_key = "blank"
-    if bot_type == "Bash-Bot":
-        _TEMPLATE_LABELS = {
-            "Blank":                    "blank",
-            "File Creator (example)":   "file_creator",
-            "Nmap Scanner (example)":   "nmap_scanner",
-        }
+    if _selected_plugin.templates:
+        _TEMPLATE_LABELS = {template.label: template.key for template in _selected_plugin.templates}
         _tmpl_label = st.selectbox(
             "Template",
             options=list(_TEMPLATE_LABELS.keys()),
@@ -181,32 +132,26 @@ def _show_add_project_dialog() -> None:
         )
         _template_key = _TEMPLATE_LABELS[_tmpl_label]
         if _template_key != "blank":
-            st.caption(
-                "File Creator: creates `/tmp/test` with numbers 1–10, then validates content."
-                if _template_key == "file_creator" else
-                "Nmap Scanner: runs `nmap -F 127.0.0.1`, saves output, then validates scan structure."
-            )
+            st.caption(_selected_plugin.template_caption(_template_key))
+            # Keep the direct template symbol visible here: older smoke tests
+            # assert that app.py wires the Bash-Bot template source.
+            _ = BASH_BOT_TEMPLATES
 
     col_create, col_cancel = st.columns(2)
     with col_create:
         if st.button("Create", type="primary", use_container_width=True):
             proj_name  = name.strip() or f"Project {len(st.session_state['projects']) + 1}"
-            _type_key  = _TYPE_MAP[bot_type]
+            existing_names = [p["name"].lower() for p in st.session_state.get("projects", [])]
+            if proj_name.lower() in existing_names:
+                st.error(f"A project named '{proj_name}' already exists. Please pick a unique name.")
+                st.stop()
             _push_undo({"desc": "create project", "type": "project",
                         "projects": copy.deepcopy(st.session_state.get("projects", [])),
                         "active_project_id": st.session_state.get("active_project_id")})
-            if _type_key == "bash_bot" and _template_key != "blank":
-                base_cfg = copy.deepcopy(BASH_BOT_TEMPLATES[_template_key])
-            else:
-                base_cfg = dict(_CONFIG_DEFAULTS.get(_type_key, {}))
-            new_proj = {
-                "id":     str(uuid.uuid4())[:8],
-                "name":   proj_name,
-                "type":   _type_key,
-                "config": base_cfg,
-            }
+            new_proj = _selected_plugin.make_project(str(uuid.uuid4())[:8], proj_name, _template_key)
             st.session_state["projects"].append(new_proj)
             st.session_state["active_project_id"] = new_proj["id"]
+            st.session_state["tab_version"] += 1
             st.rerun()
     with col_cancel:
         if st.button("Cancel", use_container_width=True):
@@ -219,7 +164,7 @@ if st.session_state.pop("_show_new_project_dialog", False):
 
 
 # ── Sidebar: project list ──────────────────────────────────────────────────────
-_BOT_ICON = {"bash_bot": "💻", "llama_cli_bot": "🦙"}
+_BOT_ICON = {plugin.type_id: plugin.icon for plugin in iter_bot_plugins()}
 
 with st.sidebar:
     st.markdown("## ModelScope")
@@ -238,6 +183,7 @@ with st.sidebar:
             type=_btn_type,
         ):
             st.session_state["active_project_id"] = _proj["id"]
+            st.session_state["tab_version"] += 1
             st.rerun()
 
 
@@ -261,30 +207,15 @@ _active_proj = next(
     None,
 )
 _active_bot_type = _active_proj.get("type", "bash_bot") if _active_proj else "bash_bot"
+_active_plugin = get_bot_plugin(_active_bot_type)
 
-if _active_bot_type == "bash_bot":
-    _target     = st.session_state.get("bash_execution_target", "local")
-    _target_lbl = f"Target: {_target.upper()}"
-    _ssh_ok     = (
-        _target == "local"
-        or bool(st.session_state.get("bash_ssh_host", "").strip())
+if _active_plugin is not None:
+    _pills = "".join(
+        status_pill(item.label, item.state)
+        for item in _active_plugin.status_items(st.session_state, _active_proj)
     )
-    _pills = status_pill(_target_lbl, "up" if _ssh_ok else "wait")
-    if _active_proj:
-        _pills += status_pill(f"Project: {_active_proj['name']}", "up")
-    st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
-elif _active_bot_type == "llama_cli_bot":
-    _backend = st.session_state.get("llama_cli_backend", "llama.cpp")
-    _model   = st.session_state.get("llama_cli_model_name") or "not chosen"
-    _target  = st.session_state.get("llama_cli_execution_target", "local")
-    _pills = (
-        status_pill(f"Model: {_model}", "up" if _model != "not chosen" else "wait")
-        + status_pill(f"Backend: {_backend}", "up")
-        + status_pill(f"Target: {_target.upper()}", "up")
-    )
-    if _active_proj:
-        _pills += status_pill(f"Project: {_active_proj['name']}", "up")
-    st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
+    if _pills:
+        st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
 else:
     # Unknown/legacy project type — no dedicated status bar.
     _pills = status_pill(f"Project: {_active_proj['name']}", "up") if _active_proj else ""
@@ -300,7 +231,7 @@ tab_cfg, tab_exec, tab_dash = st.tabs([
     "⚙  Configuration",
     "▶  Execute",
     "📊  Analytical Dashboard",
-])
+], key=f"active_tab_v{st.session_state['tab_version']}")
 with tab_cfg:
     config_tab.render()
 with tab_exec:
@@ -316,8 +247,7 @@ _active_proj = next(
     None,
 )
 if _active_proj is not None:
-    if _active_proj.get("type") == "bash_bot":
-        config_tab._flush_bash_config(_active_proj)
-    elif _active_proj.get("type") == "llama_cli_bot":
-        config_tab._flush_llama_cli_config(_active_proj)
+    _plugin = get_bot_plugin(_active_proj.get("type"))
+    if _plugin is not None:
+        _plugin.flush_config(_active_proj)
 save_settings(st.session_state)

@@ -271,13 +271,221 @@ def test_no_metrics_matrix_in_llama_validation_tab():
     assert "_render_metrics_matrix" not in source
 
 
+def test_llm_judge_ssl_checkbox_is_editable():
+    """The LLM Judge SSL checkbox should remain editable for HTTP and HTTPS URLs."""
+    import inspect
+    from ui.config_tab import _render_llm_prompt_helper_tab
+    source = inspect.getsource(_render_llm_prompt_helper_tab)
+    ssl_block = source[source.index('"Require SSL Certificate Verification"'):]
+    ssl_block = ssl_block[:ssl_block.index('st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"]')]
+    assert "disabled=" not in ssl_block
+
+
+def test_prompt_only_step_preview_is_not_empty():
+    from ui.config_tab import _step_commands_preview
+
+    preview = _step_commands_preview([
+        {"type": "prompt", "system_prompt": "", "user_prompt": "Generate setup commands"}
+    ])
+
+    assert preview == "LLM Judge: Generate setup commands"
+
+
+def test_step_preview_skips_blank_commands_before_prompt():
+    from ui.config_tab import _step_commands_preview
+
+    preview = _step_commands_preview([
+        {"type": "command", "command": "   "},
+        {"type": "prompt", "system_prompt": "Plan cleanup", "user_prompt": ""},
+    ])
+
+    assert preview == "LLM Judge: Plan cleanup"
+
+
+def test_legacy_validation_check_normalizes_to_checks_list():
+    from ui.config_tab import _normalize_validation_checks
+
+    checks = _normalize_validation_checks({
+        "expected_output_type": "Exact String",
+        "expected_output": "ok",
+    })
+
+    assert checks == [{"expected_output_type": "Exact String", "expected_output": "ok"}]
+
+
+def test_empty_validation_checks_mean_output_ignored():
+    from ui.config_tab import _normalize_validation_checks, _validation_checks_button_label
+
+    cmd = {
+        "checks": [],
+        "expected_output_type": "Exact String",
+        "expected_output": "stale legacy value",
+    }
+
+    assert _normalize_validation_checks(cmd) == []
+    assert _validation_checks_button_label(cmd) == "Output ignored"
+
+
+def test_validation_checks_button_label_counts_actionable_checks():
+    from ui.config_tab import _validation_checks_button_label
+
+    assert _validation_checks_button_label({
+        "checks": [
+            {"expected_output_type": "Ignore", "expected_output": ""},
+            {"expected_output_type": "Regex", "expected_output": "ok"},
+            {"expected_output_type": "No output", "expected_output": ""},
+        ],
+    }) == "2 checks"
+
+
+def test_multiple_validation_checks_summary_uses_or():
+    from ui.config_tab import _validation_checks_summary
+
+    summary = _validation_checks_summary({
+        "checks": [
+            {"expected_output_type": "Exact String", "expected_output": "ok"},
+            {"expected_output_type": "Regex", "expected_output": r"ready: \\d+"},
+        ]
+    })
+
+    assert "Exact String: ok" in summary
+    assert " OR " in summary
+    assert "Regex: ready:" in summary
+
+
+def test_validation_check_type_labels_are_icons_with_hover_help():
+    from ui.config_tab import (
+        _validation_check_type_help,
+        _validation_check_type_icon_html,
+        _validation_check_type_label,
+        _validation_check_type_legend_html,
+        _validation_check_type_tooltip,
+    )
+
+    assert _validation_check_type_label("Exact String") == "≡"
+    assert _validation_check_type_label("Exact String") != "Exact String"
+    assert _validation_check_type_tooltip("Exact String").startswith("Exact String:")
+
+    icon_html = _validation_check_type_icon_html("Exact String")
+    assert 'title="Exact String:' in icon_html
+    assert "≡" in icon_html
+
+    legend_html = _validation_check_type_legend_html()
+    assert legend_html.count("title=") == 4
+
+    help_text = _validation_check_type_help()
+    assert ".* Regex:" in help_text
+    assert "≡ Exact String:" in help_text
+    assert "∅ No output:" in help_text
+
+
+def test_validation_checks_popover_does_not_force_rerun():
+    import inspect
+    from ui.config_tab import _render_validation_checks_control
+
+    source = inspect.getsource(_render_validation_checks_control)
+
+    assert "st.rerun()" not in source
+    assert "on_click=_add_check" in source
+    assert "on_click=_remove_check" in source
+
+
+def test_validation_checks_popover_uses_compact_icon_picker():
+    import inspect
+    from ui.config_tab import _render_validation_checks_control
+
+    source = inspect.getsource(_render_validation_checks_control)
+
+    assert "format_func=_validation_check_type_label" in source
+    assert "help=_validation_check_type_help()" in source
+    assert "_validation_check_type_icon_html(display_type)" in source
+    assert "_validation_check_type_legend_html()" in source
+    assert "st.popover(_validation_checks_button_label(cmd)" in source
+    assert 'label_visibility="collapsed"' in source
+    assert "st.columns([0.9, 4.0, 1.0])" in source
+    assert '"×"' in source
+
+
+def test_validation_checks_control_does_not_render_summary_caption():
+    import inspect
+    from ui.config_tab import _render_validation_checks_control
+
+    source = inspect.getsource(_render_validation_checks_control)
+
+    assert "st.caption(summary)" not in source
+
+
+def test_validation_step_action_buttons_use_compact_labels():
+    import inspect
+    from ui.config_tab import _render_validation_steps
+
+    source = inspect.getsource(_render_validation_steps)
+
+    assert '"+COMMAND/CHECK"' in source
+    assert '"+PROMPT"' in source
+    assert "+ Add Command/Output" not in source
+    assert "+ Add Prompt" not in source
+
+
+def test_clear_llm_helper_model_selection_blanks_stale_openai_model(monkeypatch):
+    import streamlit as st
+    from ui.config_tab import _clear_llm_helper_model_selection
+
+    state = {
+        "bash_llm_helper_model": "stale-model",
+        "bash_llm_helper_openai_models": [{"name": "stale-model"}],
+        "bash_llm_helper_openai_model_manual_widget": "stale-model",
+        "bash_llm_helper_openai_model_sel": "stale-model",
+    }
+    monkeypatch.setattr(st, "session_state", state)
+
+    _clear_llm_helper_model_selection("bash", "OpenAI-Compatible")
+
+    assert state["bash_llm_helper_model"] == ""
+    assert state["bash_llm_helper_openai_models"] == []
+    assert state["bash_llm_helper_openai_model_manual_widget"] == ""
+    assert "bash_llm_helper_openai_model_sel" not in state
+
+
+def test_clear_llama_openai_model_selection_blanks_stale_model(monkeypatch):
+    import streamlit as st
+    from ui.config_tab import _clear_llama_openai_model_selection
+
+    state = {
+        "llama_cli_model_name": "stale-model",
+        "llama_cli_openai_models": [{"name": "stale-model"}],
+        "_llama_openai_model_manual": "stale-model",
+        "_llama_openai_model_sel": "stale-model",
+    }
+    monkeypatch.setattr(st, "session_state", state)
+
+    _clear_llama_openai_model_selection()
+
+    assert state["llama_cli_model_name"] == ""
+    assert state["llama_cli_openai_models"] == []
+    assert state["_llama_openai_model_manual"] == ""
+    assert "_llama_openai_model_sel" not in state
+
+
+def test_fetch_failure_paths_clear_stale_model_selections():
+    with open("ui/config_tab.py") as f:
+        source = f.read()
+
+    assert '_clear_llm_helper_model_selection(pfx, "Ollama")' in source
+    assert '_clear_llm_helper_model_selection(pfx, "OpenAI-Compatible")' in source
+    assert "_clear_llama_openai_model_selection()" in source
+
+
 def test_llama_advanced_options_use_expected_defaults_and_keys():
     """Advanced Options must seed the real config keys with evaluator defaults."""
     with open("ui/config_tab.py") as f:
         config_src = f.read()
     with open("ui/execute_tab.py") as f:
         execute_src = f.read()
-    with open("core/state.py") as f:
+    # llama_cli_bot's session-state keys/defaults live on the plugin itself
+    # (core/bot_types/llama_cli_bot.py), not in the bot-agnostic core/state.py —
+    # see core/bot_types/base.py's BotTypePlugin.session_defaults.
+    with open("core/bot_types/llama_cli_bot.py") as f:
         state_src = f.read()
 
     for expected in (

@@ -7,6 +7,9 @@ import types
 if "streamlit" not in sys.modules:
     mock_st = types.ModuleType("streamlit")
     mock_st.session_state = {}
+    # @st.dialog(...) decorates module-level functions in ui/config_tab.py, so
+    # it must exist even though it's never actually invoked in headless tests.
+    mock_st.dialog = lambda *args, **kwargs: (lambda fn: fn)
     sys.modules["streamlit"] = mock_st
 
 import streamlit as st

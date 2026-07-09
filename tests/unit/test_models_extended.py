@@ -19,6 +19,7 @@ import requests
 from core.models import (
     fetch_ollama_models,
     fetch_llama_cpp_models,
+    normalize_openai_base_url,
     detect_backend,
     scan_gguf_models,
     compile_gguf,
@@ -93,6 +94,20 @@ class TestFetchLlamaCppModels:
         assert err == ""
         assert len(models) == 1
         assert models[0]["name"] == "llama3-8b.gguf"
+
+    def test_normalizes_v1_suffix(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"data": [{"id": "vllm-model"}]}
+        with patch("core.models.requests.get", return_value=mock_resp) as mock_get:
+            models, err = fetch_llama_cpp_models("http://localhost:8000/v1")
+
+        assert err == ""
+        assert models[0]["name"] == "vllm-model"
+        assert mock_get.call_args.args[0] == "http://localhost:8000/v1/models"
+
+    def test_normalize_openai_base_url(self):
+        assert normalize_openai_base_url("localhost:8000/v1/") == "http://localhost:8000"
 
     def test_success_with_models_key(self):
         mock_resp = MagicMock()

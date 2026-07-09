@@ -638,7 +638,8 @@ def _print_run_summary(telemetry: dict) -> None:
 def _cmd_project(args: argparse.Namespace) -> int:
     """Execute an evaluation from an exported project JSON configuration."""
     from core.session_log import SessionLog
-    from core.evaluator import run_bash_evaluation, run_llama_cli_evaluation, run_evaluation
+    from core.bot_types import get_bot_plugin
+    from core.evaluator import run_evaluation
     from core.environment import create_environment
 
     configure_logging(level=logging.DEBUG if args.verbose else logging.INFO)
@@ -670,24 +671,15 @@ def _cmd_project(args: argparse.Namespace) -> int:
     # Extract top level config
     config = proj.get("config", {})
     bot_type = proj.get("type", "")
+    plugin = get_bot_plugin(bot_type)
 
     # Inject required keys for run_evaluation loop
     config.setdefault("cancel_requested_ref", [False])
 
-    # Mirror the GUI's run-config assembly (ui/execute_tab.py) so a project
-    # file runs identically from the CLI.  The evaluator reads alias keys
-    # (backend_type/selected_model/llm_url/context_size) that the exported
-    # config stores under their flushed names.
-    if bot_type == "llama_cli_bot":
-        config.setdefault("type", "llama_cli_bot")
-        config.setdefault("backend_type", config.get("backend", "llama.cpp"))
-        config.setdefault("selected_model", config.get("model_name", ""))
-        config.setdefault("context_size", config.get("tokens", 2048))
-        config.setdefault("llm_url", config.get("openai_base_url", ""))
-        config.setdefault("mcp_server_url", "http://127.0.0.1:9191")
-        config["mcp_servers"] = [
-            s for s in config.get("mcp_servers", []) if s.get("enabled")
-        ]
+    # Mirror the GUI's run-config assembly so a project file runs identically
+    # from the CLI. Bot-type-specific aliases live with the plugin.
+    if plugin is not None:
+        plugin.normalize_project_config(config)
 
     # Merge sensitive credentials (Flags > Env > JSON)
     def _resolve_secret(key: str, flag_name: str, env_name: str):
@@ -754,10 +746,8 @@ def _cmd_project(args: argparse.Namespace) -> int:
         else:
             on_log("[INIT] Target: Local")
 
-        if bot_type == "bash_bot":
-            telemetry = run_bash_evaluation(env, config, on_log)
-        elif bot_type == "llama_cli_bot":
-            telemetry = run_llama_cli_evaluation(env, config, on_log)
+        if plugin is not None:
+            telemetry = plugin.run_evaluation(env, config, on_log)
         else:
             # Fallback to main Cyber Agent
             telemetry = run_evaluation(env, config, on_log)

@@ -49,6 +49,14 @@ def scan_gguf_models(root_path: str) -> list[dict]:
     return results
 
 
+def normalize_openai_base_url(base_url: str) -> str:
+    """Normalize an OpenAI-compatible base URL before appending /v1 routes."""
+    url = ensure_http_scheme(base_url).rstrip("/")
+    if url.endswith("/v1"):
+        url = url[:-3]
+    return url
+
+
 def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
     """
     Return (models, error) where models is [{name, size_gb}] from Ollama /api/tags.
@@ -228,7 +236,7 @@ def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list
     from a llama.cpp /v1/models endpoint.  Works for local and remote servers.
     error is '' on success, otherwise a human-readable message.
     """
-    url = ensure_http_scheme(base_url)
+    url = normalize_openai_base_url(base_url)
     if not url:
         return [], "Server URL is empty."
     try:
@@ -268,7 +276,7 @@ def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list
 
 def detect_backend(url: str) -> str | None:
     """Probe url and return 'ollama', 'llama.cpp', or None."""
-    base = ensure_http_scheme(url).rstrip("/")
+    base = normalize_openai_base_url(url)
     try:
         r = requests.get(base + "/api/tags", timeout=3)
         if r.ok and "models" in r.json():

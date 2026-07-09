@@ -8,8 +8,9 @@ and validation wiring.
 """
 import time
 import pytest
-from unittest.mock import MagicMock, call
-from core.evaluator import run_bash_evaluation, run_evaluation
+import requests
+from unittest.mock import MagicMock, call, patch
+from core.evaluator import execute_helper_prompt, run_bash_evaluation, run_evaluation
 from core.environment import LocalEnvironment
 
 
@@ -258,6 +259,78 @@ class TestRunBashEvaluationValidation:
         )
         assert result["validation_stdout"] == "line1\nline1\n"
 
+    def test_validation_set_passes_when_any_expected_check_matches(self):
+        env = _env(stdout="ready: 204", exit_code=0)
+        result = run_bash_evaluation(
+            env,
+            _cfg(validation_sets=[{
+                "name": "multi",
+                "steps": [{
+                    "commands": [{
+                        "type": "command",
+                        "command": "check",
+                        "checks": [
+                            {"expected_output_type": "Exact String", "expected_output": "ready"},
+                            {"expected_output_type": "Regex", "expected_output": r"ready: \d+"},
+                        ],
+                    }]
+                }],
+            }]),
+            _log(),
+        )
+
+        assert result["validation_passed"] is True
+        cmd_result = result["validation_sets_results"][0]["steps"][0]
+        assert cmd_result["matched_check"]["expected_output_type"] == "Regex"
+        assert len(cmd_result["checks"]) == 2
+
+    def test_validation_set_with_empty_checks_ignores_output(self):
+        env = _env(stdout="wrong", exit_code=0)
+        result = run_bash_evaluation(
+            env,
+            _cfg(validation_sets=[{
+                "name": "empty-checks",
+                "steps": [{
+                    "commands": [{
+                        "type": "command",
+                        "command": "check",
+                        "checks": [],
+                        "expected_output_type": "Exact String",
+                        "expected_output": "stale legacy value",
+                    }]
+                }],
+            }]),
+            _log(),
+        )
+
+        assert result["validation_passed"] is True
+        cmd_result = result["validation_sets_results"][0]["steps"][0]
+        assert cmd_result["checks"] == []
+        assert cmd_result["matched_check"]["expected_output_type"] == "Ignore"
+
+    def test_validation_set_fails_when_no_expected_checks_match(self):
+        env = _env(stdout="wrong", exit_code=0)
+        result = run_bash_evaluation(
+            env,
+            _cfg(validation_sets=[{
+                "name": "multi",
+                "steps": [{
+                    "commands": [{
+                        "type": "command",
+                        "command": "check",
+                        "checks": [
+                            {"expected_output_type": "Exact String", "expected_output": "ok"},
+                            {"expected_output_type": "Regex", "expected_output": r"ready: \d+"},
+                        ],
+                    }]
+                }],
+            }]),
+            _log(),
+        )
+
+        assert result["validation_passed"] is False
+        assert "No expected output checks matched" in result["validation_sets_results"][0]["steps"][0]["reason"]
+
 
 # ── LLM Judge ("LLM Helper") prompt step failures ─────────────────────────────
 
@@ -266,6 +339,104 @@ def _prompt_step(user_prompt="hi"):
     return [{"delay_seconds": 0, "commands": [
         {"type": "prompt", "enabled": True, "system_prompt": "", "user_prompt": user_prompt}
     ]}]
+
+
+class TestExecuteHelperPrompt:
+    @staticmethod
+    def _openai_response(text="ok"):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"choices": [{"message": {"content": text}}]}
+        return resp
+
+    @patch("core.evaluator.requests.post")
+    def test_openai_helper_normalizes_v1_url(self, mock_post):
+        mock_post.return_value = self._openai_response("done")
+
+        result = execute_helper_prompt(
+            {"type": "prompt", "user_prompt": "hello", "preserve_context": False},
+            {
+                "llm_helper_backend": "OpenAI-Compatible",
+                "llm_helper_openai_url": "http://judge.local:8000/v1",
+                "llm_helper_model": "selected-vllm-model",
+            },
+            [],
+            lambda *args: None,
+        )
+
+        assert result["exit_code"] == 0
+        assert mock_post.call_args.args[0] == "http://judge.local:8000/v1/chat/completions"
+        assert mock_post.call_args.kwargs["json"]["model"] == "selected-vllm-model"
+
+    @patch("core.evaluator.requests.post")
+    def test_openai_helper_errors_when_model_blank(self, mock_post):
+        result = execute_helper_prompt(
+            {"type": "prompt", "user_prompt": "hello", "preserve_context": False},
+            {
+                "llm_helper_backend": "OpenAI-Compatible",
+                "llm_helper_openai_url": "http://judge.local:8000",
+                "llm_helper_model": "",
+                "llm_helper_openai_models": [{"name": "cached-vllm-model"}],
+            },
+            [],
+            lambda *args: None,
+        )
+
+        assert result["exit_code"] == 1
+        assert "No model selected for LLM Helper" in result["stderr"]
+        mock_post.assert_not_called()
+
+    @patch("core.evaluator.requests.post")
+    def test_openai_helper_http_error_includes_response_body(self, mock_post):
+        resp = MagicMock()
+        resp.text = '{"error":"model is required"}'
+        err = requests.exceptions.HTTPError("400 Client Error")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
+        mock_post.return_value = resp
+
+        result = execute_helper_prompt(
+            {"type": "prompt", "user_prompt": "hello", "preserve_context": False},
+            {
+                "llm_helper_backend": "OpenAI-Compatible",
+                "llm_helper_openai_url": "http://judge.local:8000",
+                "llm_helper_model": "bad-model",
+            },
+            [],
+            lambda *args: None,
+        )
+
+        assert result["exit_code"] == 1
+        assert "model is required" in result["stderr"]
+
+    @patch("core.evaluator.requests.post")
+    def test_openai_helper_chat_template_error_is_actionable(self, mock_post):
+        resp = MagicMock()
+        resp.text = (
+            '{"error":{"message":"As of transformers v4.44, default chat template '
+            'is no longer allowed, so you must provide a chat template if the tokenizer '
+            'does not define one.","type":"BadRequestError","code":400}}'
+        )
+        err = requests.exceptions.HTTPError("400 Client Error")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
+        mock_post.return_value = resp
+
+        result = execute_helper_prompt(
+            {"type": "prompt", "user_prompt": "hello", "preserve_context": False},
+            {
+                "llm_helper_backend": "OpenAI-Compatible",
+                "llm_helper_openai_url": "http://judge.local:8000",
+                "llm_helper_model": "base-model-without-template",
+            },
+            [],
+            lambda *args: None,
+        )
+
+        assert result["exit_code"] == 1
+        assert "vLLM could not render chat messages" in result["stderr"]
+        assert "--chat-template" in result["stderr"]
+        assert "response body:" in result["stderr"]
 
 
 class TestRunBashEvaluationPromptStepFailure:

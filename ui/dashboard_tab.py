@@ -230,7 +230,10 @@ def _render_bash_dashboard(project: dict) -> None:
         sel_label = st.selectbox(
             "Select run", options=labels, index=0,
             help="Browse previous runs for this project",
-            key=f"bash_dash_sel_{pid}",
+            # Keyed by run count too, not just pid: a stable key would retain
+            # the previously-selected run's label after a new run completes,
+            # so the dashboard wouldn't auto-jump to the fresh result.
+            key=f"bash_dash_sel_{pid}_{len(history)}",
         )
         sel_idx = labels.index(sel_label)
         tel = list(reversed(history))[sel_idx]
@@ -319,15 +322,28 @@ def _render_bash_dashboard(project: dict) -> None:
                         cmd_text = cmd_res.get("command", "")
                         cmd_passed = cmd_res.get("passed", False)
                         exit_cd = cmd_res.get("exit_code", "?")
-                        out_type = cmd_res.get("expected_output_type", "Ignore")
-                        expected = cmd_res.get("expected_output", "")
+                        checks = cmd_res.get("checks") or [{
+                            "expected_output_type": cmd_res.get("expected_output_type", "Ignore"),
+                            "expected_output": cmd_res.get("expected_output", ""),
+                        }]
                         reason = cmd_res.get("reason", "")
                         
                         cmd_badge = "✓" if cmd_passed else "✗"
                         st.markdown(f"**Command {c_idx + 1}:** `{cmd_text}` ({cmd_badge})")
                         
                         # Match spec details
-                        st.caption(f"Expected Output: {out_type} {f'({expected!r})' if out_type != 'Ignore' else ''} | Exit code: {exit_cd}")
+                        check_parts = []
+                        for check in checks:
+                            out_type = check.get("expected_output_type", check.get("type", "Ignore"))
+                            expected = check.get("expected_output", check.get("value", ""))
+                            if out_type == "Ignore":
+                                continue
+                            if out_type == "No output":
+                                check_parts.append("No output")
+                            else:
+                                check_parts.append(f"{out_type} ({expected!r})")
+                        expected_summary = " OR ".join(check_parts) if check_parts else "Ignore"
+                        st.caption(f"Expected Output: {expected_summary} | Exit code: {exit_cd}")
                         if reason:
                             st.warning(f"Failure reason: {reason}")
                             
@@ -389,14 +405,18 @@ def _render_bash_dashboard(project: dict) -> None:
         _render_metrics_evaluation(matrix, tel, categories=bash_categories)
 
 
-def _render_llama_cli_dashboard(project: dict) -> None:
-    """Llama-CLI-Bot dashboard — per-project history with prompt responses and validation."""
+def _render_llama_cli_dashboard(
+    project: dict,
+    bot_type: str = "llama_cli_bot",
+    metrics_key: str = "llama_cli_metrics_matrix",
+) -> None:
+    """Llama-backed bot dashboard — per-project history with prompt responses and validation."""
     _hydrate_project_history_if_empty(project)
     pid         = project["id"]
     history_key = f"run_history_{pid}"
     history: list = st.session_state.get(history_key, [])
-    # Filter to only llama_cli_bot runs (excludes legacy/other bot-type entries)
-    history = [h for h in history if h.get("run_bot_type") == "llama_cli_bot"]
+    # Filter to this llama-backed bot type (excludes legacy/other bot-type entries)
+    history = [h for h in history if h.get("run_bot_type") == bot_type]
 
     if not history:
         st.info("No runs yet for this project — go to **Execute** and run it.")
@@ -411,7 +431,10 @@ def _render_llama_cli_dashboard(project: dict) -> None:
             labels.append(lbl)
         sel_label = st.selectbox(
             "Select run", options=labels, index=0,
-            key=f"llama_dash_sel_{pid}",
+            # Keyed by run count too, not just pid: a stable key would retain
+            # the previously-selected run's label after a new run completes,
+            # so the dashboard wouldn't auto-jump to the fresh result.
+            key=f"{bot_type}_dash_sel_{pid}_{len(history)}",
         )
         tel = list(reversed(history))[labels.index(sel_label)]
 
@@ -519,7 +542,7 @@ def _render_llama_cli_dashboard(project: dict) -> None:
 
     # Metrics matrix
     _run_matrix = tel.get("metrics_matrix", [])
-    matrix = [m for m in (_run_matrix or st.session_state.get("llama_cli_metrics_matrix", []))
+    matrix = [m for m in (_run_matrix or st.session_state.get(metrics_key, []))
               if m.get("enabled")]
     if matrix:
         st.divider()
@@ -537,6 +560,13 @@ def render() -> None:
         return
     if _proj and _proj.get("type") == "llama_cli_bot":
         _render_llama_cli_dashboard(_proj)
+        return
+    if _proj and _proj.get("type") == "llama_server_bot":
+        _render_llama_cli_dashboard(
+            _proj,
+            bot_type="llama_server_bot",
+            metrics_key="llama_server_metrics_matrix",
+        )
         return
 
     if _proj is None:
