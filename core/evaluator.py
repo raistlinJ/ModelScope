@@ -192,7 +192,7 @@ def _run_llm_agent_loop(
                 on_log(f"[TOOLS] Parsed {len(tool_calls_raw)} inline: {names}")
 
         if content:
-            on_log(f"[RESPONSE] {content[:400]}")
+            on_log(f"[RESPONSE] {content}")
             final_response = content
 
         if not tool_calls_raw:
@@ -1180,7 +1180,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
                     max_turns=max_iter, deadline=eval_deadline,
                 )
-                on_log(f"[RESPONSE] {response[:400]}", "llama")
+                on_log(f"[RESPONSE] {response[:2000]}", "llama")
                 telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
                 telemetry["tool_calls"].extend(tool_calls)
                 return {"stdout": response, "exit_code": 0}
@@ -1239,7 +1239,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 f"{f' --seed {seed}' if en_seed else ''}"
                 f"{f' --rope-freq-base {rope_freq_base}' if en_rope_freq_base else ''}"
                 f"{f' --rope-freq-scale {rope_freq_scale}' if en_rope_freq_scale else ''}"
-                f"{' -fa' if flash_attn else ''}"
+                f"{' -fa on' if flash_attn else ''}"
                 f"{sys_flag}"
                 f"{custom_flag_str}"
                 f" --prompt {safe_prompt}"
@@ -1260,7 +1260,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 on_log(f"[ERROR] llama-cli exited with code {res['exit_code']}", "llama")
                 
             response = res.get("stdout", "").strip()
-            on_log(f"[RESPONSE] {response[:400]}", "llama")
+            on_log(f"[RESPONSE] {response}", "llama")
             telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
             telemetry["tool_calls"].append({
                 "tool": "llama-cli",
@@ -1566,7 +1566,7 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
             clean = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
             clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL).strip()
             display = re.sub(r'\n{3,}', '\n\n', clean or content)
-            on_log(f"[RESPONSE] {display[:500]}{'…' if len(display) > 500 else ''}")
+            on_log(f"[RESPONSE] {display}")
             telemetry["llm_response"] = clean or content
 
         if not tool_calls_raw:

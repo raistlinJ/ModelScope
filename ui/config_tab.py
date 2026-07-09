@@ -474,128 +474,145 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
             if st.session_state.get(f"_sc_{pfx}_{step_id}_open", True):
                 # ── Commands ────────────────────────────────────────────────
                 if not commands:
-                    st.caption("No commands. Click **+ Add Command** below.")
-
-                _addcmd_flag_key = f"_sc_{pfx}_{step_id}_addcmd_flag"
-                _is_last_cmd_idx = len(commands) - 1
-
-                for ci, cmd in enumerate(commands):
-                    cmd_id = cmd["_id"]
-
-                    _cmd_type = cmd.get("type", "command")
-                    if _cmd_type == "prompt":
-                        with st.container(border=True):
-                            cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
-                            with cc0:
-                                st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
-                            with cc1:
-                                st.markdown("**LLM Judge**")
-                            with cc2:
-                                pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
-                                cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
-                            with cc3:
-                                en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                                cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
-                            with cc4:
-                                if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
-                                    mutation = ("del_cmd", si, ci)
-                            
-                            sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
-                            if sys_key not in st.session_state:
-                                st.session_state[sys_key] = cmd.get("system_prompt", "")
-                            with st.expander("System Prompt", expanded=False):
-                                cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
-                            
-                            usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
-                            if usr_key not in st.session_state:
-                                st.session_state[usr_key] = cmd.get("user_prompt", "")
-                            with st.expander("User Prompt", expanded=False):
-                                cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
-                    else:
-                        # Single flat row: indicator | command | timeout | long-running | enabled | delete
-                        cc0, cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([0.3, 4.7, 0.8, 1.0, 1.0, 1.0, 0.7])
-                        with cc0:
-                            st.markdown("<div style='margin-top:8px; font-size:18px;' title='Command'>💻</div>", unsafe_allow_html=True)
-                        with cc1:
-                            cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
-                            if cmd_key not in st.session_state:
-                                st.session_state[cmd_key] = cmd.get("command", "")
-    
-                            if ci == _is_last_cmd_idx:
-                                def _on_last_cmd_enter(
-                                    _ck=cmd_key, _fk=_addcmd_flag_key
-                                ):
-                                    if st.session_state.get(_ck, "").strip():
-                                        st.session_state[_fk] = True
-    
-                                st.text_input(
-                                    f"Command {ci + 1}",
-                                    key=cmd_key,
-                                    placeholder=placeholder,
-                                    label_visibility="collapsed",
-                                    on_change=_on_last_cmd_enter,
-                                )
-                            else:
-                                st.text_input(
-                                    f"Command {ci + 1}",
-                                    key=cmd_key,
-                                    placeholder=placeholder,
-                                    label_visibility="collapsed",
-                                )
-                            cmd["command"] = st.session_state.get(cmd_key, "")
-                        with ccl_to:
-                            st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
-                        with ccv_to:
-                            lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
-                            is_lr  = st.session_state.get(lr_key, cmd.get("long_running", False))
-                            
-                            to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
-                            if to_key not in st.session_state:
-                                st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
-                            cmd["timeout_seconds"] = st.number_input(
-                                "Timeout (s)",
-                                min_value=0.1, max_value=3600.0, step=1.0,
-                                key=to_key,
-                                disabled=is_lr,
-                                label_visibility="collapsed",
-                                help="Per-command timeout in seconds.",
-                            )
-                        with cc3:
-                            cmd["long_running"] = st.checkbox(
-                                "Long-running",
-                                value=cmd.get("long_running", False),
-                                key=lr_key,
-                                help="Disables the per-command timeout; allows up to 1 hour.",
-                            )
-                        with cc4:
-                            en_key         = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                            cmd["enabled"] = st.checkbox(
-                                "Enabled",
-                                value=cmd.get("enabled", True),
-                                key=en_key,
-                            )
-                        with cc5:
-                            if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del",
-                                         use_container_width=True):
-                                mutation = ("del_cmd", si, ci)
-
-                # Add Command: either button click or Enter in the last command field.
-                if st.session_state.pop(_addcmd_flag_key, False):
-                    mutation = ("add_cmd", si)
-                else:
+                    st.caption("No commands. Click the buttons below to begin.")
                     _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
                     _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
                     if _llm_enabled:
-                        ca, cb, _ = st.columns([1.5, 1.5, 7.0])
+                        ca, cb, _ = st.columns([2, 2, 6])
                         with ca:
-                            if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
+                            if st.button("+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd_empty", use_container_width=True):
                                 mutation = ("add_cmd", si)
                         with cb:
-                            if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                            if st.button("+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt_empty", use_container_width=True):
                                 mutation = ("add_prompt", si)
                     else:
-                        if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
-                            mutation = ("add_cmd", si)
+                        ca, _ = st.columns([2, 7])
+                        with ca:
+                            if st.button("+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd_empty", use_container_width=True):
+                                mutation = ("add_cmd", si)
+                else:
+                    _addcmd_flag_key = f"_sc_{pfx}_{step_id}_addcmd_flag"
+                    _is_last_cmd_idx = len(commands) - 1
+
+                    for ci, cmd in enumerate(commands):
+                        cmd_id = cmd["_id"]
+
+                        _cmd_type = cmd.get("type", "command")
+                        if _cmd_type == "prompt":
+                            with st.container(border=True):
+                                cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                                with cc0:
+                                    st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
+                                with cc1:
+                                    st.markdown("**LLM Judge**")
+                                with cc2:
+                                    pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
+                                    cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
+                                with cc3:
+                                    en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                                    cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                                with cc4:
+                                    if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True):
+                                        mutation = ("del_cmd", si, ci)
+                                
+                                sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                                if sys_key not in st.session_state:
+                                    st.session_state[sys_key] = cmd.get("system_prompt", "")
+                                with st.expander("System Prompt", expanded=False):
+                                    cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                                
+                                usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
+                                if usr_key not in st.session_state:
+                                    st.session_state[usr_key] = cmd.get("user_prompt", "")
+                                with st.expander("User Prompt", expanded=False):
+                                    cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
+                        else:
+                            # Single flat row: indicator | command | timeout | long-running | enabled | delete
+                            cc0, cc1, ccl_to, ccv_to, cc3, cc4, cc5 = st.columns([0.3, 4.7, 0.8, 1.0, 1.0, 1.0, 0.7])
+                            with cc0:
+                                st.markdown("<div style='margin-top:8px; font-size:18px;' title='Command'>💻</div>", unsafe_allow_html=True)
+                            with cc1:
+                                cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                                if cmd_key not in st.session_state:
+                                    st.session_state[cmd_key] = cmd.get("command", "")
+
+                                if ci == _is_last_cmd_idx:
+                                    def _on_last_cmd_enter(
+                                        _ck=cmd_key, _fk=_addcmd_flag_key
+                                    ):
+                                        if st.session_state.get(_ck, "").strip():
+                                            st.session_state[_fk] = True
+
+                                    st.text_input(
+                                        f"Command {ci + 1}",
+                                        key=cmd_key,
+                                        placeholder=placeholder,
+                                        label_visibility="collapsed",
+                                        on_change=_on_last_cmd_enter,
+                                    )
+                                else:
+                                    st.text_input(
+                                        f"Command {ci + 1}",
+                                        key=cmd_key,
+                                        placeholder=placeholder,
+                                        label_visibility="collapsed",
+                                    )
+                                cmd["command"] = st.session_state.get(cmd_key, "")
+                            with ccl_to:
+                                st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                            with ccv_to:
+                                lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                                is_lr  = st.session_state.get(lr_key, cmd.get("long_running", False))
+                                
+                                to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                                if to_key not in st.session_state:
+                                    st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                                cmd["timeout_seconds"] = st.number_input(
+                                    "Timeout (s)",
+                                    min_value=0.1, max_value=3600.0, step=1.0,
+                                    key=to_key,
+                                    disabled=is_lr,
+                                    label_visibility="collapsed",
+                                    help="Per-command timeout in seconds.",
+                                )
+                            with cc3:
+                                cmd["long_running"] = st.checkbox(
+                                    "Long-running",
+                                    value=cmd.get("long_running", False),
+                                    key=lr_key,
+                                    help="Disables the per-command timeout; allows up to 1 hour.",
+                                )
+                            with cc4:
+                                en_key         = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                                cmd["enabled"] = st.checkbox(
+                                    "Enabled",
+                                    value=cmd.get("enabled", True),
+                                    key=en_key,
+                                )
+                            with cc5:
+                                if st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del",
+                                             use_container_width=True):
+                                    mutation = ("del_cmd", si, ci)
+
+                    # ── Add Command / Add LLM Judge buttons (after all commands in step) ──
+                    # Only show when the step has commands — these let the user add more
+                    # entries to an already-populated step.
+                    if st.session_state.pop(_addcmd_flag_key, False):
+                        mutation = ("add_cmd", si)
+                    else:
+                        _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+                        _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
+                        if _llm_enabled:
+                            ca, cb, _ = st.columns([1.5, 1.5, 7.0])
+                            with ca:
+                                if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
+                                    mutation = ("add_cmd", si)
+                            with cb:
+                                if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                                    mutation = ("add_prompt", si)
+                        else:
+                            if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                                mutation = ("add_cmd", si)
 
     # Add Step button
     if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
@@ -612,17 +629,35 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     "state_key": state_key, "data": copy.deepcopy(steps)})
         m = mutation
         if m[0] == "add_step":
-            steps.append({
+            _bot_pfx = "llama_cli" if state_key.startswith("llama_cli") else "bash"
+            _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
+
+            new_step = {
                 "_id":           _next_step_id(),
                 "delay_seconds": 0.0,
-                "commands": [{
+                "commands":      [],
+            }
+
+            # LLM Judge disabled → pre-populate with a blank command row
+            # so the user can type immediately without clicking "+ Add Command".
+            if not _llm_enabled:
+                new_step["commands"].append({
                     "_id":             _next_step_id(),
+                    "type":            "command",
                     "command":         "",
                     "enabled":         True,
                     "long_running":    False,
                     "timeout_seconds": 60,
-                }],
-            })
+                })
+
+            steps.append(new_step)
+            # Collapse every previously-rendered step; the new step stays open.
+            new_id = new_step["_id"]
+            for _s in steps:
+                if _s.get("_id") == new_id:
+                    continue
+                st.session_state[f"_sc_{pfx}_{_s['_id']}_open"] = False
+            st.session_state[f"_sc_{pfx}_{new_id}_open"] = True
         elif m[0] == "del_step":
             steps.pop(m[1])
         elif m[0] == "move_step":
@@ -682,18 +717,20 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
     st.session_state[state_key] = steps
 
     def _val_add_step():
-        st.session_state[state_key].append({
+        _steps = st.session_state[state_key]
+        new_step = {
             "_id": _next_step_id(),
             "delay_seconds": 0.0,
-            "commands": [{
-                "_id": _next_step_id(),
-                "command": "",
-                "enabled": True,
-                "timeout_seconds": 60,
-                "expected_output_type": "Ignore",
-                "expected_output": ""
-            }],
-        })
+            "commands": [],
+        }
+        _steps.append(new_step)
+        # Collapse every previously-rendered step; the new step stays open.
+        new_id = new_step["_id"]
+        for _s in _steps:
+            if _s.get("_id") == new_id:
+                continue
+            st.session_state[f"_sc_{pfx}_{_s['_id']}_open"] = False
+        st.session_state[f"_sc_{pfx}_{new_id}_open"] = True
 
     def _val_del_step(si):
         st.session_state[state_key].pop(si)
@@ -773,119 +810,144 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
 
             if st.session_state.get(f"_sc_{pfx}_{step_id}_open", True):
                 if not commands:
-                    st.caption("No commands. Click **+ Add Command/Output** below.")
+                    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+                    if bot_type == "llama_cli":
+                        _ca, _cb, _ = st.columns([2, 2, 5])
+                        with _ca:
+                            st.button(
+                                "+ Add Command/Output",
+                                key=f"_sc_{pfx}_{step_id}_choice_cmd",
+                                use_container_width=True,
+                                on_click=_val_add_cmd, args=(si,),
+                            )
+                        with _cb:
+                            st.button(
+                                "+ Add Prompt",
+                                key=f"_sc_{pfx}_{step_id}_choice_prompt",
+                                use_container_width=True,
+                                on_click=_val_add_prompt, args=(si,),
+                            )
+                    else:
+                        _ca, _ = st.columns([2, 7])
+                        with _ca:
+                            st.button(
+                                "+ Add Command/Output",
+                                key=f"_sc_{pfx}_{step_id}_choice_cmd",
+                                use_container_width=True,
+                                on_click=_val_add_cmd, args=(si,),
+                            )
+                else:
+                    _is_last_cmd_idx = len(commands) - 1
 
-                _is_last_cmd_idx = len(commands) - 1
+                    first_cmd_seen = False
 
-                first_cmd_seen = False
+                    for ci, cmd in enumerate(commands):
+                        cmd_id = cmd["_id"]
+                        _cmd_type = cmd.get("type", "command")
 
-                for ci, cmd in enumerate(commands):
-                    cmd_id = cmd["_id"]
-                    _cmd_type = cmd.get("type", "command")
+                        if _cmd_type == "prompt":
+                            with st.container(border=True):
+                                cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                                with cc0:
+                                    st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
+                                with cc1:
+                                    _title = "Configured LLAMA-CLI LLM" if bot_type == "llama_cli" else "Configured LLM"
+                                    st.markdown(f"**{_title}**")
+                                with cc2:
+                                    pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
+                                    cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
+                                with cc3:
+                                    en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
+                                    cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
+                                with cc4:
+                                    st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
+                                
+                                sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                                if sys_key not in st.session_state:
+                                    st.session_state[sys_key] = cmd.get("system_prompt", "")
+                                with st.expander("System Prompt", expanded=False):
+                                    cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                                
+                                usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
+                                if usr_key not in st.session_state:
+                                    st.session_state[usr_key] = cmd.get("user_prompt", "")
+                                with st.expander("User Prompt", expanded=False):
+                                    cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
+                        else:
+                            if not first_cmd_seen:
+                                hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                                hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
+                                hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
+                                hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
+                                hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
+                                hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
+                                st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+                                first_cmd_seen = True
 
-                    if _cmd_type == "prompt":
-                        with st.container(border=True):
-                            cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
-                            with cc0:
-                                st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
-                            with cc1:
-                                _title = "Configured LLAMA-CLI LLM" if bot_type == "llama_cli" else "Configured LLM"
-                                st.markdown(f"**{_title}**")
-                            with cc2:
-                                pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
-                                cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
-                            with cc3:
+                            cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
+                            
+                            with cc_cmd:
+                                cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
+                                if cmd_key not in st.session_state:
+                                    st.session_state[cmd_key] = cmd.get("command", "")
+
+                                is_disabled = not cmd.get("enabled", True)
+
+                                if ci == _is_last_cmd_idx:
+                                    def _on_last_cmd_enter(_ck=cmd_key, _si=si):
+                                        if st.session_state.get(_ck, "").strip():
+                                            _val_add_cmd(_si)
+                                    st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", on_change=_on_last_cmd_enter, disabled=is_disabled)
+                                else:
+                                    st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", disabled=is_disabled)
+                                cmd["command"] = st.session_state.get(cmd_key, "")
+                                
+                            with cc_to:
+                                to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                                if to_key not in st.session_state:
+                                    st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                                cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
+                                
+                            with cc_chk:
+                                chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
+                                if chk_key not in st.session_state:
+                                    _init_type = cmd.get("expected_output_type", "Ignore")
+                                    if _init_type not in ["Regex", "Exact String"]:
+                                        _init_type = "Ignore"
+                                    st.session_state[chk_key] = _init_type
+                                cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
+                                
+                            with cc_exp:
+                                exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
+                                if exp_key not in st.session_state:
+                                    st.session_state[exp_key] = cmd.get("expected_output", "")
+                                    
+                                # Disable expected value if row is disabled OR check type is Ignore
+                                chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
+                                exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
+                                
+                                cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
+                                
+                            with cc_en:
                                 en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
                                 cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
-                            with cc4:
-                                st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
-                            
-                            sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
-                            if sys_key not in st.session_state:
-                                st.session_state[sys_key] = cmd.get("system_prompt", "")
-                            with st.expander("System Prompt", expanded=False):
-                                cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
-                            
-                            usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
-                            if usr_key not in st.session_state:
-                                st.session_state[usr_key] = cmd.get("user_prompt", "")
-                            with st.expander("User Prompt", expanded=False):
-                                cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
-                    else:
-                        if not first_cmd_seen:
-                            hc_cmd, hc_to, hc_chk, hc_exp, hc_en, hc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
-                            hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
-                            hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
-                            hc_chk.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Check Type</div>", unsafe_allow_html=True)
-                            hc_exp.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Expected Value</div>", unsafe_allow_html=True)
-                            hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
-                            st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
-                            first_cmd_seen = True
-
-                        cc_cmd, cc_to, cc_chk, cc_exp, cc_en, cc_del = st.columns([3.0, 0.8, 1.5, 2.0, 0.8, 0.6])
-                        
-                        with cc_cmd:
-                            cmd_key = f"_sc_{pfx}_{step_id}_{cmd_id}_cmd"
-                            if cmd_key not in st.session_state:
-                                st.session_state[cmd_key] = cmd.get("command", "")
-
-                            is_disabled = not cmd.get("enabled", True)
-
-                            if ci == _is_last_cmd_idx:
-                                def _on_last_cmd_enter(_ck=cmd_key, _si=si):
-                                    if st.session_state.get(_ck, "").strip():
-                                        _val_add_cmd(_si)
-                                st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", on_change=_on_last_cmd_enter, disabled=is_disabled)
-                            else:
-                                st.text_input(f"Command {ci + 1}", key=cmd_key, placeholder=placeholder, label_visibility="collapsed", disabled=is_disabled)
-                            cmd["command"] = st.session_state.get(cmd_key, "")
-                            
-                        with cc_to:
-                            to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
-                            if to_key not in st.session_state:
-                                st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
-                            cmd["timeout_seconds"] = st.number_input("Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0, key=to_key, label_visibility="collapsed", disabled=is_disabled)
-                            
-                        with cc_chk:
-                            chk_key = f"_sc_{pfx}_{step_id}_{cmd_id}_chk"
-                            if chk_key not in st.session_state:
-                                _init_type = cmd.get("expected_output_type", "Ignore")
-                                if _init_type not in ["Regex", "Exact String"]:
-                                    _init_type = "Ignore"
-                                st.session_state[chk_key] = _init_type
-                            cmd["expected_output_type"] = st.selectbox("Check Type", options=["Ignore", "Regex", "Exact String", "No output"], key=chk_key, label_visibility="collapsed", disabled=is_disabled)
-                            
-                        with cc_exp:
-                            exp_key = f"_sc_{pfx}_{step_id}_{cmd_id}_exp"
-                            if exp_key not in st.session_state:
-                                st.session_state[exp_key] = cmd.get("expected_output", "")
                                 
-                            # Disable expected value if row is disabled OR check type is Ignore
-                            chk_type = st.session_state.get(chk_key, cmd.get("expected_output_type", "Ignore"))
-                            exp_disabled = is_disabled or (chk_type in ("Ignore", "No output"))
-                            
-                            cmd["expected_output"] = st.text_input("Expected Value", key=exp_key, placeholder="Value to check", label_visibility="collapsed", disabled=exp_disabled)
-                            
-                        with cc_en:
-                            en_key = f"_sc_{pfx}_{step_id}_{cmd_id}_en"
-                            cmd["enabled"] = st.checkbox("Enabled", value=cmd.get("enabled", True), key=en_key)
-                            
-                        with cc_del:
-                            st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
+                            with cc_del:
+                                st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
 
-                # "+ Add Prompt" (LLM Judge validation step) is only meaningful for
-                # Llama-CLI-Bot projects, which have a main LLM under test —
-                # Bash-Bot validation is deterministic command/output checks only.
-                if bot_type == "llama_cli":
-                    ca, cb, _ = st.columns([1.5, 2.0, 6.5])
-                    with ca:
-                        st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
-                    with cb:
-                        st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
-                else:
-                    ca, _ = st.columns([2.0, 7.5])
-                    with ca:
-                        st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                    # "+ Add Prompt" (LLM Judge validation step) is only meaningful for
+                    # Llama-CLI-Bot projects, which have a main LLM under test —
+                    # Bash-Bot validation is deterministic command/output checks only.
+                    if bot_type == "llama_cli":
+                        ca, cb, _ = st.columns([1.5, 2.0, 6.5])
+                        with ca:
+                            st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
+                        with cb:
+                            st.button(f"+ Add Prompt", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
+                    else:
+                        ca, _ = st.columns([2.0, 7.5])
+                        with ca:
+                            st.button(f"+ Add Command/Output", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
 
     st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", on_click=_val_add_step)
 
@@ -912,100 +974,41 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
     )
     st.session_state[f"{pfx}_llm_helper_enabled"] = _is_enabled
 
-    st.session_state.setdefault(f"{pfx}_llm_helper_backend_sel", st.session_state.get(f"{pfx}_llm_helper_backend", "OpenAI-Compatible"))
-    backend = st.selectbox(
-        "LLM Backend",
-        options=["OpenAI-Compatible", "Ollama"],
-        key=f"{pfx}_llm_helper_backend_sel",
-        disabled=not _is_enabled,
-    )
-    st.session_state[f"{pfx}_llm_helper_backend"] = backend
-
-    if backend == "Ollama":
-        st.session_state.setdefault(f"{pfx}_llm_helper_ollama_url_widget", st.session_state.get(f"{pfx}_llm_helper_ollama_url", "http://localhost:11434"))
-        _url = st.text_input(
-            "Ollama Server URL",
-            key=f"{pfx}_llm_helper_ollama_url_widget",
-            disabled=not _is_enabled,
+    if _is_enabled:
+        st.session_state.setdefault(f"{pfx}_llm_helper_backend_sel", st.session_state.get(f"{pfx}_llm_helper_backend", "OpenAI-Compatible"))
+        backend = st.selectbox(
+            "LLM Backend",
+            options=["OpenAI-Compatible", "Ollama"],
+            key=f"{pfx}_llm_helper_backend_sel",
         )
-        st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
+        st.session_state[f"{pfx}_llm_helper_backend"] = backend
 
-        _is_fetching_ollama = st.session_state.get(f"{pfx}_is_fetching_ollama_models", False)
-        _btn_label = "Fetching..." if _is_fetching_ollama else "Fetch Models"
-        if st.button(_btn_label, key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=(not _is_enabled) or _is_fetching_ollama):
-            st.session_state[f"{pfx}_is_fetching_ollama_models"] = True
-            st.rerun()
-
-        if _is_fetching_ollama:
-            if _url.strip():
-                from core.models import fetch_ollama_models
-                _found, _err = fetch_ollama_models(_url.strip())
-                if _found:
-                    st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
-                    st.toast(f"✅ Found {len(_found)} models.")
-                else:
-                    st.toast(f"❌ {_err or 'No models returned.'}")
-            else:
-                st.toast("⚠️ Enter a valid URL.")
-            st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
-            st.rerun()
-        _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
-        if _models:
-            _model_names = [m["name"] for m in _models]
-            _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
-            st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_sel", _cur if _cur in _model_names else _model_names[0])
-            _chosen = st.selectbox("Model", options=_model_names, key=f"{pfx}_llm_helper_ollama_model_sel", disabled=not _is_enabled)
-            st.session_state[f"{pfx}_llm_helper_model"] = _chosen
-        else:
-            st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
-            _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget", disabled=not _is_enabled)
-            st.session_state[f"{pfx}_llm_helper_model"] = _man
-
-    else:
-        # OpenAI-Compatible
-        col_url, col_api, col_fetch = st.columns([4, 3, 1])
-        with col_url:
-            st.session_state.setdefault(f"{pfx}_llm_helper_openai_url_widget", st.session_state.get(f"{pfx}_llm_helper_openai_url", ""))
+        if backend == "Ollama":
+            st.session_state.setdefault(f"{pfx}_llm_helper_ollama_url_widget", st.session_state.get(f"{pfx}_llm_helper_ollama_url", "http://localhost:11434"))
             _url = st.text_input(
-                "Instance URL",
-                key=f"{pfx}_llm_helper_openai_url_widget",
-                placeholder="http://localhost:8080",
-                help="Base URL of any OpenAI-compatible server. Do not include /v1.",
-                disabled=not _is_enabled,
+                "Ollama Server URL",
+                key=f"{pfx}_llm_helper_ollama_url_widget",
             )
-            st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
+            st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
 
-        with col_api:
-            st.session_state.setdefault(f"{pfx}_llm_helper_openai_apikey_widget", st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""))
-            _apikey = st.text_input(
-                "API Key (optional)",
-                key=f"{pfx}_llm_helper_openai_apikey_widget",
-                type="password",
-                disabled=not _is_enabled,
-            )
-            st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
-
-        with col_fetch:
-            st.write("")
-            st.write("")
-            _is_fetching_openai = st.session_state.get(f"{pfx}_is_fetching_openai_models", False)
-            _btn_label = "Fetching..." if _is_fetching_openai else "Fetch"
-            if st.button(_btn_label, key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=(not _is_enabled) or _is_fetching_openai):
-                st.session_state[f"{pfx}_is_fetching_openai_models"] = True
+            _is_fetching_ollama = st.session_state.get(f"{pfx}_is_fetching_ollama_models", False)
+            _btn_label = "Fetching..." if _is_fetching_ollama else "Fetch Models"
+            if st.button(_btn_label, key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=_is_fetching_ollama):
+                st.session_state[f"{pfx}_is_fetching_ollama_models"] = True
                 st.rerun()
 
-            if _is_fetching_openai:
+            if _is_fetching_ollama:
                 if _url.strip():
-                    from core.models import fetch_llama_cpp_models
-                    _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+                    from core.models import fetch_ollama_models
+                    _found, _err = fetch_ollama_models(_url.strip())
                     if _found:
-                        st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
+                        st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
                         st.toast(f"✅ Found {len(_found)} models.")
                     else:
                         st.toast(f"❌ {_err or 'No models returned.'}")
                 else:
                     st.toast("⚠️ Enter a valid URL.")
-                st.session_state[f"{pfx}_is_fetching_openai_models"] = False
+                st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
                 st.rerun()
 
         st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
@@ -1039,7 +1042,85 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 else:
                     st.error("Could not reach server.")
             else:
-                st.warning("Enter an Instance URL first.")
+                st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
+                _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget")
+                st.session_state[f"{pfx}_llm_helper_model"] = _man
+
+        else:
+            # OpenAI-Compatible
+            col_url, col_api, col_fetch = st.columns([4, 3, 1])
+            with col_url:
+                st.session_state.setdefault(f"{pfx}_llm_helper_openai_url_widget", st.session_state.get(f"{pfx}_llm_helper_openai_url", ""))
+                _url = st.text_input(
+                    "Instance URL",
+                    key=f"{pfx}_llm_helper_openai_url_widget",
+                    placeholder="http://localhost:8080",
+                    help="Base URL of any OpenAI-compatible server. Do not include /v1.",
+                )
+                st.session_state[f"{pfx}_llm_helper_openai_url"] = _url
+
+            with col_api:
+                st.session_state.setdefault(f"{pfx}_llm_helper_openai_apikey_widget", st.session_state.get(f"{pfx}_llm_helper_openai_apikey", ""))
+                _apikey = st.text_input(
+                    "API Key (optional)",
+                    key=f"{pfx}_llm_helper_openai_apikey_widget",
+                    type="password",
+                )
+                st.session_state[f"{pfx}_llm_helper_openai_apikey"] = _apikey
+
+            with col_fetch:
+                st.write("")
+                st.write("")
+                _is_fetching_openai = st.session_state.get(f"{pfx}_is_fetching_openai_models", False)
+                _btn_label = "Fetching..." if _is_fetching_openai else "Fetch"
+                if st.button(_btn_label, key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=_is_fetching_openai):
+                    st.session_state[f"{pfx}_is_fetching_openai_models"] = True
+                    st.rerun()
+
+                if _is_fetching_openai:
+                    if _url.strip():
+                        from core.models import fetch_llama_cpp_models
+                        _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+                        if _found:
+                            st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
+                            st.toast(f"✅ Found {len(_found)} models.")
+                        else:
+                            st.toast(f"❌ {_err or 'No models returned.'}")
+                    else:
+                        st.toast("⚠️ Enter a valid URL.")
+                    st.session_state[f"{pfx}_is_fetching_openai_models"] = False
+                    st.rerun()
+
+            st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+            _ssl = st.checkbox(
+                "Require SSL Certificate Verification",
+                key=f"{pfx}_llm_helper_openai_verify_ssl_widget",
+                help="Uncheck for self-signed certs or plain HTTP servers.",
+            )
+            st.session_state[f"{pfx}_llm_helper_openai_verify_ssl"] = _ssl
+            _models = st.session_state.get(f"{pfx}_llm_helper_openai_models", [])
+            if _models:
+                _model_names = [m["name"] for m in _models]
+                _cur = st.session_state.get(f"{pfx}_llm_helper_model", "")
+                st.session_state.setdefault(f"{pfx}_llm_helper_openai_model_sel", _cur if _cur in _model_names else _model_names[0])
+                _chosen = st.selectbox("Model", options=_model_names, key=f"{pfx}_llm_helper_openai_model_sel")
+                st.session_state[f"{pfx}_llm_helper_model"] = _chosen
+            else:
+                st.session_state.setdefault(f"{pfx}_llm_helper_openai_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
+                _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget")
+                st.session_state[f"{pfx}_llm_helper_model"] = _man
+
+            if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
+                if _url.strip():
+                    from core.llama_server import get_server_info
+                    _info = get_server_info(_url.strip(), verify_ssl=_ssl)
+                    if _info:
+                        _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
+                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx', '?')}`")
+                    else:
+                        st.error("Could not reach server.")
+                else:
+                    st.warning("Enter an Instance URL first.")
 
 def _render_bash_runtime(project: dict) -> None:
     """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
@@ -1314,14 +1395,7 @@ def _edit_validation_set_dialog(project: dict, sets: list, nonce: int, prefix: s
             st.session_state[_steps_state_key] = [{
                 "_id": _next_step_id(),
                 "delay_seconds": 0.0,
-                "commands": [{
-                    "_id": _next_step_id(),
-                    "command": "",
-                    "timeout_seconds": 60,
-                    "expected_output_type": "Ignore",
-                    "expected_output": "",
-                    "enabled": True,
-                }]
+                "commands": [],
             }]
 
     _render_validation_steps(_steps_state_key, pfx=f"val_{si}_{nonce}", placeholder="e.g. ls -l", bot_type=prefix)

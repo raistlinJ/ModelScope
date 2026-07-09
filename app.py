@@ -4,7 +4,7 @@ import streamlit as st
 from core.state import init_state, sync_project
 from core import llama_server
 from core.logsetup import configure_logging
-from core.settings_store import load_settings, save_settings
+from core.settings_store import load_settings
 from ui.components import status_pill
 from ui.styles import inject
 from ui import config_tab, execute_tab, dashboard_tab
