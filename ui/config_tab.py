@@ -1919,8 +1919,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 st.write("")
                 st.write("")
                 if st.button("Scan", key="btn_llama_scan_models", use_container_width=True):
-                    _scan_models(project)
-
+                    _scan_models(st.session_state["active_project_id"])
+                    
             discovered: list = st.session_state.get("llama_cli_discovered_models", [])
             model_names = []
             for m in discovered:
@@ -1931,19 +1931,18 @@ def _render_llama_cli_runtime(project: dict) -> None:
             default_idx = model_names.index(current) if current in model_names else 0
 
             if model_names:
-                chosen = st.selectbox(
-                    "Model", options=model_names, index=default_idx,
-                    key="_llama_model_sel_widget",
+                st.selectbox(
+                    "Model",
+                    options=model_names,
+                    index=default_idx,
+                    key="llama_cli_model_name",
                 )
-                st.session_state["llama_cli_model_name"] = chosen
             else:
-                chosen = st.text_input(
-                    "Model", 
-                    value=current,
-                    key="_llama_model_sel_widget",
+                st.text_input(
+                    "Model",
+                    key="llama_cli_model_name",
                     help="Enter model name manually, or use Scan to find models."
                 )
-                st.session_state["llama_cli_model_name"] = chosen
 
             st.session_state.setdefault("llama_cli_tokens", 32768)
             st.number_input(

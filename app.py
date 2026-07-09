@@ -29,6 +29,9 @@ st.markdown(
 )
 init_state()
 
+if "tab_version" not in st.session_state:
+    st.session_state["tab_version"] = 0
+
 # ── Load persisted settings on first run only ──────────────────────────────────
 if not st.session_state.get("_settings_loaded"):
     _saved = load_settings()
@@ -191,6 +194,10 @@ def _show_add_project_dialog() -> None:
     with col_create:
         if st.button("Create", type="primary", use_container_width=True):
             proj_name  = name.strip() or f"Project {len(st.session_state['projects']) + 1}"
+            existing_names = [p["name"].lower() for p in st.session_state.get("projects", [])]
+            if proj_name.lower() in existing_names:
+                st.error(f"A project named '{proj_name}' already exists. Please pick a unique name.")
+                st.stop()
             _type_key  = _TYPE_MAP[bot_type]
             _push_undo({"desc": "create project", "type": "project",
                         "projects": copy.deepcopy(st.session_state.get("projects", [])),
@@ -207,6 +214,8 @@ def _show_add_project_dialog() -> None:
             }
             st.session_state["projects"].append(new_proj)
             st.session_state["active_project_id"] = new_proj["id"]
+            st.session_state["tab_version"] += 1
+            st.session_state["active_tab"] = 0
             st.rerun()
     with col_cancel:
         if st.button("Cancel", use_container_width=True):
@@ -238,6 +247,8 @@ with st.sidebar:
             type=_btn_type,
         ):
             st.session_state["active_project_id"] = _proj["id"]
+            st.session_state["tab_version"] += 1
+            st.session_state["active_tab"] = 0
             st.rerun()
 
 
@@ -300,7 +311,7 @@ tab_cfg, tab_exec, tab_dash = st.tabs([
     "⚙  Configuration",
     "▶  Execute",
     "📊  Analytical Dashboard",
-])
+], key=f"active_tab_v{st.session_state['tab_version']}")
 with tab_cfg:
     config_tab.render()
 with tab_exec:

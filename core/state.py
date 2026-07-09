@@ -27,6 +27,9 @@ _DEFAULTS: dict = {
 
     # Model source mode — "pre_compiled_local", "pre_compiled_remote", or "compile"
     "model_source_mode":     "pre_compiled_local",
+    
+    # Navigation / UI State
+    "active_tab":            0,
 
     # External (pre-compiled remote) endpoint
     "external_llm_url":      EXTERNAL_LLAMA_CPP_URL,
@@ -150,6 +153,12 @@ _DEFAULTS: dict = {
     "validation_command": "",
     "fail_patterns":      [],
     "metrics_matrix":     [],
+    
+    # Discovered models
+    "llama_cli_discovered_models": [],
+    "llama_cli_openai_models":     [],
+    "_llama_svc_result":           None,
+    "_llama_svc_cmd":              "",
 
     # Execute
     "sys_prompt":        "",
@@ -498,8 +507,5 @@ def sync_project(project_id: str) -> None:
         for state_key, cfg_key in _LLAMA_KEY_MAP.items():
             if cfg_key in cfg:
                 st.session_state[state_key] = cfg[cfg_key]
-        # Invalidate per-project discovery caches
-        for ckey in _LLAMA_CACHE_KEYS:
-            st.session_state.pop(ckey, None)
 
     st.session_state["_last_active_project_id"] = project_id
