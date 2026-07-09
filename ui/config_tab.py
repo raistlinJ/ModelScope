@@ -2228,8 +2228,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 st.write("")
                 st.write("")
                 if st.button("Scan", key="btn_llama_scan_models", use_container_width=True):
-                    _scan_models(project)
-
+                    _scan_models(st.session_state["active_project_id"])
+                    
             discovered: list = st.session_state.get("llama_cli_discovered_models", [])
             model_names = []
             for m in discovered:

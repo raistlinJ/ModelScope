@@ -220,7 +220,6 @@ def _render_bash_dashboard(project: dict) -> None:
         return
 
     # Run selector
-    tel: dict = history[-1]
     if len(history) > 1:
         labels = []
         for i, h in enumerate(reversed(history)):
@@ -237,6 +236,9 @@ def _render_bash_dashboard(project: dict) -> None:
         )
         sel_idx = labels.index(sel_label)
         tel = list(reversed(history))[sel_idx]
+    else:
+        tel: dict = history[-1]
+
 
     # Per-run token so text_area keys change when the selected run changes,
     # preventing Streamlit from retaining stale widget state across selections.
@@ -422,7 +424,6 @@ def _render_llama_cli_dashboard(
         st.info("No runs yet for this project — go to **Execute** and run it.")
         return
 
-    tel: dict = history[-1]
     if len(history) > 1:
         labels = []
         for i, h in enumerate(reversed(history)):
@@ -437,6 +438,8 @@ def _render_llama_cli_dashboard(
             key=f"{bot_type}_dash_sel_{pid}_{len(history)}",
         )
         tel = list(reversed(history))[labels.index(sel_label)]
+    else:
+        tel: dict = history[-1]
 
     # Per-run token so text_area keys change when the selected run changes,
     # preventing Streamlit from retaining stale widget state across selections.
