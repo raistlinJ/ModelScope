@@ -101,7 +101,7 @@ _DEFAULTS: dict = {
     "llama_cli_en_temp":             False,
     "llama_cli_temperature":         0.8,
     "llama_cli_en_gpu_layers":       False,
-    "llama_cli_gpu_layers":          99if ,
+    "llama_cli_gpu_layers":          99,
     "llama_cli_en_threads":          False,
     "llama_cli_threads":             4,
     "llama_cli_flash_attn":          False,
