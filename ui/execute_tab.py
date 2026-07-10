@@ -595,7 +595,7 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         "tokens":              cfg.get("tokens", 2048),
         "context_size":        cfg.get("tokens", 2048),
         "server_host":         cfg.get("server_host", "127.0.0.1"),
-        "server_port":         cfg.get("server_port", 18080),
+        "server_port":         cfg.get("server_port", 8080),
         "server_ready_timeout": cfg.get("server_ready_timeout", 300),
         "mcp_server_url":      "http://127.0.0.1:9191",
         "openai_base_url":     cfg.get("openai_base_url", ""),
@@ -734,7 +734,7 @@ def _render_llama_cli_execute(
                     st.caption(f"Model: **{model_name}**")
                     if bot_type == "llama_server_bot":
                         st.caption(f"Binary: `{cfg.get('binary_path', '') or 'not configured'}`")
-                        st.caption(f"Listen: `{cfg.get('server_host', '127.0.0.1')}:{cfg.get('server_port', 18080)}`")
+                        st.caption(f"Listen: `{cfg.get('server_host', '127.0.0.1')}:{cfg.get('server_port', 8080)}`")
                         st.caption(f"Client URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
                     elif backend == "llama-cli":
                         st.caption(f"Binary: `{cfg.get('binary_path', '') or 'not configured'}`")

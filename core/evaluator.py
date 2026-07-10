@@ -1614,7 +1614,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             return telemetry
 
         server_host = (config.get("server_host") or "127.0.0.1").strip()
-        server_port = int(config.get("server_port") or 18080)
+        server_port = int(config.get("server_port") or 8080)
         if not use_remote_server:
             config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
             config["llm_url"] = config["openai_base_url"]

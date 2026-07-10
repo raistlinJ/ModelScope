@@ -29,7 +29,7 @@ def test_llama_server_plugin_extends_llama_cli_base():
     config = plugin.default_config()
     assert config["backend"] == "llama-server (managed)"
     assert config["server_host"] == "127.0.0.1"
-    assert config["server_port"] == 18080
+    assert config["server_port"] == 8080
 
 
 def test_llama_server_plugin_has_advanced_options_parity_with_llama_cli():

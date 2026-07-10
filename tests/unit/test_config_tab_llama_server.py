@@ -35,7 +35,7 @@ def _set_session(**overrides):
         "llama_server_ready_timeout": 300,
         "llama_server_custom_flags": "",
         "llama_server_server_host": "127.0.0.1",
-        "llama_server_server_port": 18080,
+        "llama_server_server_port": 8080,
         "llama_server_openai_verify_ssl": True,
     }
     defaults.update(overrides)
@@ -177,7 +177,7 @@ class TestTestLlamaServerRun:
             llama_server_ready_timeout=600,
             llama_server_custom_flags="--jinja",
             llama_server_server_host="127.0.0.1",
-            llama_server_server_port=18080,
+            llama_server_server_port=8080,
         )
         project = _project()
         _test_llama_server_run(project)
@@ -187,7 +187,7 @@ class TestTestLlamaServerRun:
         assert args[0] == "/opt/llama.cpp/llama-server"
         assert args[1] == "/models/server.gguf"
         assert args[2] == 8192
-        assert args[3] == 18080
+        assert args[3] == 8080
         assert args[4] == "127.0.0.1"
         assert mock_start.call_args.kwargs["custom_flags"] == "--jinja"
         assert mock_start.call_args.kwargs["advanced_flags"] == "-ngl 20"

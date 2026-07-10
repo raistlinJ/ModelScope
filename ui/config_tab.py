@@ -2720,7 +2720,7 @@ def _flush_llama_server_config(project: dict) -> None:
         _commands = st.session_state.get("llama_server_commands", [])
 
     host = (st.session_state.get("llama_server_server_host") or "127.0.0.1").strip()
-    port = int(st.session_state.get("llama_server_server_port") or 18080)
+    port = int(st.session_state.get("llama_server_server_port") or 8080)
     base_url = _llama_server_client_base_url(host, port)
     st.session_state["llama_server_openai_base_url"] = base_url
 
@@ -2926,7 +2926,7 @@ def _test_llama_server_run(project: dict) -> None:
     cfg = project["config"]
 
     host = (cfg.get("server_host") or "127.0.0.1").strip()
-    port = int(cfg.get("server_port") or 18080)
+    port = int(cfg.get("server_port") or 8080)
     verify_ssl = cfg.get("openai_verify_ssl", True)
     exec_target = cfg.get("execution_target", "local")
     use_remote = exec_target == "ssh"
@@ -3191,7 +3191,7 @@ def _render_llama_server_runtime(project: dict) -> None:
             )
 
         host = st.session_state.get("llama_server_server_host", "127.0.0.1")
-        port = int(st.session_state.get("llama_server_server_port") or 18080)
+        port = int(st.session_state.get("llama_server_server_port") or 8080)
         base_url = _llama_server_client_base_url(host, port)
         st.session_state["llama_server_openai_base_url"] = base_url
         st.caption(f"ModelScope will call `{base_url}` after starting the server.")

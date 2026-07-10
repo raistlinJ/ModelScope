@@ -57,7 +57,7 @@ class TestStartRemoteManagedLlamaServer:
         with patch("core.remote_server.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=200)
             handle = start_remote_managed_llama_server(
-                env, "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1",
+                env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                 lambda m: None,
             )
         try:
@@ -67,7 +67,7 @@ class TestStartRemoteManagedLlamaServer:
             assert "nohup" in launch_cmd
             assert "llama-server" in launch_cmd
             assert "-m /models/m.gguf" in launch_cmd
-            assert "--port 18080" in launch_cmd
+            assert "--port 8080" in launch_cmd
         finally:
             handle.kill()
 
@@ -77,7 +77,7 @@ class TestStartRemoteManagedLlamaServer:
         ])
         with pytest.raises(RuntimeError, match="command not found"):
             start_remote_managed_llama_server(
-                env, "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1",
+                env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                 lambda m: None,
             )
 
@@ -89,7 +89,7 @@ class TestStartRemoteManagedLlamaServer:
         ])
         with pytest.raises(RuntimeError, match="exited immediately.*failed to load model"):
             start_remote_managed_llama_server(
-                env, "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1",
+                env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                 lambda m: None,
             )
 
@@ -105,7 +105,7 @@ class TestStartRemoteManagedLlamaServer:
                    side_effect=__import__("requests").exceptions.ConnectionError):
             with pytest.raises(RuntimeError, match=r"did not become ready after 2s"):
                 start_remote_managed_llama_server(
-                    env, "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1",
+                    env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                     lambda m: None, ready_timeout=2.0,
                 )
 
@@ -117,7 +117,7 @@ class TestStartRemoteManagedLlamaServer:
         with patch("core.remote_server.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=200)
             handle = start_remote_managed_llama_server(
-                env, "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1",
+                env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                 lambda m: None,
                 custom_flags="--jinja",
                 advanced_flags="-ngl 20",
@@ -137,7 +137,7 @@ class TestStartRemoteManagedLlamaServer:
         with patch("core.remote_server.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=200)
             handle = start_remote_managed_llama_server(
-                env, "llama-server", "~/models/m.gguf", 4096, 18080, "127.0.0.1",
+                env, "llama-server", "~/models/m.gguf", 4096, 8080, "127.0.0.1",
                 lambda m: None,
             )
         try:
@@ -204,17 +204,17 @@ class TestRemoteManagedServerLifecycle:
     def test_read_log_tail_returns_stdout(self):
         env = MagicMock()
         env.execute.return_value = {"stdout": "some error output", "stderr": "", "exit_code": 0}
-        handle = RemoteManagedServer(env, "4242", "/tmp/modelscope_llama_server_18080.log", MagicMock())
+        handle = RemoteManagedServer(env, "4242", "/tmp/modelscope_llama_server_8080.log", MagicMock())
         assert handle.read_log_tail() == "some error output"
         cmd = env.execute.call_args.args[0]
-        assert "/tmp/modelscope_llama_server_18080.log" in cmd
+        assert "/tmp/modelscope_llama_server_8080.log" in cmd
 
 
 class TestSSHPortForward:
     def test_binds_to_ephemeral_local_port_and_closes_cleanly(self):
         client = MagicMock()
         client.get_transport.return_value = MagicMock()
-        forward = SSHPortForward(client, "127.0.0.1", 18080)
+        forward = SSHPortForward(client, "127.0.0.1", 8080)
         try:
             assert forward.local_port > 0
         finally:
@@ -223,7 +223,7 @@ class TestSSHPortForward:
     def test_distinct_forwards_get_distinct_ports(self):
         client = MagicMock()
         client.get_transport.return_value = MagicMock()
-        a = SSHPortForward(client, "127.0.0.1", 18080)
+        a = SSHPortForward(client, "127.0.0.1", 8080)
         b = SSHPortForward(client, "127.0.0.1", 18081)
         try:
             assert a.local_port != b.local_port

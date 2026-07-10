@@ -744,7 +744,7 @@ class TestStartManagedLlamaServerReadiness:
         mock_get.return_value = MagicMock(status_code=200)
 
         proc = _start_managed_llama_server(
-            "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+            "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1", lambda m: None,
         )
 
         assert proc is mock_popen.return_value
@@ -764,7 +764,7 @@ class TestStartManagedLlamaServerReadiness:
 
         with pytest.raises(RuntimeError, match="exited immediately.*bad gguf"):
             _start_managed_llama_server(
-                "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+                "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1", lambda m: None,
             )
         # Must not have looped through the retry/sleep path at all.
         mock_sleep.assert_not_called()
@@ -783,7 +783,7 @@ class TestStartManagedLlamaServerReadiness:
 
         with pytest.raises(RuntimeError, match=r"did not become ready after 2s"):
             _start_managed_llama_server(
-                "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+                "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1", lambda m: None,
                 ready_timeout=2.0,
             )
 
@@ -799,7 +799,7 @@ class TestStartManagedLlamaServerReadiness:
         mock_get.return_value = MagicMock(status_code=200)
 
         _start_managed_llama_server(
-            "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+            "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1", lambda m: None,
             ready_timeout=600.0,
         )
         # Ready on the first check — proves the call accepted a >300s value

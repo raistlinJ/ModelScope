@@ -164,7 +164,7 @@ LLAMA_SERVER_SESSION_DEFAULTS: dict[str, Any] = {
 
 def _server_base_url(config: dict[str, Any]) -> str:
     host = (config.get("server_host") or "127.0.0.1").strip()
-    port = int(config.get("server_port") or 18080)
+    port = int(config.get("server_port") or 8080)
     client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
     return f"http://{client_host}:{port}"
 
@@ -228,8 +228,8 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
                 "seed": -1,
                 "custom_flags": "--jinja --parallel 1",
                 "server_host": "127.0.0.1",
-                "server_port": 18080,
-                "openai_base_url": "http://127.0.0.1:18080",
+                "server_port": 8080,
+                "openai_base_url": "http://127.0.0.1:8080",
                 "openai_verify_ssl": True,
                 "openai_api_key": "",
                 "mcp_enabled": False,
@@ -247,7 +247,7 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
     def status_items(self, session_state: Mapping[str, Any], project: dict | None) -> list[StatusItem]:
         model = session_state.get("llama_server_model_name") or "not chosen"
         host = session_state.get("llama_server_server_host") or "127.0.0.1"
-        port = session_state.get("llama_server_server_port") or 18080
+        port = session_state.get("llama_server_server_port") or 8080
         items = [
             StatusItem(f"Model: {model}", "up" if model != "not chosen" else "wait"),
             StatusItem(f"Listen: {host}:{port}", "up"),
@@ -264,7 +264,7 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
         config.setdefault("selected_model", config.get("model_name", ""))
         config.setdefault("context_size", config.get("tokens", 32768))
         config.setdefault("server_host", "127.0.0.1")
-        config.setdefault("server_port", 18080)
+        config.setdefault("server_port", 8080)
         config["openai_base_url"] = _server_base_url(config)
         config.setdefault("llm_url", config["openai_base_url"])
         config.setdefault("mcp_server_url", "http://127.0.0.1:9191")

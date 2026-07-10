@@ -128,7 +128,7 @@ LLAMA_CLI_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_cli_en_seed":             False,
     "llama_cli_seed":                -1,
     "llama_cli_custom_flags":        "",
-    "llama_cli_server_port":         18080,
+    "llama_cli_server_port":         8080,
     "llama_cli_openai_base_url":     "",
     "llama_cli_openai_verify_ssl":   True,
     "llama_cli_openai_api_key":      "",
