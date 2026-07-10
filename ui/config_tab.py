@@ -628,7 +628,13 @@ def _render_validation_checks_control(cmd: dict, key_prefix: str, disabled: bool
                     display_type = st.session_state.get(type_key, current_type)
                     if display_type not in _VALIDATION_CHECK_TYPES:
                         display_type = "Ignore"
-                    st.markdown(_validation_check_type_icon_html(display_type), unsafe_allow_html=True)
+                    # Match col_value's "Expected Value" label row height so the
+                    # dropdown below lines up with the text input/remove button.
+                    st.markdown(
+                        '<div style="height:1.5rem;display:flex;align-items:flex-end;'
+                        f'margin-bottom:0.25rem;">{_validation_check_type_icon_html(display_type)}</div>',
+                        unsafe_allow_html=True,
+                    )
                     new_type = st.selectbox(
                         "Check Type",
                         options=list(_VALIDATION_CHECK_TYPES),
@@ -1381,7 +1387,11 @@ def _render_bash_runtime(project: dict) -> None:
             with c_host:
                 st.text_input("Host", key="bash_ssh_host", placeholder="192.168.1.100")
             with c_port:
-                st.number_input("Port", min_value=1, max_value=65535, key="bash_ssh_port")
+                st.number_input(
+                    "Port", min_value=1, max_value=65535,
+                    value=st.session_state.get("bash_ssh_port", 22),
+                    key="bash_ssh_port",
+                )
             c_user, c_pass = st.columns([1, 1])
             with c_user:
                 st.text_input("Username", key="bash_ssh_user")
@@ -2151,7 +2161,11 @@ def _render_llama_cli_runtime(project: dict) -> None:
             with c_host:
                 st.text_input("Host", key="llama_cli_ssh_host", placeholder="192.168.1.100")
             with c_port:
-                st.number_input("Port", min_value=1, max_value=65535, key="llama_cli_ssh_port")
+                st.number_input(
+                    "Port", min_value=1, max_value=65535,
+                    value=st.session_state.get("llama_cli_ssh_port", 22),
+                    key="llama_cli_ssh_port",
+                )
             c_user, c_pass = st.columns([1, 1])
             with c_user:
                 st.text_input("Username", key="llama_cli_ssh_user")
@@ -2777,9 +2791,10 @@ def _flush_llama_server_config(project: dict) -> None:
 def _scan_llama_server_models(project: dict) -> None:
     """Scan local or remote machine for .gguf models for managed llama-server.
 
-    The Model Directory is scanned wherever Execution Target points (local/ssh);
-    the managed llama-server process itself always starts on the ModelScope
-    host regardless of this setting (see core.evaluator's managed-server path).
+    The Model Directory is scanned wherever Execution Target points (local/ssh).
+    For SSH, the managed llama-server process also launches on that same remote
+    host (see core.remote_server); for PCT it does not — see core.evaluator's
+    managed-server path.
     """
     model_dir = st.session_state.get("llama_server_model_dir", "").strip()
     target    = st.session_state.get("llama_server_execution_target", "local")
@@ -3021,8 +3036,10 @@ def _render_llama_server_runtime(project: dict) -> None:
             key="llama_server_execution_target",
             help=(
                 "Where startup/completion/validation commands run and where the model "
-                "directory is scanned. The managed llama-server process itself always "
-                "starts on the ModelScope host regardless of this setting."
+                "directory is scanned. For SSH, the managed llama-server process also "
+                "launches on that remote host (via an SSH tunnel). For PCT it does not — "
+                "the managed server always starts on the ModelScope host since a PCT "
+                "container's network namespace can't be tunnelled to the same way."
             ),
             horizontal=True,
         )
@@ -3055,7 +3072,11 @@ def _render_llama_server_runtime(project: dict) -> None:
             with c_host:
                 st.text_input("Host", key="llama_server_ssh_host", placeholder="192.168.1.100")
             with c_port:
-                st.number_input("Port", min_value=1, max_value=65535, key="llama_server_ssh_port")
+                st.number_input(
+                    "Port", min_value=1, max_value=65535,
+                    value=st.session_state.get("llama_server_ssh_port", 22),
+                    key="llama_server_ssh_port",
+                )
             c_user, c_pass = st.columns([1, 1])
             with c_user:
                 st.text_input("Username", key="llama_server_ssh_user")
