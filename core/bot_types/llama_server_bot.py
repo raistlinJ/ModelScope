@@ -137,7 +137,7 @@ LLAMA_SERVER_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_server_custom_flags":        "--jinja --parallel 1",
     "llama_server_server_host":         "127.0.0.1",
     "llama_server_server_port":         8080,
-    "llama_server_openai_base_url":     "http://127.0.0.1:18080",
+    "llama_server_openai_base_url":     "http://127.0.0.1:8080",
     "llama_server_openai_verify_ssl":   True,
     "llama_server_openai_api_key":      "",
     "llama_server_mcp_enabled":         False,
