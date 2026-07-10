@@ -1,3 +1,13 @@
+[global]
+# We intentionally pre-seed session_state for a handful of number_input
+# widgets (e.g. SSH Port) *and* pass value= to work around a Streamlit quirk
+# where a number_input revealed for the first time by another widget's
+# on_change (e.g. toggling Execution Target to SSH) ignores the pre-seeded
+# session_state value and falls back to min_value. Streamlit flags this
+# combination with a one-time warning; this is that flag's intended escape
+# hatch, not a general-purpose suppression.
+disableWidgetStateDuplicationWarning = true
+
 [server]
 headless         = true
 address          = "0.0.0.0"
