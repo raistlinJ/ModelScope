@@ -193,6 +193,17 @@ def render() -> None:
         [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
             font-weight: 600 !important;
         }
+        /* Accepted Output Checks: Check Type dropdown — a tinted background and
+           accent border so it reads as an interactive control against the
+           popover's near-identical background, instead of blending in. */
+        [class*="st-key-"][class*="_checks_"][class*="_type"] div[data-baseweb="select"] > div:first-child {
+            background-color: rgba(45, 212, 191, 0.28) !important;
+            border: 2px solid #2dd4bf !important;
+        }
+        [class*="st-key-"][class*="_checks_"][class*="_type"] div[data-baseweb="select"]:hover > div:first-child {
+            background-color: rgba(45, 212, 191, 0.38) !important;
+            border-color: #5eead4 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
