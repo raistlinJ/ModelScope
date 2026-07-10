@@ -307,6 +307,24 @@ def save_settings(session_state: Any) -> None:
 
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        # After a successful save this session is authoritative for every
+        # project it currently holds, so fold those ids into the load-time
+        # baseline. This lets a project created/duplicated in this same
+        # session be deleted permanently (its id is now "known", so
+        # _merge_with_disk_projects treats its later absence as an intentional
+        # deletion instead of resurrecting it). We union with *safe_projects*
+        # (this session's own projects), never *merged* — claiming authority
+        # over another tab's preserved project would let a later save delete
+        # it, the exact cross-session data loss the merge exists to prevent.
+        if isinstance(session_projects, list):
+            try:
+                known = set(session_state.get("_known_project_ids_at_load") or [])
+                known |= {p.get("id") for p in safe_projects
+                          if isinstance(p, dict) and p.get("id")}
+                session_state["_known_project_ids_at_load"] = list(known)
+            except Exception:
+                pass
     except Exception:
         pass
 

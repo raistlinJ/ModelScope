@@ -166,6 +166,70 @@ class TestSaveSettingsProjectMerge:
         data = json.loads((tmp_path / "settings.json").read_text())
         assert [p["id"] for p in data["projects"]] == ["a"]
 
+    def test_project_created_and_deleted_in_same_session_stays_deleted(self, tmp_path, monkeypatch):
+        """Regression for the reported bug: a project created *and* deleted
+        within one browser session must not come back after refresh/restart.
+        Before the fix, the merge treated the just-created project as
+        belonging to "another session" (its id was never in the load-time
+        baseline) and resurrected it on the delete's auto-save."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        # Session starts with P1, P2 on disk and in memory.
+        seed = [
+            {"id": "P1", "name": "P1", "type": "bash_bot", "config": {}},
+            {"id": "P2", "name": "P2", "type": "bash_bot", "config": {}},
+        ]
+        path.write_text(json.dumps({"projects": seed}))
+        state = {"projects": [dict(p) for p in seed],
+                 "_known_project_ids_at_load": ["P1", "P2"]}
+        # User creates P3 -> auto-save.
+        state["projects"].append({"id": "P3", "name": "P3", "type": "bash_bot", "config": {}})
+        save_settings(state)
+        # User deletes P3 -> auto-save on the next rerun.
+        state["projects"] = [p for p in state["projects"] if p["id"] != "P3"]
+        save_settings(state)
+        # What a browser refresh / server restart would read back.
+        data = json.loads(path.read_text())
+        ids = {p["id"] for p in data["projects"]}
+        assert ids == {"P1", "P2"}, "a project created then deleted in the same session was resurrected"
+
+    def test_project_created_in_empty_start_session_can_be_deleted(self, tmp_path, monkeypatch):
+        """Worst case: a session that starts with no settings file has an
+        empty baseline, so *every* project it creates was previously
+        un-deletable."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        state = {"projects": [], "_known_project_ids_at_load": []}
+        state["projects"] = [{"id": "A", "name": "A", "type": "bash_bot", "config": {}}]
+        save_settings(state)   # create
+        state["projects"] = []
+        save_settings(state)   # delete
+        data = json.loads(path.read_text())
+        assert data["projects"] == [], "project created in an empty-start session could not be deleted"
+
+    def test_local_saves_do_not_claim_authority_over_another_sessions_project(self, tmp_path, monkeypatch):
+        """The fix must fold only *this session's own* project ids into the
+        baseline, never the merged disk set. Otherwise this session would
+        claim authority over a parallel tab's project and delete it on a
+        later save — the exact cross-session data loss the merge prevents."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        # Disk has "b", created by another tab this session never saw.
+        path.write_text(json.dumps({"projects": [
+            {"id": "a", "name": "A", "type": "bash_bot", "config": {}},
+            {"id": "b", "name": "B", "type": "bash_bot", "config": {}},
+        ]}))
+        state = {"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}],
+                 "_known_project_ids_at_load": ["a"]}
+        save_settings(state)
+        assert "b" not in set(state["_known_project_ids_at_load"]), \
+            "this session wrongly claimed authority over another session's project"
+        # A second save must still preserve "b".
+        save_settings(state)
+        data = json.loads(path.read_text())
+        ids = {p["id"] for p in data["projects"]}
+        assert ids == {"a", "b"}, "another session's project was deleted after two local saves"
+
     def test_one_non_serializable_project_does_not_drop_the_others(self, tmp_path, monkeypatch):
         path = tmp_path / "settings.json"
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
