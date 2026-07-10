@@ -763,9 +763,6 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                             if st.button("+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd_empty", use_container_width=True):
                                 mutation = ("add_cmd", si)
                 else:
-                    _addcmd_flag_key = f"_sc_{pfx}_{step_id}_addcmd_flag"
-                    _is_last_cmd_idx = len(commands) - 1
-
                     for ci, cmd in enumerate(commands):
                         cmd_id = cmd["_id"]
 
@@ -808,27 +805,12 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                                 if cmd_key not in st.session_state:
                                     st.session_state[cmd_key] = cmd.get("command", "")
 
-                                if ci == _is_last_cmd_idx:
-                                    def _on_last_cmd_enter(
-                                        _ck=cmd_key, _fk=_addcmd_flag_key
-                                    ):
-                                        if st.session_state.get(_ck, "").strip():
-                                            st.session_state[_fk] = True
-
-                                    st.text_input(
-                                        f"Command {ci + 1}",
-                                        key=cmd_key,
-                                        placeholder=placeholder,
-                                        label_visibility="collapsed",
-                                        on_change=_on_last_cmd_enter,
-                                    )
-                                else:
-                                    st.text_input(
-                                        f"Command {ci + 1}",
-                                        key=cmd_key,
-                                        placeholder=placeholder,
-                                        label_visibility="collapsed",
-                                    )
+                                st.text_input(
+                                    f"Command {ci + 1}",
+                                    key=cmd_key,
+                                    placeholder=placeholder,
+                                    label_visibility="collapsed",
+                                )
                                 cmd["command"] = st.session_state.get(cmd_key, "")
                             with ccl_to:
                                 st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
@@ -869,30 +851,34 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     # ── Add Command / Add LLM Judge buttons (after all commands in step) ──
                     # Only show when the step has commands — these let the user add more
                     # entries to an already-populated step.
-                    if st.session_state.pop(_addcmd_flag_key, False):
-                        mutation = ("add_cmd", si)
-                    else:
-                        _bot_pfx = _bot_prefix_from_state_key(state_key)
-                        _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
-                        if _llm_enabled:
-                            ca, cb, _ = st.columns([1.5, 1.5, 7.0])
-                            with ca:
-                                if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
-                                    mutation = ("add_cmd", si)
-                            with cb:
-                                if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
-                                    mutation = ("add_prompt", si)
-                        else:
-                            if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                    _bot_pfx = _bot_prefix_from_state_key(state_key)
+                    _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
+                    if _llm_enabled:
+                        ca, cb, _ = st.columns([1.5, 1.5, 7.0])
+                        with ca:
+                            if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd", use_container_width=True):
                                 mutation = ("add_cmd", si)
+                        with cb:
+                            if st.button(f"+ Add LLM Judge", key=f"_sc_{pfx}_{step_id}_addprompt", use_container_width=True):
+                                mutation = ("add_prompt", si)
+                    else:
+                        if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
+                            mutation = ("add_cmd", si)
 
     # Add Step button
     if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
         mutation = ("add_step",)
 
     # ── Handle expand/collapse toggle (UI-only, no undo entry) ──────────────
+    # Accordion behaviour: expanding a step collapses every other step.
     if toggle:
-        st.session_state[toggle[0]] = toggle[1]
+        _tgl_key, _tgl_open = toggle
+        st.session_state[_tgl_key] = _tgl_open
+        if _tgl_open:
+            for _s in steps:
+                _k = f"_sc_{pfx}_{_s['_id']}_open"
+                if _k != _tgl_key:
+                    st.session_state[_k] = False
         st.rerun()
 
     # ── Apply mutation and rerun ─────────────────────────────────────────────
@@ -936,37 +922,25 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
             si1, si2 = m[1], m[2]
             steps[si1], steps[si2] = steps[si2], steps[si1]
         elif m[0] == "add_cmd":
-            _existing = steps[m[1]]["commands"]
-            # Guards against a double-add: the last-row text_input's on_change
-            # (Enter-to-add) and the "+ Add Command" button click can land in
-            # two separate reruns from a single click if the field loses focus
-            # first, each independently queuing an add_cmd mutation. Skip if
-            # the current last row is already a blank command row.
-            _last_blank = bool(_existing) and _existing[-1].get("type", "command") == "command" \
-                and not _existing[-1].get("command", "").strip()
-            if not _last_blank:
-                _existing.append({
-                    "_id":             _next_step_id(),
-                    "type":            "command",
-                    "command":         "",
-                    "enabled":         True,
-                    "long_running":    False,
-                    "timeout_seconds": 60,
-                })
+            # Only reachable via the "+ Add Command" button — a single click is a
+            # single rerun, so no double-add guard is needed.
+            steps[m[1]]["commands"].append({
+                "_id":             _next_step_id(),
+                "type":            "command",
+                "command":         "",
+                "enabled":         True,
+                "long_running":    False,
+                "timeout_seconds": 60,
+            })
         elif m[0] == "add_prompt":
-            _existing = steps[m[1]]["commands"]
-            _last_blank = bool(_existing) and _existing[-1].get("type") == "prompt" \
-                and not _existing[-1].get("system_prompt", "").strip() \
-                and not _existing[-1].get("user_prompt", "").strip()
-            if not _last_blank:
-                _existing.append({
-                    "_id":             _next_step_id(),
-                    "type":            "prompt",
-                    "system_prompt":   "",
-                    "user_prompt":     "",
-                    "preserve_context": True,
-                    "enabled":         True,
-                })
+            steps[m[1]]["commands"].append({
+                "_id":             _next_step_id(),
+                "type":            "prompt",
+                "system_prompt":   "",
+                "user_prompt":     "",
+                "preserve_context": True,
+                "enabled":         True,
+            })
         elif m[0] == "del_cmd":
             steps[m[1]]["commands"].pop(m[2])
         elif m[0] == "move_cmd":
@@ -2450,6 +2424,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                     st.code(_cmd, language="bash")
             else:
                 st.error(_msg)
+                if _cmd:
+                    st.code(_cmd, language="bash")
 
     with st.expander("Commands", expanded=True):
         tab_llm, tab_startup, tab_completion = st.tabs(

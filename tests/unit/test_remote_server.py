@@ -99,6 +99,7 @@ class TestStartRemoteManagedLlamaServer:
         env = _fake_env([
             {"stdout": "4242", "stderr": "", "exit_code": 0},   # launch
             {"stdout": "ALIVE", "stderr": "", "exit_code": 0},  # poll: still alive
+            {"stdout": "", "stderr": "", "exit_code": 0},       # terminate on timeout
         ])
         mock_time.side_effect = [0, 1, 2, 3]
         with patch("core.remote_server.requests.get",
@@ -108,6 +109,12 @@ class TestStartRemoteManagedLlamaServer:
                     env, "llama-server", "/models/m.gguf", 4096, 8080, "127.0.0.1",
                     lambda m: None, ready_timeout=2.0,
                 )
+        # On a readiness timeout the remote process must be terminated, otherwise
+        # an orphaned llama-server keeps holding the port/GPU on the remote host.
+        assert any(
+            call.args and call.args[0].startswith("kill 4242")
+            for call in env.execute.call_args_list
+        ), "expected the remote PID to be killed on readiness timeout"
 
     def test_advanced_and_custom_flags_included_in_launch_command(self):
         env = _fake_env([

@@ -249,6 +249,10 @@ def start_remote_managed_llama_server(
             pass
         time.sleep(1)
 
+    # Readiness timed out: tear down the remote process before giving up so we
+    # don't orphan a llama-server holding the port/GPU on the remote host. The
+    # local helper does the same via proc.terminate() (see evaluator.py).
+    handle.terminate()
     tunnel.close()
     raise RuntimeError(
         f"Server did not become ready after {int(ready_timeout)}s on {env.host}:{remote_port}"
