@@ -1281,7 +1281,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             break
     backend    = config.get("backend", "llama.cpp")
     managed_llama_server = _is_managed_llama_server_backend(backend)
-    binary     = config.get("binary_path", "") or "llama-cli"
+    binary     = (config.get("binary_path") or "").strip()
     model_dir     = config.get("model_dir", "")
     model_name    = config.get("model_name", "")
     tokens        = config.get("tokens", 32768)
@@ -1392,6 +1392,10 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 return {"stdout": "", "stderr": str(exc), "exit_code": 1}
                 
         else: # llama-cli
+            if not binary:
+                on_log("[ERROR] No llama-cli binary path configured.", "llama")
+                return {"exit_code": 1, "stderr": "No binary path configured"}
+
             if os.path.basename(binary) in ("llama-server", "llama-server.exe"):
                 corrected = os.path.join(os.path.dirname(binary), "llama-cli")
                 on_log(f"[WARN] Auto-correcting llama-server to llama-cli: {corrected}", "llama")
@@ -1584,6 +1588,12 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         binary = os.path.join(binary, binary_name)
 
     if managed_llama_server:
+        if not binary:
+            on_log("[ERROR] No llama-server binary path configured.", "llama")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = "No binary path configured."
+            return telemetry
+
         if os.path.basename(binary) in ("llama-cli", "llama-cli.exe"):
             corrected = os.path.join(os.path.dirname(binary), "llama-server")
             on_log(f"[WARN] Auto-correcting llama-cli to llama-server: {corrected}", "llama")

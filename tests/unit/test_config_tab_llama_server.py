@@ -30,7 +30,7 @@ def _set_session(**overrides):
     defaults = {
         "llama_server_model_dir": "/models",
         "llama_server_model_name": "server.gguf",
-        "llama_server_binary_path": "",
+        "llama_server_binary_path": "llama-server",
         "llama_server_tokens": 32768,
         "llama_server_ready_timeout": 300,
         "llama_server_custom_flags": "",
@@ -116,6 +116,17 @@ class TestTestLlamaServerRun:
         level, msg, _ = st.session_state["_llama_server_svc_result"]
         assert level == "error"
         assert "No model selected" in msg
+
+    @patch("core.llama_server.port_open", return_value=False)
+    def test_no_binary_path_reports_error_instead_of_defaulting(self, mock_port_open):
+        """binary_path is required input — leaving it blank must not silently
+        assume 'llama-server' is on PATH."""
+        _set_session(llama_server_binary_path="")
+        project = _project()
+        _test_llama_server_run(project)
+        level, msg, _ = st.session_state["_llama_server_svc_result"]
+        assert level == "error"
+        assert "No binary path configured" in msg
 
     @patch("core.llama_server.get_server_info")
     @patch("core.llama_server.port_open", return_value=True)

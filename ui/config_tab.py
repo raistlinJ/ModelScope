@@ -1242,16 +1242,11 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             )
             st.session_state[f"{pfx}_llm_helper_ollama_url"] = _url
 
-            _is_fetching_ollama = st.session_state.get(f"{pfx}_is_fetching_ollama_models", False)
-            _btn_label = "Fetching..." if _is_fetching_ollama else "Fetch Models"
-            if st.button(_btn_label, key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True, disabled=_is_fetching_ollama):
-                st.session_state[f"{pfx}_is_fetching_ollama_models"] = True
-                st.rerun()
-
-            if _is_fetching_ollama:
+            if st.button("Fetch Models", key=f"btn_{pfx}_fetch_ollama_models", use_container_width=True):
                 if _url.strip():
                     from core.models import fetch_ollama_models
-                    _found, _err = fetch_ollama_models(_url.strip())
+                    with st.spinner("Fetching..."):
+                        _found, _err = fetch_ollama_models(_url.strip())
                     if _found:
                         st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
                         st.toast(f"✅ Found {len(_found)} models.")
@@ -1261,8 +1256,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 else:
                     _clear_llm_helper_model_selection(pfx, "Ollama")
                     st.toast("⚠️ Enter a valid URL.")
-                st.session_state[f"{pfx}_is_fetching_ollama_models"] = False
-                st.rerun()
+
             _models = st.session_state.get(f"{pfx}_llm_helper_ollama_models", [])
             if _models:
                 _model_names = [m["name"] for m in _models]
@@ -1272,7 +1266,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 st.session_state[f"{pfx}_llm_helper_model"] = _chosen
             else:
                 st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
-                _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_ollama_model_manual_widget")
+                _man = st.text_input("Model", key=f"{pfx}_llm_helper_ollama_model_manual_widget")
                 st.session_state[f"{pfx}_llm_helper_model"] = _man
 
         else:
@@ -1300,16 +1294,11 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             with col_fetch:
                 st.write("")
                 st.write("")
-                _is_fetching_openai = st.session_state.get(f"{pfx}_is_fetching_openai_models", False)
-                _btn_label = "Fetching..." if _is_fetching_openai else "Fetch"
-                if st.button(_btn_label, key=f"btn_{pfx}_fetch_openai_models", use_container_width=True, disabled=_is_fetching_openai):
-                    st.session_state[f"{pfx}_is_fetching_openai_models"] = True
-                    st.rerun()
-
-                if _is_fetching_openai:
+                if st.button("Fetch", key=f"btn_{pfx}_fetch_openai_models", use_container_width=True):
                     if _url.strip():
                         from core.models import fetch_llama_cpp_models
-                        _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+                        with st.spinner("Fetching..."):
+                            _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
                         if _found:
                             st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
                             st.toast(f"✅ Found {len(_found)} models.")
@@ -1319,8 +1308,6 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     else:
                         _clear_llm_helper_model_selection(pfx, "OpenAI-Compatible")
                         st.toast("⚠️ Enter a valid URL.")
-                    st.session_state[f"{pfx}_is_fetching_openai_models"] = False
-                    st.rerun()
 
             st.session_state.setdefault(f"{pfx}_llm_helper_openai_verify_ssl_widget", st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
             _ssl = st.checkbox(
@@ -1338,7 +1325,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 st.session_state[f"{pfx}_llm_helper_model"] = _chosen
             else:
                 st.session_state.setdefault(f"{pfx}_llm_helper_openai_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
-                _man = st.text_input("Model (manual)", key=f"{pfx}_llm_helper_openai_model_manual_widget")
+                _man = st.text_input("Model", key=f"{pfx}_llm_helper_openai_model_manual_widget")
                 st.session_state[f"{pfx}_llm_helper_model"] = _man
 
             if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
@@ -1405,20 +1392,13 @@ def _render_bash_runtime(project: dict) -> None:
             st.text_input("Key Path", key="bash_ssh_key_path",
                           placeholder="~/.ssh/id_rsa",
                           help="Path to private key file. Leave empty if using password auth.")
-            _is_testing = st.session_state.get("testing_bash_ssh", False)
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing):
-                    st.session_state["testing_bash_ssh"] = True
-                    st.rerun()
-            
-            if _is_testing:
-                st.session_state.pop("bash_ssh_test_result", None)
-                with st.spinner("Please wait..."):
-                    _test_bash_ssh_connection()
-                st.session_state["testing_bash_ssh"] = False
-                st.rerun()
-            
+                if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", use_container_width=True):
+                    st.session_state.pop("bash_ssh_test_result", None)
+                    with st.spinner("Please wait..."):
+                        _test_bash_ssh_connection()
+
             _ssh_result = st.session_state.get("bash_ssh_test_result")
             if _ssh_result:
                 _ls, _lm = _ssh_result["status"], _ssh_result["message"]
@@ -1533,26 +1513,18 @@ def _test_pct_connection(vmid_key: str, result_key: str) -> None:
 
 def _render_test_button(target_type: str, state_prefix: str, vmid_key: str = "") -> None:
     result_key = f"{state_prefix}_{target_type}_test_result"
-    testing_key = f"testing_{result_key}"
-    _is_testing = st.session_state.get(testing_key, False)
-    
+
     btn_label = f"Test {target_type.upper() if target_type == 'pct' else 'Local'} Execution"
-    
+
     _, col_test, _ = st.columns([1, 2, 1])
     with col_test:
-        if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True, disabled=_is_testing):
-            st.session_state[testing_key] = True
-            st.rerun()
-            
-        if _is_testing:
+        if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True):
             st.session_state.pop(result_key, None)
             with st.spinner("Please wait..."):
                 if target_type == "local":
                     _test_local_connection(result_key)
                 elif target_type == "pct":
                     _test_pct_connection(vmid_key, result_key)
-            st.session_state[testing_key] = False
-            st.rerun()
 
         _res = st.session_state.get(result_key)
         if _res:
@@ -1991,7 +1963,6 @@ def _scan_models(project: dict) -> None:
         if current not in new_names:
             st.session_state["llama_cli_model_name"] = new_names[0]
         st.success(f"Found {len(models)} model(s).")
-    st.rerun()
 
 
 def _fetch_mcp_servers(project: dict) -> None:
@@ -2049,7 +2020,6 @@ def _fetch_mcp_servers(project: dict) -> None:
         })
     st.session_state["llama_cli_mcp_servers"] = servers
     st.success(f"Fetched {len(servers)} MCP server(s).")
-    st.rerun()
 
 
 def _test_llama_cli_run(project: dict) -> None:
@@ -2100,9 +2070,12 @@ def _test_llama_cli_run(project: dict) -> None:
             st.session_state["_llama_svc_result"] = ("error", "No model selected.", "")
             return
 
-        _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip() or "llama-cli"
-        
-        if _bin and os.path.isdir(_bin) and target == "local":
+        _bin  = (st.session_state.get("llama_cli_binary_path") or "").strip()
+        if not _bin:
+            st.session_state["_llama_svc_result"] = ("error", "No binary path configured.", "")
+            return
+
+        if os.path.isdir(_bin) and target == "local":
             _bin = os.path.join(_bin, "llama-cli")
         
         _mpath_quoted = f'\"$HOME/\"{shlex.quote(_mpath[2:])}' if _mpath.startswith("~/") else shlex.quote(_mpath)
@@ -2188,19 +2161,12 @@ def _render_llama_cli_runtime(project: dict) -> None:
                               help="Leave empty to use key-based auth.")
             st.text_input("Key Path", key="llama_cli_ssh_key_path",
                           placeholder="~/.ssh/id_rsa")
-            _is_testing_llama = st.session_state.get("testing_llama_cli_ssh", False)
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing_llama):
-                    st.session_state["testing_llama_cli_ssh"] = True
-                    st.rerun()
-                
-            if _is_testing_llama:
-                st.session_state.pop("llama_cli_ssh_test_result", None)
-                with st.spinner("Please wait..."):
-                    _test_llama_cli_ssh_connection()
-                st.session_state["testing_llama_cli_ssh"] = False
-                st.rerun()
+                if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", use_container_width=True):
+                    st.session_state.pop("llama_cli_ssh_test_result", None)
+                    with st.spinner("Please wait..."):
+                        _test_llama_cli_ssh_connection()
 
             _llama_ssh_result = st.session_state.get("llama_cli_ssh_test_result")
             if _llama_ssh_result:
@@ -2424,14 +2390,9 @@ def _render_llama_cli_runtime(project: dict) -> None:
         
         _, _col_svc, _ = st.columns([1, 2, 1])
         with _col_svc:
-            _is_testing = st.session_state.get("_llama_cli_testing", False)
             if st.button("Test Run", key="btn_llama_test_run",
-                         use_container_width=True, type="primary", disabled=_is_testing,
+                         use_container_width=True, type="primary",
                          help="Run a test prompt (llama-cli), or test connectivity (OpenAI)."):
-                st.session_state["_llama_cli_testing"] = True
-                st.rerun()
-
-            if _is_testing:
                 st.session_state.pop("_llama_svc_result", None)
                 with st.spinner("Testing model execution... (Loading the model into memory may take a few minutes)"):
                     if _backend.lower().startswith("openai"):
@@ -2455,8 +2416,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
                                 )
                     else:
                         _test_llama_cli_run(project)
-                st.session_state["_llama_cli_testing"] = False
-                st.rerun()
 
         # ── Test Run status display (always shown) ─────────────────────────────
         _svc_result = st.session_state.get("_llama_svc_result")
@@ -2884,7 +2843,6 @@ def _scan_llama_server_models(project: dict) -> None:
             st.session_state["llama_server_model_name"] = new_names[0]
         st.success(f"Found {len(models)} model(s).")
     _flush_llama_server_config(project)
-    st.rerun()
 
 
 def _fetch_llama_server_mcp_servers(project: dict) -> None:
@@ -2916,7 +2874,6 @@ def _fetch_llama_server_mcp_servers(project: dict) -> None:
     st.session_state["llama_server_mcp_servers"] = servers
     _flush_llama_server_config(project)
     st.success(f"Fetched {len(servers)} MCP server(s).")
-    st.rerun()
 
 
 def _test_llama_server_run(project: dict) -> None:
@@ -2980,7 +2937,10 @@ def _test_llama_server_run(project: dict) -> None:
     if not use_remote:
         model_path = os.path.abspath(os.path.expanduser(model_path))
 
-    binary = (cfg.get("binary_path") or "").strip() or "llama-server"
+    binary = (cfg.get("binary_path") or "").strip()
+    if not binary:
+        st.session_state["_llama_server_svc_result"] = ("error", "No binary path configured.", "")
+        return
     if not use_remote and os.path.isdir(binary):
         binary = os.path.join(binary, "llama-server")
 
@@ -3105,19 +3065,12 @@ def _render_llama_server_runtime(project: dict) -> None:
                               help="Leave empty to use key-based auth.")
             st.text_input("Key Path", key="llama_server_ssh_key_path",
                           placeholder="~/.ssh/id_rsa")
-            _is_testing_llama_server = st.session_state.get("testing_llama_server_ssh", False)
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_llama_server_test_ssh", type="secondary", use_container_width=True, disabled=_is_testing_llama_server):
-                    st.session_state["testing_llama_server_ssh"] = True
-                    st.rerun()
-
-            if _is_testing_llama_server:
-                st.session_state.pop("llama_server_ssh_test_result", None)
-                with st.spinner("Please wait..."):
-                    _test_llama_server_ssh_connection()
-                st.session_state["testing_llama_server_ssh"] = False
-                st.rerun()
+                if st.button("Test Connection", key="btn_llama_server_test_ssh", type="secondary", use_container_width=True):
+                    st.session_state.pop("llama_server_ssh_test_result", None)
+                    with st.spinner("Please wait..."):
+                        _test_llama_server_ssh_connection()
 
             _llama_server_ssh_result = st.session_state.get("llama_server_ssh_test_result")
             if _llama_server_ssh_result:
@@ -3312,25 +3265,17 @@ def _render_llama_server_runtime(project: dict) -> None:
 
         _, col_status, _ = st.columns([1, 2, 1])
         with col_status:
-            _is_testing_server = st.session_state.get("_llama_server_testing", False)
             if st.button(
                 "Check Status",
                 key="btn_llama_server_check_status",
                 use_container_width=True,
                 type="primary",
-                disabled=_is_testing_server,
                 help="Launches the managed llama-server with the current settings to verify "
                      "they work, then stops it again (unless a server is already running here).",
             ):
-                st.session_state["_llama_server_testing"] = True
-                st.rerun()
-
-            if _is_testing_server:
                 st.session_state.pop("_llama_server_svc_result", None)
                 with st.spinner("Starting llama-server... (loading the model into memory may take a few minutes)"):
                     _test_llama_server_run(project)
-                st.session_state["_llama_server_testing"] = False
-                st.rerun()
 
         _svc_result = st.session_state.get("_llama_server_svc_result")
         if _svc_result:

@@ -67,6 +67,7 @@ def _cfg(**overrides):
     base = {
         "type": "llama_cli_bot",
         "backend": "llama.cpp",
+        "binary_path": "llama-cli",
         "model_dir": "/models",
         "model_name": "llama3.gguf",
         "cancel_requested_ref": [False],
@@ -303,6 +304,31 @@ class TestRunLlamaCLILocalBinary:
         env = _env()
         result = run_llama_cli_evaluation(env, _cfg(), _log())
         assert result["run_bot_type"] == "llama_cli_bot"
+
+
+# ── Missing binary path must error, not silently fall back ────────────────────
+
+class TestRunLlamaCLIMissingBinaryPath:
+    """binary_path is required input — an empty value must produce a clear
+    error rather than silently assuming llama-cli/llama-server is on PATH."""
+
+    def test_blank_binary_path_errors_instead_of_defaulting_to_llama_cli(self):
+        env = _env()
+        result = run_llama_cli_evaluation(
+            env, _cfg(binary_path="", validation_sets=[_prompt_set("hi")]), _log()
+        )
+        assert result["prompt_responses"] == []
+        env.execute.assert_not_called()
+
+    def test_blank_binary_path_errors_for_managed_llama_server(self):
+        env = _env()
+        result = run_llama_cli_evaluation(
+            env,
+            _cfg(binary_path="", backend="llama-server (managed)"),
+            _log(),
+        )
+        assert result.get("run_aborted") is True
+        assert "binary path" in result.get("error", "").lower()
 
 
 # ── Binary path auto-correction ───────────────────────────────────────────────

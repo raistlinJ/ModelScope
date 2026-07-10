@@ -67,6 +67,7 @@ def _cfg_with_mcp(**overrides):
     base = {
         "type": "llama_cli_bot",
         "backend": "llama.cpp",
+        "binary_path": "llama-cli",
         "model_dir": "/models",
         "model_name": "llama3.gguf",
         "validation_sets": [_prompt_set("hello")],

@@ -583,13 +583,12 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
 
     is_llama_server = bot_type == "llama_server_bot"
     default_backend = "llama-server (managed)" if is_llama_server else "llama.cpp"
-    default_binary = "llama-server" if is_llama_server else "llama-cli"
 
     llama_config = {
         "type":                bot_type,
         "backend":             cfg.get("backend", default_backend),
         "backend_type":        cfg.get("backend", default_backend),
-        "binary_path":         cfg.get("binary_path", default_binary),
+        "binary_path":         cfg.get("binary_path", ""),
         "model_dir":           cfg.get("model_dir", ""),
         "model_name":          cfg.get("model_name", ""),
         "selected_model":      cfg.get("model_name", ""),
@@ -734,11 +733,11 @@ def _render_llama_cli_execute(
                     st.caption(f"Backend: **{backend}**")
                     st.caption(f"Model: **{model_name}**")
                     if bot_type == "llama_server_bot":
-                        st.caption(f"Binary: `{cfg.get('binary_path', 'llama-server') or 'llama-server'}`")
+                        st.caption(f"Binary: `{cfg.get('binary_path', '') or 'not configured'}`")
                         st.caption(f"Listen: `{cfg.get('server_host', '127.0.0.1')}:{cfg.get('server_port', 18080)}`")
                         st.caption(f"Client URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
                     elif backend == "llama-cli":
-                        st.caption(f"Binary: `{cfg.get('binary_path', 'llama-cli')}`")
+                        st.caption(f"Binary: `{cfg.get('binary_path', '') or 'not configured'}`")
                     else:
                         st.caption(f"URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
                     enabled_mcps = [s["name"] for s in cfg.get("mcp_servers", []) if s.get("enabled")]

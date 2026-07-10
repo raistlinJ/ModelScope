@@ -183,6 +183,107 @@ class TestSaveSettingsProjectMerge:
         assert ids == {"a", "c"}, "a single bad project must not wipe out the rest"
 
 
+class TestNestedProjectSecretHandling:
+    """ssh_password/sudo_password are persisted (base64-obscured, not real
+    encryption) so the user doesn't have to re-enter the SSH login password
+    every session — mirroring the plaintext persistence already chosen for
+    llm_helper_openai_apikey, but obscured since this value grants remote
+    shell access. openai_api_key/ssh_key_path remain fully stripped."""
+
+    def test_ssh_password_is_obscured_not_plaintext_not_stripped(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        state = {
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"ssh_password": "hunter2"},
+            }],
+        }
+        save_settings(state)
+        data = json.loads(path.read_text())
+        on_disk = data["projects"][0]["config"]["ssh_password"]
+        assert on_disk not in ("", "hunter2"), "must be neither stripped nor plaintext"
+
+    def test_sudo_password_is_obscured(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        state = {
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"sudo_password": "hunter2"},
+            }],
+        }
+        save_settings(state)
+        data = json.loads(path.read_text())
+        on_disk = data["projects"][0]["config"]["sudo_password"]
+        assert on_disk not in ("", "hunter2")
+
+    def test_openai_api_key_and_ssh_key_path_still_stripped(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        state = {
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"openai_api_key": "sk-abc", "ssh_key_path": "/home/u/.ssh/id_rsa"},
+            }],
+        }
+        save_settings(state)
+        data = json.loads(path.read_text())
+        cfg = data["projects"][0]["config"]
+        assert cfg["openai_api_key"] == ""
+        assert cfg["ssh_key_path"] == ""
+
+    def test_round_trip_recovers_plaintext_ssh_password(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", tmp_path / "settings.json")
+        state = {
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"ssh_password": "hunter2"},
+            }],
+        }
+        save_settings(state)
+        result = load_settings()
+        assert result["projects"][0]["config"]["ssh_password"] == "hunter2"
+
+    def test_empty_ssh_password_round_trips_as_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", tmp_path / "settings.json")
+        state = {
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"ssh_password": ""},
+            }],
+        }
+        save_settings(state)
+        result = load_settings()
+        assert result["projects"][0]["config"]["ssh_password"] == ""
+
+    def test_disk_only_project_merged_in_is_not_double_encoded(self, tmp_path, monkeypatch):
+        """Regression: a project this session never loaded (belongs to
+        another, more current session) gets pulled in from disk still
+        base64-encoded — it must be de-obscured before re-entering
+        _sanitize_projects(), or a second save doubly encodes it and a
+        later load_settings() would recover garbage instead of the
+        original password."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        # First session saves project "a" with a real ssh_password.
+        save_settings({
+            "projects": [{
+                "id": "a", "name": "A", "type": "llama_server_bot",
+                "config": {"ssh_password": "hunter2"},
+            }],
+        })
+        # A second session, which never saw "a", saves its own project "b".
+        state_b = {
+            "projects": [{"id": "b", "name": "B", "type": "bash_bot", "config": {}}],
+            "_known_project_ids_at_load": [],
+        }
+        save_settings(state_b)
+        result = load_settings()
+        by_id = {p["id"]: p for p in result["projects"]}
+        assert by_id["a"]["config"]["ssh_password"] == "hunter2"
+
+
 class TestLoadSettings:
     def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH",

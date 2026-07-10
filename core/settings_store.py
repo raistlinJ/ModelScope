@@ -141,18 +141,47 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "llm_helper_openai_apikey",
 })
 
-# Sensitive keys nested inside project config dicts.
+# Sensitive keys nested inside project config dicts that are never written to
+# disk at all (cleared to "" on every save).
 NESTED_SENSITIVE: frozenset[str] = frozenset({
-    "ssh_password",
     "openai_api_key",
     "ssh_key_path",
-    # For ssh/pct targets this holds a copy of ssh_password — must not hit disk
+})
+
+# Nested keys that ARE persisted, but lightly obfuscated (base64, not real
+# encryption) so a save/reload round-trip doesn't force re-entering the SSH
+# login password every time — mirrors the plaintext persistence the user
+# already chose for llm_helper_openai_apikey, but for a value sensitive
+# enough (grants remote shell access) to warrant not sitting in plain text.
+NESTED_OBSCURED: frozenset[str] = frozenset({
+    "ssh_password",
+    # For ssh/pct targets this can hold a copy of ssh_password.
     "sudo_password",
 })
 
+_OBSCURED_PREFIX = "b64:"
+
+
+def _obscure(value: str) -> str:
+    if not value:
+        return ""
+    import base64
+    return _OBSCURED_PREFIX + base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def _unobscure(value: str) -> str:
+    if not value or not value.startswith(_OBSCURED_PREFIX):
+        return value or ""
+    import base64
+    try:
+        return base64.b64decode(value[len(_OBSCURED_PREFIX):].encode("ascii")).decode("utf-8")
+    except Exception:
+        return ""
+
 
 def _sanitize_projects(projects: list) -> list:
-    """Return a deep copy of *projects* with sensitive config keys cleared."""
+    """Return a deep copy of *projects* with sensitive config keys cleared and
+    obscured keys base64-encoded, ready to write to disk."""
     import copy
     clean = []
     for proj in projects:
@@ -161,9 +190,27 @@ def _sanitize_projects(projects: list) -> list:
         for k in NESTED_SENSITIVE:
             if k in cfg:
                 cfg[k] = ""
+        for k in NESTED_OBSCURED:
+            if k in cfg:
+                cfg[k] = _obscure(cfg[k])
         p["config"] = cfg
         clean.append(p)
     return clean
+
+
+def _deobscure_projects(projects: list) -> list:
+    """Reverse of _sanitize_projects's obscuring step, applied after loading
+    from disk so in-memory session state holds plaintext SSH passwords."""
+    for proj in projects:
+        if not isinstance(proj, dict):
+            continue
+        cfg = proj.get("config")
+        if not isinstance(cfg, dict):
+            continue
+        for k in NESTED_OBSCURED:
+            if k in cfg:
+                cfg[k] = _unobscure(cfg[k])
+    return projects
 
 _SETTINGS_PATH: Path = Path.home() / ".modelscope" / "settings.json"
 
@@ -212,7 +259,12 @@ def _merge_with_disk_projects(session_state: Any, session_projects: list) -> lis
         if pid is None or pid in session_ids:
             continue
         if pid not in known_at_load:
-            merged.append(proj)
+            # This session never loaded this project into memory, so its
+            # NESTED_OBSCURED fields are still base64-encoded as read from
+            # disk. De-obscure before it re-enters _sanitize_projects()
+            # below, which would otherwise double-encode it.
+            import copy
+            merged.append(_deobscure_projects([copy.deepcopy(proj)])[0])
     return merged
 
 
@@ -271,9 +323,12 @@ def load_settings() -> dict[str, Any]:
         if not isinstance(data, dict):
             return {}
         # Only return keys that belong to PERSIST_KEYS and are not sensitive
-        return {
+        result = {
             k: v for k, v in data.items()
             if k in PERSIST_KEYS and k not in _SENSITIVE_KEYS
         }
+        if isinstance(result.get("projects"), list):
+            result["projects"] = _deobscure_projects(result["projects"])
+        return result
     except Exception:
         return {}
