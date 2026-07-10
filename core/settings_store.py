@@ -172,6 +172,50 @@ _SETTINGS_PATH: Path = Path.home() / ".modelscope" / "settings.json"
 # Public API
 # ---------------------------------------------------------------------------
 
+def _merge_with_disk_projects(session_state: Any, session_projects: list) -> list:
+    """Reconcile this session's project list with whatever is currently on disk.
+
+    save_settings() used to overwrite the "projects" key outright with
+    whatever a single session's memory held. Streamlit runs one independent
+    session per browser tab/connection — if a second tab/session is opened
+    (or reconnects after a hiccup) before it has loaded a project another,
+    more current session just created, that second session's very next save
+    would silently delete the project it never knew about. This reconciles
+    instead of overwriting:
+
+    - A project id this session still has: its (possibly edited) version wins.
+    - A project id on disk this session never saw at load time (recorded in
+      "_known_project_ids_at_load"): assumed to belong to another, more
+      current session — preserved rather than silently deleted.
+    - A project id this session DID see at load but no longer has: treated as
+      an intentional deletion in this session and is not resurrected.
+    """
+    try:
+        disk_data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+        disk_projects = disk_data.get("projects", [])
+        if not isinstance(disk_projects, list):
+            disk_projects = []
+    except Exception:
+        disk_projects = []
+
+    known_at_load = session_state.get("_known_project_ids_at_load")
+    if known_at_load is None:
+        # No baseline recorded for this session — assume it started from
+        # whatever is on disk right now, so nothing looks "unknown" to it.
+        known_at_load = [p.get("id") for p in disk_projects if isinstance(p, dict)]
+    known_at_load = set(known_at_load)
+
+    session_ids = {p.get("id") for p in session_projects if isinstance(p, dict)}
+    merged = list(session_projects)
+    for proj in disk_projects:
+        pid = proj.get("id") if isinstance(proj, dict) else None
+        if pid is None or pid in session_ids:
+            continue
+        if pid not in known_at_load:
+            merged.append(proj)
+    return merged
+
+
 def save_settings(session_state: Any) -> None:
     """Write PERSIST_KEYS values from *session_state* to the settings file.
 
@@ -181,8 +225,8 @@ def save_settings(session_state: Any) -> None:
     try:
         data: dict[str, Any] = {}
         for key in PERSIST_KEYS:
-            if key in _SENSITIVE_KEYS:
-                continue
+            if key in _SENSITIVE_KEYS or key == "projects":
+                continue  # "projects" is validated/merged separately below
             try:
                 value = session_state[key]
                 # Verify JSON-serialisability (avoids storing un-serialisable objects)
@@ -191,9 +235,23 @@ def save_settings(session_state: Any) -> None:
             except (KeyError, TypeError):
                 pass
 
-        # Sanitize sensitive fields nested inside project configs before writing.
-        if "projects" in data and isinstance(data["projects"], list):
-            data["projects"] = _sanitize_projects(data["projects"])
+        # "projects" is validated per-project (not as one all-or-nothing
+        # blob) so a single non-serialisable value can't silently drop every
+        # other project from the saved file, then merged with on-disk state
+        # so a stale/parallel session can't silently delete another
+        # session's projects (see _merge_with_disk_projects).
+        session_projects = session_state.get("projects") \
+            if hasattr(session_state, "get") else None
+        if isinstance(session_projects, list):
+            safe_projects = []
+            for proj in session_projects:
+                try:
+                    json.dumps(proj)
+                    safe_projects.append(proj)
+                except TypeError:
+                    continue
+            merged = _merge_with_disk_projects(session_state, safe_projects)
+            data["projects"] = _sanitize_projects(merged)
 
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")

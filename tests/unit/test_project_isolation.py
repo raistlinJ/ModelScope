@@ -157,6 +157,24 @@ def test_llama_server_advanced_options_do_not_leak_between_projects():
     assert st.session_state["llama_server_gpu_layers"] == 20
 
 
+def test_llama_server_ready_timeout_does_not_leak_between_projects():
+    proj_a = _make_llama_server_project("A", {"server_ready_timeout": 600})
+    proj_b = _make_llama_server_project("B", {})
+
+    st.session_state.clear()
+    st.session_state["projects"] = [proj_a, proj_b]
+
+    state.sync_project("A")
+    assert st.session_state["llama_server_ready_timeout"] == 600
+
+    state.sync_project("B")
+    assert st.session_state["llama_server_ready_timeout"] == 300, \
+        "server_ready_timeout leaked from project A into project B"
+
+    state.sync_project("A")
+    assert st.session_state["llama_server_ready_timeout"] == 600
+
+
 def test_llama_server_execution_target_does_not_leak_between_projects():
     """execution_target/ssh_*/sudo were wired into the state_key_map early on
     but had no UI and were hardcoded to "local" on flush — so this hydration

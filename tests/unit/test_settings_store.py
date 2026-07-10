@@ -88,6 +88,101 @@ class TestSaveSettings:
         assert data["tool_focus"] == "file_creator"
 
 
+class TestSaveSettingsProjectMerge:
+    """A stale/parallel Streamlit session must not silently delete a project
+    another session created or is still holding, but a project a session
+    deliberately deleted must not get resurrected.
+
+    Regression coverage for a real incident: driving the app with several
+    independent browser sessions caused one session's save to overwrite the
+    on-disk projects list and delete a project the other session had.
+    """
+
+    def test_session_unaware_of_a_disk_project_does_not_delete_it(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        # Disk already has two projects (as if another session created "b").
+        path.write_text(json.dumps({
+            "projects": [
+                {"id": "a", "name": "A", "type": "bash_bot", "config": {}},
+                {"id": "b", "name": "B", "type": "bash_bot", "config": {}},
+            ],
+        }))
+        # This session only ever knew about "a" — it loaded before "b" existed.
+        state = {"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}],
+                 "_known_project_ids_at_load": ["a"]}
+        save_settings(state)
+        data = json.loads(path.read_text())
+        ids = {p["id"] for p in data["projects"]}
+        assert ids == {"a", "b"}, "a project unknown to this session was deleted on save"
+
+    def test_session_that_deliberately_deleted_a_project_is_respected(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        path.write_text(json.dumps({
+            "projects": [
+                {"id": "a", "name": "A", "type": "bash_bot", "config": {}},
+                {"id": "b", "name": "B", "type": "bash_bot", "config": {}},
+            ],
+        }))
+        # This session saw both "a" and "b" at load, then the user deleted "b".
+        state = {"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}],
+                 "_known_project_ids_at_load": ["a", "b"]}
+        save_settings(state)
+        data = json.loads(path.read_text())
+        ids = {p["id"] for p in data["projects"]}
+        assert ids == {"a"}, "a project this session explicitly deleted was resurrected"
+
+    def test_edited_project_uses_this_sessions_version(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        path.write_text(json.dumps({
+            "projects": [{"id": "a", "name": "Old Name", "type": "bash_bot", "config": {}}],
+        }))
+        state = {"projects": [{"id": "a", "name": "New Name", "type": "bash_bot", "config": {}}],
+                 "_known_project_ids_at_load": ["a"]}
+        save_settings(state)
+        data = json.loads(path.read_text())
+        assert data["projects"][0]["name"] == "New Name"
+
+    def test_no_known_ids_baseline_falls_back_to_current_disk_state(self, tmp_path, monkeypatch):
+        """No _known_project_ids_at_load recorded (e.g. a non-Streamlit
+        caller) must not spuriously resurrect anything — the safe fallback
+        assumes the session saw whatever is currently on disk."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        path.write_text(json.dumps({
+            "projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}],
+        }))
+        state = {"projects": []}  # no baseline key at all
+        save_settings(state)
+        data = json.loads(path.read_text())
+        assert data["projects"] == []
+
+    def test_first_ever_save_with_no_disk_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", tmp_path / "settings.json")
+        state = {"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}]}
+        save_settings(state)
+        data = json.loads((tmp_path / "settings.json").read_text())
+        assert [p["id"] for p in data["projects"]] == ["a"]
+
+    def test_one_non_serializable_project_does_not_drop_the_others(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        state = {
+            "projects": [
+                {"id": "a", "name": "A", "type": "bash_bot", "config": {}},
+                {"id": "bad", "name": "Bad", "type": "bash_bot", "config": {"oops": object()}},
+                {"id": "c", "name": "C", "type": "bash_bot", "config": {}},
+            ],
+            "_known_project_ids_at_load": ["a", "bad", "c"],
+        }
+        save_settings(state)
+        data = json.loads(path.read_text())
+        ids = {p["id"] for p in data["projects"]}
+        assert ids == {"a", "c"}, "a single bad project must not wipe out the rest"
+
+
 class TestLoadSettings:
     def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH",

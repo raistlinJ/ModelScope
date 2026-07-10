@@ -422,7 +422,7 @@ def test_validation_step_action_buttons_use_compact_labels():
     source = inspect.getsource(_render_validation_steps)
 
     assert '"+COMMAND/CHECK"' in source
-    assert '"+PROMPT"' in source
+    assert '"+PROMPT/CHECK"' in source
     assert "+ Add Command/Output" not in source
     assert "+ Add Prompt" not in source
 

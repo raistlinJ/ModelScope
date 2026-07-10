@@ -597,6 +597,7 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         "context_size":        cfg.get("tokens", 2048),
         "server_host":         cfg.get("server_host", "127.0.0.1"),
         "server_port":         cfg.get("server_port", 18080),
+        "server_ready_timeout": cfg.get("server_ready_timeout", 300),
         "mcp_server_url":      "http://127.0.0.1:9191",
         "openai_base_url":     cfg.get("openai_base_url", ""),
         "llm_url":             cfg.get("openai_base_url", ""),

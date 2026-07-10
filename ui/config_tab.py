@@ -1080,7 +1080,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                             )
                         with _cb:
                             st.button(
-                                "+PROMPT",
+                                "+PROMPT/CHECK",
                                 key=f"_sc_{pfx}_{step_id}_choice_prompt",
                                 use_container_width=True,
                                 on_click=_val_add_prompt, args=(si,),
@@ -1131,6 +1131,13 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                     st.session_state[usr_key] = cmd.get("user_prompt", "")
                                 with st.expander("User Prompt", expanded=False):
                                     cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
+
+                                st.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -5px;'>Accepted Checks</div>", unsafe_allow_html=True)
+                                _render_validation_checks_control(
+                                    cmd,
+                                    key_prefix=f"_sc_{pfx}_{step_id}_{cmd_id}_checks",
+                                    disabled=not cmd.get("enabled", True),
+                                )
                         else:
                             if not first_cmd_seen:
                                 hc_cmd, hc_to, hc_checks, hc_en, hc_del = st.columns([3.0, 0.8, 3.5, 0.8, 0.6])
@@ -1179,7 +1186,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                             with cc_del:
                                 st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
 
-                    # "+PROMPT" (LLM Judge validation step) is only meaningful for
+                    # "+PROMPT/CHECK" (LLM Judge validation step) is only meaningful for
                     # Llama-backed projects have a main LLM under test; Bash-Bot
                     # validation is deterministic command/output checks only.
                     if _validation_bot_supports_prompts(bot_type):
@@ -1187,7 +1194,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                         with ca:
                             st.button("+COMMAND/CHECK", key=f"_sc_{pfx}_{step_id}_addcmd", on_click=_val_add_cmd, args=(si,), use_container_width=True)
                         with cb:
-                            st.button("+PROMPT", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
+                            st.button("+PROMPT/CHECK", key=f"_sc_{pfx}_{step_id}_addprompt", on_click=_val_add_prompt, args=(si,), use_container_width=True)
                     else:
                         ca, _ = st.columns([2.0, 7.5])
                         with ca:
@@ -2750,6 +2757,7 @@ def _flush_llama_server_config(project: dict) -> None:
         "model_dir":           st.session_state.get("llama_server_model_dir", ""),
         "model_name":          st.session_state.get("llama_server_model_name", ""),
         "tokens":              st.session_state.get("llama_server_tokens", 32768),
+        "server_ready_timeout": st.session_state.get("llama_server_ready_timeout", 300),
         "en_temp":             st.session_state.get("llama_server_en_temp", False),
         "temperature":         st.session_state.get("llama_server_temperature", 0.8),
         "en_gpu_layers":       st.session_state.get("llama_server_en_gpu_layers", False),
@@ -2917,13 +2925,16 @@ def _test_llama_server_run(project: dict) -> None:
     Mirrors _test_llama_cli_run's "run it for real, report the result" pattern,
     adapted for a long-lived server process instead of a one-shot CLI call:
     start llama-server with the current binary/model/flags, confirm it
-    responds, then stop it again — unless a server is already listening at
-    this host:port (e.g. an Execute run is active), in which case that live
-    server is queried instead of attempting a conflicting second launch.
+    responds, then stop it again.
 
-    The managed server always launches on the ModelScope host itself, so this
-    test does too, regardless of the configured Execution Target (which only
-    governs startup/completion/validation commands and model-directory scans).
+    When Execution Target is SSH, the server is launched ON that remote host
+    (see core.remote_server) and reached through an SSH-tunnelled local port —
+    matching what a real Execute run does. For Local/PCT it launches on the
+    ModelScope host itself (PCT's container network namespace can't be
+    port-forwarded to the same way SSH's host can); the "already listening"
+    pre-check (skip launching if an Execute run already has the server up)
+    only applies to that local case, since checking a remote port would need
+    its own SSH round-trip regardless of whether a launch is about to happen.
     """
     import os
     import subprocess
@@ -2935,27 +2946,30 @@ def _test_llama_server_run(project: dict) -> None:
 
     host = (cfg.get("server_host") or "127.0.0.1").strip()
     port = int(cfg.get("server_port") or 18080)
-    client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
-    url = f"http://{client_host}:{port}"
     verify_ssl = cfg.get("openai_verify_ssl", True)
+    exec_target = cfg.get("execution_target", "local")
+    use_remote = exec_target == "ssh"
 
-    if _llama_server_mod.port_open(url, timeout=1.5):
-        info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
-        if info:
-            model = (info.get("model_path") or "").split("/")[-1] or "?"
-            st.session_state["_llama_server_svc_result"] = (
-                "ok",
-                f"A server is already running here (e.g. an active Execute run)  |  "
-                f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
-                "",
-            )
-        else:
-            st.session_state["_llama_server_svc_result"] = (
-                "error",
-                "A server is already listening at this address but didn't return model info.",
-                "",
-            )
-        return
+    if not use_remote:
+        client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+        url = f"http://{client_host}:{port}"
+        if _llama_server_mod.port_open(url, timeout=1.5):
+            info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
+            if info:
+                model = (info.get("model_path") or "").split("/")[-1] or "?"
+                st.session_state["_llama_server_svc_result"] = (
+                    "ok",
+                    f"A server is already running here (e.g. an active Execute run)  |  "
+                    f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
+                    "",
+                )
+            else:
+                st.session_state["_llama_server_svc_result"] = (
+                    "error",
+                    "A server is already listening at this address but didn't return model info.",
+                    "",
+                )
+            return
 
     model_name = cfg.get("model_name", "")
     if not model_name:
@@ -2963,26 +2977,53 @@ def _test_llama_server_run(project: dict) -> None:
         return
     model_dir  = cfg.get("model_dir", "")
     model_path = os.path.join(model_dir, model_name) if model_dir else model_name
-    model_path = os.path.abspath(os.path.expanduser(model_path))
+    if not use_remote:
+        model_path = os.path.abspath(os.path.expanduser(model_path))
 
     binary = (cfg.get("binary_path") or "").strip() or "llama-server"
-    if binary and os.path.isdir(binary):
+    if not use_remote and os.path.isdir(binary):
         binary = os.path.join(binary, "llama-server")
 
     context_size   = int(cfg.get("tokens") or 32768)
     custom_flags   = cfg.get("custom_flags", "")
     advanced_flags = _managed_llama_server_advanced_flags(cfg)
+    ready_timeout  = float(cfg.get("server_ready_timeout") or 300)
 
     logs: list[str] = []
+    ssh_env = None
     try:
-        proc = _start_managed_llama_server(
-            binary, model_path, context_size, port, host,
-            logs.append,
-            custom_flags=custom_flags,
-            advanced_flags=advanced_flags,
-        )
+        if use_remote:
+            from core.environment import SSHEnvironment
+            from core.remote_server import start_remote_managed_llama_server
+            ssh_env = SSHEnvironment(
+                host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
+                username=cfg.get("ssh_user", "root"),
+                password=cfg.get("ssh_password") or None,
+                key_path=cfg.get("ssh_key_path") or None,
+                remote_cwd=".",
+            )
+            proc = start_remote_managed_llama_server(
+                ssh_env, binary, model_path, context_size, port, host,
+                logs.append,
+                custom_flags=custom_flags,
+                advanced_flags=advanced_flags,
+                ready_timeout=ready_timeout,
+            )
+            url = f"http://127.0.0.1:{proc.local_port}"
+        else:
+            proc = _start_managed_llama_server(
+                binary, model_path, context_size, port, host,
+                logs.append,
+                custom_flags=custom_flags,
+                advanced_flags=advanced_flags,
+                ready_timeout=ready_timeout,
+            )
+            client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+            url = f"http://{client_host}:{port}"
     except Exception as exc:
         st.session_state["_llama_server_svc_result"] = ("error", str(exc), "\n".join(logs))
+        if ssh_env is not None:
+            ssh_env.close()
         return
 
     try:
@@ -3005,6 +3046,8 @@ def _test_llama_server_run(project: dict) -> None:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        if ssh_env is not None:
+            ssh_env.close()
 
 
 def _render_llama_server_runtime(project: dict) -> None:
@@ -3088,6 +3131,21 @@ def _render_llama_server_runtime(project: dict) -> None:
 
     with st.expander("Server Setup", expanded=True):
         st.session_state["llama_server_backend"] = "llama-server (managed)"
+        _exec_target_for_warning = st.session_state.get("llama_server_execution_target", "local")
+        if _exec_target_for_warning == "ssh":
+            st.info(
+                "Execution Target is **SSH** — the managed llama-server launches on that remote "
+                "host (via an SSH tunnel), so the Binary Path and Model Directory/Model below must "
+                "point to files that exist **on the remote host**, not on this machine.",
+            )
+        elif _exec_target_for_warning == "pct":
+            st.warning(
+                "Execution Target is **PCT**, but the managed llama-server doesn't support "
+                "launching inside a Proxmox container — it starts on **this machine** (the one "
+                "running ModelScope) instead. PCT only affects startup/completion/validation "
+                "commands and model-directory scanning. The Binary Path and Model Directory/Model "
+                "below must point to files that exist **locally on this machine**.",
+            )
         st.text_input(
             "llama-server Binary Path",
             key="llama_server_binary_path",
@@ -3163,6 +3221,18 @@ def _render_llama_server_runtime(project: dict) -> None:
             step=256,
             key="llama_server_tokens",
             help="Maximum context length passed to llama-server via -c.",
+        )
+
+        st.session_state.setdefault("llama_server_ready_timeout", 300)
+        st.number_input(
+            "Server Startup Timeout (seconds)",
+            min_value=10,
+            max_value=3600,
+            step=10,
+            key="llama_server_ready_timeout",
+            help="How long to wait for the model to load before giving up. "
+                 "Increase this for large models or slow (CPU) inference. "
+                 "Applies both here and during Execute.",
         )
 
         st.text_input(

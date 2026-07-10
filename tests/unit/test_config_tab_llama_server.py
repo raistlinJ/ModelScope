@@ -32,6 +32,7 @@ def _set_session(**overrides):
         "llama_server_model_name": "server.gguf",
         "llama_server_binary_path": "",
         "llama_server_tokens": 32768,
+        "llama_server_ready_timeout": 300,
         "llama_server_custom_flags": "",
         "llama_server_server_host": "127.0.0.1",
         "llama_server_server_port": 18080,
@@ -40,6 +41,19 @@ def _set_session(**overrides):
     defaults.update(overrides)
     for key, value in defaults.items():
         st.session_state[key] = value
+
+
+def _set_ssh_session(**overrides):
+    _set_session(
+        llama_server_execution_target="ssh",
+        llama_server_ssh_host="arlsouth4.utep.edu",
+        llama_server_ssh_port=22,
+        llama_server_ssh_user="jaime",
+        llama_server_ssh_password="",
+        llama_server_ssh_key_path="",
+        llama_server_model_dir="~/.cache/models",
+        **overrides,
+    )
 
 
 # ── _state_prefix_from_test_result_key ────────────────────────────────────────
@@ -149,6 +163,7 @@ class TestTestLlamaServerRun:
         _set_session(
             llama_server_binary_path="/opt/llama.cpp/llama-server",
             llama_server_tokens=8192,
+            llama_server_ready_timeout=600,
             llama_server_custom_flags="--jinja",
             llama_server_server_host="127.0.0.1",
             llama_server_server_port=18080,
@@ -165,6 +180,9 @@ class TestTestLlamaServerRun:
         assert args[4] == "127.0.0.1"
         assert mock_start.call_args.kwargs["custom_flags"] == "--jinja"
         assert mock_start.call_args.kwargs["advanced_flags"] == "-ngl 20"
+        # Check Status must honor the same configured startup timeout that a
+        # real Execute run would use, not a separate hardcoded value.
+        assert mock_start.call_args.kwargs["ready_timeout"] == 600.0
 
         proc.terminate.assert_called_once()
 
@@ -202,3 +220,102 @@ class TestTestLlamaServerRun:
         level, msg, _ = st.session_state["_llama_server_svc_result"]
         assert level == "error"
         assert "didn't return model info" in msg
+
+
+class TestTestLlamaServerRunRemote:
+    """Check Status with Execution Target=SSH must launch the server on that
+    remote host (core.remote_server), not locally — mirroring what a real
+    Execute run now does."""
+
+    @patch("core.llama_server.get_server_info")
+    @patch("core.remote_server.start_remote_managed_llama_server")
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_target_launches_remotely_and_uses_tunnel_url(
+        self, mock_ssh_env_cls, mock_remote_start, mock_info
+    ):
+        ssh_env = MagicMock()
+        mock_ssh_env_cls.return_value = ssh_env
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        mock_remote_start.return_value = remote_proc
+        mock_info.return_value = {"model_path": "/remote/models/server.gguf", "n_ctx": 4096}
+
+        _set_ssh_session()
+        project = _project()
+        _test_llama_server_run(project)
+
+        mock_ssh_env_cls.assert_called_once()
+        ssh_kwargs = mock_ssh_env_cls.call_args.kwargs
+        assert ssh_kwargs["host"] == "arlsouth4.utep.edu"
+        assert ssh_kwargs["username"] == "jaime"
+
+        mock_remote_start.assert_called_once()
+        assert mock_remote_start.call_args.args[0] is ssh_env
+        # Model path passed through unresolved — it's a remote path, must not
+        # be locally abspath'd/expanduser'd on the ModelScope host.
+        assert mock_remote_start.call_args.args[2] == "~/.cache/models/server.gguf"
+
+        # get_server_info must be queried through the tunnel's local port.
+        info_url = mock_info.call_args.args[0]
+        assert info_url == "http://127.0.0.1:54321"
+
+        level, msg, _ = st.session_state["_llama_server_svc_result"]
+        assert level == "ok"
+        assert "server.gguf" in msg
+
+        ssh_env.close.assert_called_once()
+
+    @patch("core.llama_server.port_open")
+    @patch("core.remote_server.start_remote_managed_llama_server")
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_target_skips_local_already_running_precheck(
+        self, mock_ssh_env_cls, mock_remote_start, mock_port_open
+    ):
+        """The "already running" pre-check probes 127.0.0.1 directly, which
+        is meaningless for a server that hasn't launched on this host at
+        all — it must not gate (or even run) for the remote path."""
+        mock_ssh_env_cls.return_value = MagicMock()
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        mock_remote_start.return_value = remote_proc
+
+        with patch("core.llama_server.get_server_info", return_value=None):
+            _set_ssh_session()
+            project = _project()
+            _test_llama_server_run(project)
+
+        mock_port_open.assert_not_called()
+        mock_remote_start.assert_called_once()
+
+    @patch("core.remote_server.start_remote_managed_llama_server", side_effect=RuntimeError("no route to host"))
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_launch_failure_reports_error_and_closes_env(self, mock_ssh_env_cls, mock_remote_start):
+        ssh_env = MagicMock()
+        mock_ssh_env_cls.return_value = ssh_env
+
+        _set_ssh_session()
+        project = _project()
+        _test_llama_server_run(project)
+
+        level, msg, _ = st.session_state["_llama_server_svc_result"]
+        assert level == "error"
+        assert "no route to host" in msg
+        ssh_env.close.assert_called_once()
+
+    @patch("core.llama_server.get_server_info")
+    @patch("core.remote_server.start_remote_managed_llama_server")
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_target_terminates_remote_handle_on_success(
+        self, mock_ssh_env_cls, mock_remote_start, mock_info
+    ):
+        mock_ssh_env_cls.return_value = MagicMock()
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        mock_remote_start.return_value = remote_proc
+        mock_info.return_value = {"model_path": "server.gguf", "n_ctx": 4096}
+
+        _set_ssh_session()
+        project = _project()
+        _test_llama_server_run(project)
+
+        remote_proc.terminate.assert_called_once()

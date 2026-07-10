@@ -41,7 +41,16 @@ if not st.session_state.get("_settings_loaded"):
     # Normalise: settings written by 2.0 stored 'projects' as a dict; 2.1 uses a list.
     if not isinstance(st.session_state.get("projects"), list):
         st.session_state["projects"] = []
-    
+
+    # Baseline for save_settings()'s merge: which project ids this session
+    # actually saw on disk at load time. Lets a stale/parallel session's save
+    # skip deleting a project it never knew about (see
+    # core.settings_store._merge_with_disk_projects) without resurrecting a
+    # project this session deliberately deleted.
+    st.session_state["_known_project_ids_at_load"] = [
+        _p.get("id") for _p in st.session_state.get("projects", []) if isinstance(_p, dict)
+    ]
+
     # Clear scenario-related session state keys (scenarios concept removed)
     st.session_state.pop("active_scenario", None)
     st.session_state.pop("_last_exec_scenario", None)

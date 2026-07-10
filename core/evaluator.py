@@ -22,7 +22,7 @@ import requests
 
 from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
-from core.environment import BaseEnvironment
+from core.environment import BaseEnvironment, SSHEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
 from core.models import normalize_openai_base_url
 from core.streaming import stream_ollama, stream_llama_cpp
@@ -146,11 +146,18 @@ def _start_managed_llama_server(
     on_log: Callable[[str], None],
     custom_flags: str = "",
     advanced_flags: str = "",
+    ready_timeout: float = 300.0,
 ) -> subprocess.Popen:
     """Start llama-server binary and wait for readiness.
 
-    Raises RuntimeError if server doesn't become ready within 30s.
-    Returns the Popen object; caller must manage teardown.
+    ready_timeout defaults to 5 minutes — large models can take a while to
+    load, especially on CPU or with a big context size. If the process exits
+    before then (bad model path, OOM, etc.) this fails immediately with its
+    stderr rather than waiting out the full timeout.
+
+    Raises RuntimeError if the process fails to start, exits early, or
+    doesn't become ready within ready_timeout. Returns the Popen object;
+    caller must manage teardown.
     """
     cmd = [
         binary,
@@ -171,7 +178,15 @@ def _start_managed_llama_server(
 
     client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
     # Poll for readiness
-    for attempt in range(30):
+    deadline = time.time() + ready_timeout
+    while time.time() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            stderr = proc.stderr.read().decode(errors="replace").strip() if proc.stderr else ""
+            raise RuntimeError(
+                f"Server exited immediately (code {exit_code}) on {host}:{port}"
+                + (f": {stderr[-800:]}" if stderr else "")
+            )
         try:
             resp = requests.get(f"http://{client_host}:{port}/health", timeout=1.0)
             if resp.status_code == 200:
@@ -182,7 +197,9 @@ def _start_managed_llama_server(
         time.sleep(1)
 
     proc.terminate()
-    raise RuntimeError(f"Server did not become ready after 30s on {host}:{port}")
+    raise RuntimeError(
+        f"Server did not become ready after {int(ready_timeout)}s on {host}:{port}"
+    )
 
 
 def _is_managed_llama_server_backend(backend: str) -> bool:
@@ -1339,7 +1356,10 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
     main_llm_context: list[dict] = []
 
-    managed_server_proc: subprocess.Popen | None = None
+    # subprocess.Popen for a local managed server, or a RemoteManagedServer
+    # (core.remote_server) when it was launched over SSH — both expose
+    # terminate()/wait()/kill(), so teardown below treats them identically.
+    managed_server_proc = None
 
     def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
         if not prompt_text:
@@ -1570,7 +1590,12 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             binary = corrected
 
         model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
-        if config.get("execution_target", "local") == "local":
+        exec_target = config.get("execution_target", "local")
+        # SSHEnvironment is the only target this launches the server ON — a
+        # PCTEnvironment's remote host has its own network namespace, so a
+        # port-forward to "the host" wouldn't actually reach the container.
+        use_remote_server = exec_target == "ssh" and isinstance(env, SSHEnvironment)
+        if exec_target == "local":
             model_path = os.path.abspath(os.path.expanduser(model_path))
         if not model_path:
             on_log("[ERROR] No model selected.", "llama")
@@ -1580,24 +1605,45 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
         server_host = (config.get("server_host") or "127.0.0.1").strip()
         server_port = int(config.get("server_port") or 18080)
-        config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
-        config["llm_url"] = config["openai_base_url"]
-        if config.get("execution_target", "local") != "local":
-            on_log(
-                "[WARN] Managed llama-server starts on the ModelScope host; shell commands still use the configured target.",
-                "llama",
-            )
+        if not use_remote_server:
+            config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
+            config["llm_url"] = config["openai_base_url"]
+            if exec_target == "pct":
+                on_log(
+                    "[WARN] Managed llama-server does not support launching inside a PCT "
+                    "container; it starts on the ModelScope host instead. Shell commands "
+                    "still use the configured target.",
+                    "llama",
+                )
         try:
-            managed_server_proc = _start_managed_llama_server(
-                binary,
-                model_path,
-                int(tokens),
-                server_port,
-                server_host,
-                lambda msg: on_log(msg, "llama"),
-                custom_flags=custom_flags,
-                advanced_flags=_managed_llama_server_advanced_flags(config),
-            )
+            if use_remote_server:
+                from core.remote_server import start_remote_managed_llama_server
+                managed_server_proc = start_remote_managed_llama_server(
+                    env,
+                    binary,
+                    model_path,
+                    int(tokens),
+                    server_port,
+                    server_host,
+                    lambda msg: on_log(msg, "llama"),
+                    custom_flags=custom_flags,
+                    advanced_flags=_managed_llama_server_advanced_flags(config),
+                    ready_timeout=float(config.get("server_ready_timeout") or 300),
+                )
+                config["openai_base_url"] = f"http://127.0.0.1:{managed_server_proc.local_port}"
+                config["llm_url"] = config["openai_base_url"]
+            else:
+                managed_server_proc = _start_managed_llama_server(
+                    binary,
+                    model_path,
+                    int(tokens),
+                    server_port,
+                    server_host,
+                    lambda msg: on_log(msg, "llama"),
+                    custom_flags=custom_flags,
+                    advanced_flags=_managed_llama_server_advanced_flags(config),
+                    ready_timeout=float(config.get("server_ready_timeout") or 300),
+                )
         except Exception as exc:
             on_log(f"[ERROR] Failed to start managed llama-server: {exc}", "llama")
             telemetry["run_aborted"] = True

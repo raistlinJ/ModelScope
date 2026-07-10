@@ -11,7 +11,7 @@ HTTP or subprocess calls happen.
 import pytest
 from unittest.mock import MagicMock, call, patch
 from core.evaluator import run_llama_cli_evaluation
-from core.environment import LocalEnvironment
+from core.environment import LocalEnvironment, SSHEnvironment
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -20,6 +20,16 @@ def _env(stdout="response text", stderr="", exit_code=0):
     env = MagicMock(spec=LocalEnvironment)
     env.execute.return_value = {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
     env.is_remote_caf = False
+    return env
+
+
+def _ssh_env(stdout="response text", stderr="", exit_code=0, host="arlsouth4.utep.edu"):
+    """spec=SSHEnvironment so isinstance(env, SSHEnvironment) checks in
+    evaluator.py (used to gate remote managed-server launch) pass."""
+    env = MagicMock(spec=SSHEnvironment)
+    env.execute.return_value = {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
+    env.is_remote_caf = True
+    env.host = host
     return env
 
 
@@ -443,6 +453,188 @@ class TestRunLlamaCLIBinaryAutoCorrect:
         assert kwargs["advanced_flags"] == "--temp 0.55"
         assert kwargs["custom_flags"] == "--temp 0.1"
 
+    def test_llama_server_bot_forwards_configured_ready_timeout(self):
+        """The UI's "Server Startup Timeout" setting must actually reach
+        _start_managed_llama_server — a slow-loading model should get the
+        user's configured wait, not a hardcoded default."""
+        env = _env()
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
+            mock_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        server_ready_timeout=600,
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        assert mock_start.call_args.kwargs["ready_timeout"] == 600.0
+
+    def test_llama_server_bot_defaults_ready_timeout_to_five_minutes(self):
+        env = _env()
+        with patch("core.evaluator._start_managed_llama_server") as mock_start:
+            mock_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        assert mock_start.call_args.kwargs["ready_timeout"] == 300.0
+
+
+class TestManagedLlamaServerRemoteDispatch:
+    """execution_target=ssh must launch the managed server on that remote
+    host (core.remote_server) instead of locally — this is what actually
+    makes Execution Target=SSH do something for the managed server itself,
+    not just for shell commands."""
+
+    def test_ssh_target_dispatches_to_remote_launcher(self):
+        env = _ssh_env()
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        with patch("core.remote_server.start_remote_managed_llama_server") as mock_remote_start, \
+             patch("core.evaluator._start_managed_llama_server") as mock_local_start:
+            mock_remote_start.return_value = remote_proc
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="ssh",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="~/.cache/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        mock_remote_start.assert_called_once()
+        mock_local_start.assert_not_called()
+        args = mock_remote_start.call_args.args
+        assert args[0] is env
+        assert args[1] == "/opt/llama.cpp/llama-server"
+        # Remote model path must NOT be locally abspath'd/expanduser'd — it's
+        # resolved on the remote host's own filesystem, not this one's.
+        assert args[2] == "~/.cache/models/server.gguf"
+
+    def test_ssh_target_uses_tunnelled_local_port_as_base_url(self):
+        env = _ssh_env()
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        with patch("core.remote_server.start_remote_managed_llama_server", return_value=remote_proc):
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": "hi"}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="ssh",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+        assert mock_stream.call_args.kwargs["base_url"] == "http://127.0.0.1:54321"
+
+    def test_ssh_target_teardown_calls_remote_handle_terminate(self):
+        env = _ssh_env()
+        remote_proc = MagicMock()
+        remote_proc.local_port = 54321
+        with patch("core.remote_server.start_remote_managed_llama_server", return_value=remote_proc):
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="ssh",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+        remote_proc.terminate.assert_called_once()
+
+    def test_local_target_still_dispatches_to_local_launcher(self):
+        """Regression: adding the ssh branch must not change local behavior."""
+        env = _env()
+        with patch("core.remote_server.start_remote_managed_llama_server") as mock_remote_start, \
+             patch("core.evaluator._start_managed_llama_server") as mock_local_start:
+            mock_local_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="local",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+        mock_local_start.assert_called_once()
+        mock_remote_start.assert_not_called()
+
+    def test_pct_target_falls_back_to_local_with_warning(self):
+        """PCT is out of scope for remote server launch (container network
+        namespace can't be port-forwarded to like an SSH host can) — it must
+        keep using the existing local-launch behavior, unchanged."""
+        env = MagicMock()
+        env.is_remote_caf = False
+        with patch("core.remote_server.start_remote_managed_llama_server") as mock_remote_start, \
+             patch("core.evaluator._start_managed_llama_server") as mock_local_start:
+            mock_local_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                logs = []
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="pct",
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    lambda msg, tag=None: logs.append(msg),
+                )
+        mock_local_start.assert_called_once()
+        mock_remote_start.assert_not_called()
+        assert any("does not support launching inside a PCT" in m for m in logs)
+
 
 class TestManagedLlamaServerAdvancedFlags:
     """core.evaluator._managed_llama_server_advanced_flags in isolation."""
@@ -495,6 +687,98 @@ class TestManagedLlamaServerAdvancedFlags:
         from core.evaluator import _managed_llama_server_advanced_flags
         assert "-fa on" in _managed_llama_server_advanced_flags(self._base_cfg(flash_attn=True))
         assert "-fa" not in _managed_llama_server_advanced_flags(self._base_cfg(flash_attn=False))
+
+
+class TestStartManagedLlamaServerReadiness:
+    """core.evaluator._start_managed_llama_server's readiness poll.
+
+    subprocess.Popen and requests.get are mocked so no real process or HTTP
+    call happens; time.sleep is mocked so a long ready_timeout doesn't
+    actually block the test suite for that long.
+    """
+
+    def _make_proc(self, exit_code=None):
+        proc = MagicMock()
+        proc.poll.return_value = exit_code
+        proc.stderr.read.return_value = b"model failed to load: bad gguf"
+        return proc
+
+    def test_default_timeout_is_five_minutes(self):
+        import inspect
+        from core.evaluator import _start_managed_llama_server
+        sig = inspect.signature(_start_managed_llama_server)
+        assert sig.parameters["ready_timeout"].default == 300.0
+
+    @patch("core.evaluator.time.sleep")
+    @patch("core.evaluator.requests.get")
+    @patch("core.evaluator.subprocess.Popen")
+    def test_ready_on_first_health_check_returns_immediately(self, mock_popen, mock_get, mock_sleep):
+        from core.evaluator import _start_managed_llama_server
+        mock_popen.return_value = self._make_proc()
+        mock_get.return_value = MagicMock(status_code=200)
+
+        proc = _start_managed_llama_server(
+            "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+        )
+
+        assert proc is mock_popen.return_value
+        mock_sleep.assert_not_called()
+
+    @patch("core.evaluator.time.sleep")
+    @patch("core.evaluator.requests.get", side_effect=__import__("requests").exceptions.ConnectionError)
+    @patch("core.evaluator.subprocess.Popen")
+    def test_crashed_process_fails_fast_without_waiting_out_the_timeout(
+        self, mock_popen, mock_get, mock_sleep
+    ):
+        """A process that exits immediately (bad model path, OOM, etc.) must
+        raise right away with its stderr, not silently retry for the full
+        5-minute ready_timeout."""
+        from core.evaluator import _start_managed_llama_server
+        mock_popen.return_value = self._make_proc(exit_code=1)
+
+        with pytest.raises(RuntimeError, match="exited immediately.*bad gguf"):
+            _start_managed_llama_server(
+                "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+            )
+        # Must not have looped through the retry/sleep path at all.
+        mock_sleep.assert_not_called()
+
+    @patch("core.evaluator.time.time")
+    @patch("core.evaluator.time.sleep")
+    @patch("core.evaluator.requests.get", side_effect=__import__("requests").exceptions.ConnectionError)
+    @patch("core.evaluator.subprocess.Popen")
+    def test_never_ready_raises_after_custom_timeout(
+        self, mock_popen, mock_get, mock_sleep, mock_time
+    ):
+        from core.evaluator import _start_managed_llama_server
+        mock_popen.return_value = self._make_proc(exit_code=None)  # never crashes
+        # Simulate the clock advancing past a short custom timeout.
+        mock_time.side_effect = [0, 1, 2, 3]
+
+        with pytest.raises(RuntimeError, match=r"did not become ready after 2s"):
+            _start_managed_llama_server(
+                "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+                ready_timeout=2.0,
+            )
+
+    @patch("core.evaluator.time.sleep")
+    @patch("core.evaluator.requests.get")
+    @patch("core.evaluator.subprocess.Popen")
+    def test_custom_ready_timeout_is_honored_not_hardcoded_30s(self, mock_popen, mock_get, mock_sleep):
+        """Regression: the old implementation hardcoded 30 one-second
+        attempts: bumping ready_timeout must actually change the poll
+        window, not just the error message."""
+        from core.evaluator import _start_managed_llama_server
+        mock_popen.return_value = self._make_proc()
+        mock_get.return_value = MagicMock(status_code=200)
+
+        _start_managed_llama_server(
+            "llama-server", "/models/m.gguf", 4096, 18080, "127.0.0.1", lambda m: None,
+            ready_timeout=600.0,
+        )
+        # Ready on the first check — proves the call accepted a >300s value
+        # without raising a signature/type error, and didn't need 30 retries.
+        mock_get.assert_called_once()
 
 
 # ── Startup/Completion shell command steps ────────────────────────────────────

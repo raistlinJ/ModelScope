@@ -184,6 +184,18 @@ class SSHEnvironment(BaseEnvironment):
         self._sftp   = None
         self._client = None
 
+    def get_client(self):
+        """Return the underlying paramiko SSHClient, connecting first if needed.
+
+        For callers that need raw transport access beyond execute()/read_file()/
+        write_file() — e.g. opening a "direct-tcpip" port-forward channel to
+        supervise a remote managed llama-server (see core.remote_server).
+        Reuses this environment's authenticated connection rather than opening
+        a second one.
+        """
+        self.connect()
+        return self._client
+
     @property
     def remote_cwd(self) -> str:
         return self._resolved_cwd if self._resolved_cwd is not None else self._remote_cwd
