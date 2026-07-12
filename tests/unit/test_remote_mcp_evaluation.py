@@ -38,3 +38,30 @@ def test_ssh_llama_bot_uses_tunnelled_remote_mcp_and_stops_it():
     probe.assert_called_once_with("http://127.0.0.1:43123")
     remote_mcp.terminate.assert_called_once()
     assert result["validation_passed"] is True
+
+
+def test_ssh_llama_bot_forwards_selected_builtin_tool_groups():
+    env = MagicMock(spec=SSHEnvironment)
+    env.host = "remote.example"
+    remote_mcp = MagicMock()
+    remote_mcp.local_port = 43123
+    config = {
+        "type": "llama_cli_bot",
+        "backend": "openai",
+        "execution_target": "ssh",
+        "openai_base_url": "http://model.example/v1",
+        "model_name": "model.gguf",
+        "mcp_enabled": True,
+        "mcp_servers": [
+            {"name": "Filesystem · read_file", "server": "filesystem", "tool_name": "read_file", "enabled": True},
+            {"name": "Terminal · terminal_execute", "server": "terminal", "tool_name": "terminal_execute", "enabled": False},
+        ],
+        "validation_sets": _prompt_set("hello"),
+        "cancel_requested_ref": [False],
+    }
+    with patch("core.remote_server.start_remote_managed_mcp_server", return_value=remote_mcp) as start_mcp, \
+         patch("core.evaluator.probe_mcp_server", return_value=True), \
+         patch("core.evaluator.stream_llama_cpp", return_value={"message": {"content": "done"}, "usage": {}}):
+        run_llama_cli_evaluation(env, config, lambda *args: None)
+
+    assert start_mcp.call_args.kwargs["tool_names"] == ["read_file"]

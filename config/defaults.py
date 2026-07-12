@@ -28,6 +28,7 @@ CONVERT_HF_TO_GGUF_PY  = os.environ.get(
 # MCP server script path (absolute, derived at import time)
 _GUI_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MCP_SCRIPT_PATH = os.path.join(_GUI_ROOT, "mcp-server", "index.js")
+MCP_CONFIG_PATH = os.path.join(_GUI_ROOT, "mcp-server", "mcp_config.json")
 MCP_SERVER_BASE_URL = "http://localhost:9191"
 
 # Context window

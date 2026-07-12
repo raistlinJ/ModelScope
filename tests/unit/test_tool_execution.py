@@ -165,3 +165,19 @@ class TestReadFileFallback:
         result = _execute_tool_in_env(env, "read_file", {"path": "/missing"})
         assert "error" in result
         assert "no such file" in result["error"]
+
+
+class TestTerminalExecute:
+    def test_executes_command_with_bounded_timeout(self):
+        env = _env()
+        env.execute.return_value = {"stdout": "ok", "stderr": "", "exit_code": 0}
+
+        result = _execute_tool_in_env(env, "terminal_execute", {"command": "pwd", "timeout_seconds": 999})
+
+        assert result["stdout"] == "ok"
+        env.execute.assert_called_once_with("pwd", timeout=120)
+
+    def test_rejects_empty_command(self):
+        env = _env()
+        result = _execute_tool_in_env(env, "terminal_execute", {})
+        assert result == {"error": "Command is required"}

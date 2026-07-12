@@ -1,39 +1,14 @@
 {
   "mcpServers": {
-    "custom": {
-      "label": "Custom Tools (ModelScope)",
-      "command": "node",
-      "args": ["./mcp-server/index.js"]
-    },
-    "fetch": {
-      "label": "Fetch",
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
-    },
     "filesystem": {
       "label": "Filesystem",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+      "transport": "bundled",
+      "tools": ["file_creator", "read_file", "write_file"]
     },
-    "git": {
-      "label": "Git",
-      "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "."]
-    },
-    "memory": {
-      "label": "Memory",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"]
-    },
-    "time": {
-      "label": "Time",
-      "command": "uvx",
-      "args": ["mcp-server-time"]
-    },
-    "sequentialthinking": {
-      "label": "Sequential Thinking",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    "terminal": {
+      "label": "Terminal",
+      "transport": "bundled",
+      "tools": ["terminal_execute", "run_nmap_scan"]
     }
   }
 }

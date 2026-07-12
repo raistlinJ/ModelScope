@@ -7,6 +7,8 @@ import pandas as pd
 import streamlit as st
 from core.bot_types import get_bot_plugin
 from core import llama_server
+from config.defaults import MCP_CONFIG_PATH
+from core.mcp_catalog import load_mcp_tool_config, merge_mcp_tool_selections
 
 
 
@@ -1960,60 +1962,17 @@ def _scan_models(project: dict) -> None:
 
 
 def _fetch_mcp_servers(project: dict) -> None:
-    """Read mcp_config.json from local or remote machine and populate server list."""
-    cfg_path = st.session_state.get("llama_cli_mcp_config_path", "").strip()
-    target   = st.session_state.get("llama_cli_execution_target", "local")
-    if not cfg_path:
-        st.warning("Set MCP Config Path first.")
+    """Validate a local MCP manifest and create one entry per declared tool."""
+    cfg_path = st.session_state.get("llama_cli_mcp_config_path", "").strip() or MCP_CONFIG_PATH
+    try:
+        declared = load_mcp_tool_config(cfg_path)
+    except ValueError as exc:
+        st.error(str(exc))
         return
-    import json
-    raw: dict = {}
-    if target == "local":
-        import pathlib
-        try:
-            raw = json.loads(pathlib.Path(cfg_path).read_text())
-        except Exception as exc:
-            st.error(f"Could not read {cfg_path}: {exc}")
-            return
-    else:
-        _flush_llama_cli_config(project)
-        cfg = project["config"]
-        from core.environment import SSHEnvironment
-        env = SSHEnvironment(
-            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
-            username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
-            key_path=cfg.get("ssh_key_path") or None,
-            remote_cwd=".",
-        )
-        try:
-            res = env.execute(f"cat {shlex.quote(cfg_path)}", timeout=10)
-        finally:
-            env.close()
-        if res["exit_code"] != 0:
-            st.error(f"Could not read remote file: {res['stderr']}")
-            return
-        try:
-            raw = json.loads(res["stdout"])
-        except json.JSONDecodeError as exc:
-            st.error(f"Invalid JSON in {cfg_path}: {exc}")
-            return
-    if not isinstance(raw, dict):
-        st.error(
-            f"Expected a JSON object in that file but got `{type(raw).__name__}`. "
-            'MCP config must be `{"mcpServers": {"name": {"command": "...", "args": [...]}}}}`.'
-        )
-        return
-    servers = []
-    for name, spec in raw.get("mcpServers", {}).items():
-        servers.append({
-            "name":    name,
-            "command": spec.get("command", ""),
-            "args":    spec.get("args", []),
-            "enabled": True,
-        })
-    st.session_state["llama_cli_mcp_servers"] = servers
-    st.success(f"Fetched {len(servers)} MCP server(s).")
+    st.session_state["llama_cli_mcp_servers"] = merge_mcp_tool_selections(
+        declared, st.session_state.get("llama_cli_mcp_servers", []),
+    )
+    st.success(f"Loaded and validated {len(declared)} MCP tool(s).")
 
 
 def _test_llama_cli_run(project: dict) -> None:
@@ -2428,6 +2387,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 if _cmd:
                     st.code(_cmd, language="bash")
 
+    _render_mcp_tool_panel(project, "llama_cli")
+
     with st.expander("Commands", expanded=True):
         tab_llm, tab_startup, tab_completion = st.tabs(
             ["🤖 LLM Judge", "▶  Startup", "⏹  Completion"]
@@ -2454,41 +2415,6 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 pfx="llama_completion",
                 placeholder="e.g. rm -rf /tmp/test_workdir",
             )
-
-    _mcp_en = st.session_state.get("llama_cli_mcp_enabled", False)
-    with st.expander("MCP Servers", expanded=_mcp_en):
-        en_mcp = st.toggle("Enable MCP Servers", key="llama_cli_mcp_enabled", help="Turn on MCP support for this runtime.")
-        st.caption("Discover MCP servers available on the target machine.")
-        if st.session_state.get("llama_cli_execution_target") == "ssh":
-            st.caption("During execution, ModelScope deploys its built-in MCP broker to the SSH target and reaches it through a private tunnel.")
-        col_path, col_fetch = st.columns([4, 1])
-        with col_path:
-            st.text_input(
-                "MCP Config Path",
-                key="llama_cli_mcp_config_path",
-                placeholder="/home/user/.mcp/config.json",
-                help="Path to a mcp_config.json file on the target machine.",
-                label_visibility="collapsed",
-                disabled=not en_mcp,
-            )
-        with col_fetch:
-            if st.button("Fetch", key="btn_llama_fetch_mcp", use_container_width=True, disabled=not en_mcp):
-                _fetch_mcp_servers(project)
-
-        servers: list = st.session_state.get("llama_cli_mcp_servers", [])
-        if servers:
-            st.caption(f"{len(servers)} server(s) discovered. Enable the ones to use:")
-            for i, srv in enumerate(servers):
-                enabled = st.checkbox(
-                    srv["name"],
-                    value=srv.get("enabled", True),
-                    key=f"llama_mcp_en_{i}",
-                    disabled=not en_mcp,
-                )
-                servers[i]["enabled"] = enabled
-            st.session_state["llama_cli_mcp_servers"] = servers
-        else:
-            st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
 
     _flush_llama_cli_config(project)
 
@@ -2849,61 +2775,64 @@ def _scan_llama_server_models(project: dict) -> None:
 
 
 def _fetch_llama_server_mcp_servers(project: dict) -> None:
-    """Read an MCP config from the selected target and populate server choices."""
-    cfg_path = st.session_state.get("llama_server_mcp_config_path", "").strip()
-    target   = st.session_state.get("llama_server_execution_target", "local")
-    if not cfg_path:
-        st.warning("Set MCP Config Path first.")
+    """Validate a local MCP manifest and create one entry per declared tool."""
+    cfg_path = st.session_state.get("llama_server_mcp_config_path", "").strip() or MCP_CONFIG_PATH
+    try:
+        declared = load_mcp_tool_config(cfg_path)
+    except ValueError as exc:
+        st.error(str(exc))
         return
-    if target == "local":
-        import pathlib
-        try:
-            raw = json.loads(pathlib.Path(cfg_path).expanduser().read_text())
-        except Exception as exc:
-            st.error(f"Could not read {cfg_path}: {exc}")
-            return
-    elif target == "ssh":
-        import shlex
-        from core.environment import SSHEnvironment
-        _flush_llama_server_config(project)
-        cfg = project["config"]
-        env = SSHEnvironment(
-            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
-            username=cfg.get("ssh_user", "root"), password=cfg.get("ssh_password") or None,
-            key_path=cfg.get("ssh_key_path") or None, remote_cwd=".",
-        )
-        try:
-            res = env.execute(f"cat {shlex.quote(cfg_path)}", timeout=10)
-        finally:
-            env.close()
-        if res["exit_code"] != 0:
-            st.error(f"Could not read remote file: {res['stderr']}")
-            return
-        try:
-            raw = json.loads(res["stdout"])
-        except json.JSONDecodeError as exc:
-            st.error(f"Invalid JSON in {cfg_path}: {exc}")
-            return
-    else:
-        st.warning("Remote MCP configuration discovery currently supports Local and SSH targets.")
-        return
-    if not isinstance(raw, dict):
-        st.error(
-            f"Expected a JSON object in that file but got `{type(raw).__name__}`. "
-            'MCP config must be `{"mcpServers": {"name": {"command": "...", "args": [...]}}}`.'
-        )
-        return
-    servers = []
-    for name, spec in raw.get("mcpServers", {}).items():
-        servers.append({
-            "name": name,
-            "command": spec.get("command", ""),
-            "args": spec.get("args", []),
-            "enabled": True,
-        })
-    st.session_state["llama_server_mcp_servers"] = servers
+    st.session_state["llama_server_mcp_servers"] = merge_mcp_tool_selections(
+        declared, st.session_state.get("llama_server_mcp_servers", []),
+    )
     _flush_llama_server_config(project)
-    st.success(f"Fetched {len(servers)} MCP server(s).")
+    st.success(f"Loaded and validated {len(declared)} MCP tool(s).")
+
+
+def _render_mcp_tool_panel(project: dict, prefix: str) -> None:
+    """Render the manifest-backed MCP tool checkboxes for a llama bot."""
+    config_key = f"{prefix}_mcp_config_path"
+    servers_key = f"{prefix}_mcp_servers"
+    enabled_key = f"{prefix}_mcp_enabled"
+    is_server = prefix == "llama_server"
+    fetch = _fetch_llama_server_mcp_servers if is_server else _fetch_mcp_servers
+    button_key = "btn_llama_server_fetch_mcp" if is_server else "btn_llama_fetch_mcp"
+
+    if not st.session_state.get(config_key):
+        st.session_state[config_key] = MCP_CONFIG_PATH
+    panel_enabled = st.session_state.get(enabled_key, False)
+    with st.expander("MCP Servers", expanded=panel_enabled):
+        enabled = st.toggle("Enable MCP Servers", key=enabled_key, help="Turn on MCP support for this runtime.")
+        st.caption("The bundled MCP manifest is used by default. Supply a local override manifest to change the selectable tools.")
+        if st.session_state.get(f"{prefix}_execution_target") == "ssh":
+            st.caption("During execution, ModelScope deploys its built-in MCP broker to the SSH target and reaches it through a private tunnel.")
+        col_path, col_validate = st.columns([4, 1])
+        with col_path:
+            st.text_input(
+                "MCP Tool Config", key=config_key,
+                help="Local path to a validated ModelScope MCP manifest.",
+                label_visibility="collapsed", disabled=not enabled,
+            )
+        with col_validate:
+            if st.button("Validate", key=button_key, use_container_width=True, disabled=not enabled):
+                fetch(project)
+
+        try:
+            declared_tools = load_mcp_tool_config(st.session_state[config_key])
+            servers = merge_mcp_tool_selections(declared_tools, st.session_state.get(servers_key, []))
+        except ValueError as exc:
+            servers = []
+            st.error(str(exc))
+        if servers:
+            st.caption("Enable the tools available to this bot:")
+            for tool in servers:
+                tool["enabled"] = st.checkbox(
+                    tool["name"], value=tool.get("enabled", True),
+                    key=f"{prefix}_mcp_en_{tool['tool_name']}", disabled=not enabled,
+                )
+            st.session_state[servers_key] = servers
+        else:
+            st.caption("No valid MCP tools are available from this manifest.")
 
 
 def _test_llama_server_run(project: dict) -> None:
@@ -3325,6 +3254,9 @@ def _render_llama_server_runtime(project: dict) -> None:
                 if _cmd:
                     st.code(_cmd, language="bash")
 
+        st.divider()
+        _render_mcp_tool_panel(project, "llama_server")
+
     with st.expander("Commands", expanded=True):
         tab_llm, tab_startup, tab_completion = st.tabs(
             ["🤖 LLM Judge", "▶  Startup", "⏹  Completion"]
@@ -3351,45 +3283,6 @@ def _render_llama_server_runtime(project: dict) -> None:
                 pfx="llama_server_completion",
                 placeholder="e.g. rm -rf /tmp/test_workdir",
             )
-
-    mcp_enabled = st.session_state.get("llama_server_mcp_enabled", False)
-    with st.expander("MCP Servers", expanded=mcp_enabled):
-        enabled = st.toggle(
-            "Enable MCP Servers",
-            key="llama_server_mcp_enabled",
-            help="Turn on MCP support for this runtime.",
-        )
-        st.caption("Discover MCP servers available on the selected target machine.")
-        if st.session_state.get("llama_server_execution_target") == "ssh":
-            st.caption("During execution, ModelScope deploys its built-in MCP broker to the SSH target and reaches it through a private tunnel.")
-        col_path, col_fetch = st.columns([4, 1])
-        with col_path:
-            st.text_input(
-                "MCP Config Path",
-                key="llama_server_mcp_config_path",
-                placeholder="/home/user/.mcp/config.json",
-                help="Path to a mcp_config.json file on the selected target machine.",
-                label_visibility="collapsed",
-                disabled=not enabled,
-            )
-        with col_fetch:
-            if st.button("Fetch", key="btn_llama_server_fetch_mcp", use_container_width=True, disabled=not enabled):
-                _fetch_llama_server_mcp_servers(project)
-
-        servers: list = st.session_state.get("llama_server_mcp_servers", [])
-        if servers:
-            st.caption(f"{len(servers)} server(s) discovered. Enable the ones to use:")
-            for i, server in enumerate(servers):
-                server_enabled = st.checkbox(
-                    server["name"],
-                    value=server.get("enabled", True),
-                    key=f"llama_server_mcp_en_{i}",
-                    disabled=not enabled,
-                )
-                servers[i]["enabled"] = server_enabled
-            st.session_state["llama_server_mcp_servers"] = servers
-        else:
-            st.caption("No servers fetched yet. Set the config path and click **Fetch**.")
 
     _flush_llama_server_config(project)
 

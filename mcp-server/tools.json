@@ -1,55 +1,26 @@
 [
   {
-    "server": "custom",
-    "name": "run_nmap_scan",
-    "description": "Runs an nmap scan against any specified target (IP, hostname, or CIDR). Only standard, non-destructive flags are allowed.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "target": { "type": "string", "description": "Target IP, hostname, or CIDR block (e.g. 'scanme.nmap.org', '192.168.1.0/24', '127.0.0.1')." },
-        "arguments": { "type": "string", "description": "Optional nmap flags (e.g. '-F', '-p 80,443', '-sV', '-O'). Restricted to safe, non-destructive options.", "default": "-F" }
-      },
-      "required": ["target"]
-    }
-  },
-  {
-    "server": "custom",
+    "server": "filesystem",
     "name": "file_creator",
-    "description": "Resolves directories recursively and writes the specified content into the target file path.",
+    "description": "Create or overwrite a text file, creating parent directories as needed.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "Target file path (can be relative or absolute). Parent directories will be created recursively if needed." },
-        "content": { "type": "string", "description": "Content to write to the file." }
+        "path": {"type": "string", "description": "Absolute or target-relative file path."},
+        "content": {"type": "string", "description": "Text to write."}
       },
       "required": ["path", "content"]
     }
   },
   {
-    "server": "fetch",
-    "name": "fetch",
-    "description": "Fetches a URL from the internet and optionally extracts its contents as markdown.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "url": { "type": "string", "description": "URL to fetch." },
-        "max_length": { "type": "integer", "description": "Maximum number of characters to return.", "default": 5000 },
-        "start_index": { "type": "integer", "description": "Start content from this character index.", "default": 0 },
-        "raw": { "type": "boolean", "description": "Return raw HTML instead of markdown.", "default": false }
-      },
-      "required": ["url"]
-    }
-  },
-  {
     "server": "filesystem",
     "name": "read_file",
-    "description": "Read the complete contents of a file from the file system as text. Only works within allowed directories.",
+    "description": "Read a text file on the target machine.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "head": { "type": "integer", "description": "If provided, returns only the first N lines." },
-        "tail": { "type": "integer", "description": "If provided, returns only the last N lines." }
+        "path": {"type": "string", "description": "Absolute or target-relative file path."},
+        "max_chars": {"type": "integer", "description": "Maximum characters returned (default 20000).", "default": 20000}
       },
       "required": ["path"]
     }
@@ -57,457 +28,40 @@
   {
     "server": "filesystem",
     "name": "write_file",
-    "description": "Create a new file or completely overwrite an existing file with new content. Only works within allowed directories.",
+    "description": "Create or completely overwrite a text file on the target machine.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "content": { "type": "string" }
+        "path": {"type": "string", "description": "Absolute or target-relative file path."},
+        "content": {"type": "string", "description": "Text to write."}
       },
       "required": ["path", "content"]
     }
   },
   {
-    "server": "filesystem",
-    "name": "edit_file",
-    "description": "Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing changes. Only works within allowed directories.",
+    "server": "terminal",
+    "name": "terminal_execute",
+    "description": "Execute a shell command on the target machine and return stdout, stderr, and its exit code.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "edits": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "oldText": { "type": "string", "description": "Text to search for - must match exactly" },
-              "newText": { "type": "string", "description": "Text to replace with" }
-            },
-            "required": ["oldText", "newText"]
-          }
-        },
-        "dryRun": { "type": "boolean", "default": false, "description": "Preview changes using git-style diff format" }
+        "command": {"type": "string", "description": "Shell command to execute in the target working directory."},
+        "timeout_seconds": {"type": "integer", "description": "Execution timeout in seconds (1-120, default 30).", "default": 30, "minimum": 1, "maximum": 120}
       },
-      "required": ["path", "edits"]
+      "required": ["command"]
     }
   },
   {
-    "server": "filesystem",
-    "name": "create_directory",
-    "description": "Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. Only works within allowed directories.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "path": { "type": "string" } },
-      "required": ["path"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "list_directory",
-    "description": "Get a detailed listing of all files and directories in a specified path. Results distinguish between files and directories with [FILE] and [DIR] prefixes. Only works within allowed directories.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "path": { "type": "string" } },
-      "required": ["path"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "directory_tree",
-    "description": "Get a recursive tree view of files and directories as a JSON structure. Only works within allowed directories.",
+    "server": "terminal",
+    "name": "run_nmap_scan",
+    "description": "Run a non-destructive nmap scan on the target machine.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "excludePatterns": { "type": "array", "items": { "type": "string" }, "default": [] }
+        "target": {"type": "string", "description": "IP address, hostname, or CIDR."},
+        "arguments": {"type": "string", "description": "Safe nmap flags.", "default": "-F"}
       },
-      "required": ["path"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "move_file",
-    "description": "Move or rename files and directories. Both source and destination must be within allowed directories.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "source": { "type": "string" },
-        "destination": { "type": "string" }
-      },
-      "required": ["source", "destination"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "search_files",
-    "description": "Recursively search for files and directories matching a glob pattern. Only searches within allowed directories.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "path": { "type": "string" },
-        "pattern": { "type": "string" },
-        "excludePatterns": { "type": "array", "items": { "type": "string" }, "default": [] }
-      },
-      "required": ["path", "pattern"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "get_file_info",
-    "description": "Retrieve detailed metadata about a file or directory including size, creation time, last modified time, and permissions. Only works within allowed directories.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "path": { "type": "string" } },
-      "required": ["path"]
-    }
-  },
-  {
-    "server": "filesystem",
-    "name": "list_allowed_directories",
-    "description": "Returns the list of directories that this server is allowed to access.",
-    "inputSchema": { "type": "object", "properties": {} }
-  },
-  {
-    "server": "git",
-    "name": "git_status",
-    "description": "Shows the working tree status.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "repo_path": { "type": "string", "description": "Path to the git repository." } },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_diff_unstaged",
-    "description": "Shows changes in the working directory that are not yet staged.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "repo_path": { "type": "string" } },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_diff_staged",
-    "description": "Shows changes that are staged for commit.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "repo_path": { "type": "string" } },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_diff",
-    "description": "Shows differences between branches or commits.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "target": { "type": "string", "description": "Branch name, commit hash, or other git ref to diff against." }
-      },
-      "required": ["repo_path", "target"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_commit",
-    "description": "Records changes to the repository.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "message": { "type": "string", "description": "Commit message." }
-      },
-      "required": ["repo_path", "message"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_add",
-    "description": "Adds file contents to the staging area.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "files": { "type": "array", "items": { "type": "string" }, "description": "List of file paths to stage." }
-      },
-      "required": ["repo_path", "files"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_reset",
-    "description": "Unstages all staged changes.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "repo_path": { "type": "string" } },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_log",
-    "description": "Shows the commit logs.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "max_count": { "type": "integer", "description": "Maximum number of commits to show.", "default": 10 }
-      },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_create_branch",
-    "description": "Creates a new branch from an optional base branch.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "branch_name": { "type": "string" },
-        "base_branch": { "type": "string", "description": "Optional base branch to create from." }
-      },
-      "required": ["repo_path", "branch_name"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_checkout",
-    "description": "Switches branches.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "branch_name": { "type": "string" }
-      },
-      "required": ["repo_path", "branch_name"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_show",
-    "description": "Shows the contents of a commit.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "revision": { "type": "string", "description": "Commit hash or ref to show." }
-      },
-      "required": ["repo_path", "revision"]
-    }
-  },
-  {
-    "server": "git",
-    "name": "git_branch",
-    "description": "List, create, or manage Git branches.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "repo_path": { "type": "string" },
-        "all": { "type": "boolean", "description": "Show all branches including remotes.", "default": false }
-      },
-      "required": ["repo_path"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "create_entities",
-    "description": "Create multiple new entities in the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "entities": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string" },
-              "entityType": { "type": "string" },
-              "observations": { "type": "array", "items": { "type": "string" } }
-            },
-            "required": ["name", "entityType", "observations"]
-          }
-        }
-      },
-      "required": ["entities"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "create_relations",
-    "description": "Create multiple new relations between entities in the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "relations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "from": { "type": "string" },
-              "to": { "type": "string" },
-              "relationType": { "type": "string" }
-            },
-            "required": ["from", "to", "relationType"]
-          }
-        }
-      },
-      "required": ["relations"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "add_observations",
-    "description": "Add new observations to existing entities in the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "observations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "entityName": { "type": "string" },
-              "contents": { "type": "array", "items": { "type": "string" } }
-            },
-            "required": ["entityName", "contents"]
-          }
-        }
-      },
-      "required": ["observations"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "delete_entities",
-    "description": "Delete multiple entities and their associated relations from the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "entityNames": { "type": "array", "items": { "type": "string" } }
-      },
-      "required": ["entityNames"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "delete_observations",
-    "description": "Delete specific observations from entities in the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "deletions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "entityName": { "type": "string" },
-              "observations": { "type": "array", "items": { "type": "string" } }
-            },
-            "required": ["entityName", "observations"]
-          }
-        }
-      },
-      "required": ["deletions"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "delete_relations",
-    "description": "Delete multiple relations from the knowledge graph.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "relations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "from": { "type": "string" },
-              "to": { "type": "string" },
-              "relationType": { "type": "string" }
-            },
-            "required": ["from", "to", "relationType"]
-          }
-        }
-      },
-      "required": ["relations"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "read_graph",
-    "description": "Read the entire knowledge graph.",
-    "inputSchema": { "type": "object", "properties": {} }
-  },
-  {
-    "server": "memory",
-    "name": "search_nodes",
-    "description": "Search for nodes in the knowledge graph based on a query.",
-    "inputSchema": {
-      "type": "object",
-      "properties": { "query": { "type": "string" } },
-      "required": ["query"]
-    }
-  },
-  {
-    "server": "memory",
-    "name": "open_nodes",
-    "description": "Open specific nodes in the knowledge graph by their names.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "names": { "type": "array", "items": { "type": "string" } }
-      },
-      "required": ["names"]
-    }
-  },
-  {
-    "server": "time",
-    "name": "get_current_time",
-    "description": "Get current time in a specific timezone.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "timezone": { "type": "string", "description": "IANA timezone name (e.g., 'America/New_York', 'Europe/London')." }
-      },
-      "required": ["timezone"]
-    }
-  },
-  {
-    "server": "time",
-    "name": "convert_time",
-    "description": "Convert time between timezones.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "source_timezone": { "type": "string", "description": "Source IANA timezone name." },
-        "time": { "type": "string", "description": "Time to convert in 24-hour format (HH:MM)." },
-        "target_timezone": { "type": "string", "description": "Target IANA timezone name." }
-      },
-      "required": ["source_timezone", "time", "target_timezone"]
-    }
-  },
-  {
-    "server": "sequentialthinking",
-    "name": "sequentialthinking",
-    "description": "A tool for dynamic and reflective problem-solving through sequential thoughts. Breaks complex problems into manageable steps with the ability to revise and branch thinking.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "thought": { "type": "string", "description": "The current thinking step." },
-        "nextThoughtNeeded": { "type": "boolean", "description": "Whether another thought step is needed." },
-        "thoughtNumber": { "type": "integer", "description": "Current thought number.", "minimum": 1 },
-        "totalThoughts": { "type": "integer", "description": "Estimated total thoughts needed.", "minimum": 1 },
-        "isRevision": { "type": "boolean", "description": "Whether this revises previous thinking." },
-        "revisesThought": { "type": "integer", "description": "Which thought number is being reconsidered." },
-        "branchFromThought": { "type": "integer", "description": "Thought number this branches from." },
-        "branchId": { "type": "string", "description": "Branch identifier." }
-      },
-      "required": ["thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"]
+      "required": ["target"]
     }
   }
 ]

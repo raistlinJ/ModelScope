@@ -4,49 +4,6 @@
  */
 
 /**
- * Tool schemas for the ListTools endpoint
- */
-export const toolsList = [
-  {
-    name: "run_nmap_scan",
-    description: "Runs an nmap scan against a specified target. Only standard, non-destructive flags are allowed.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        target: {
-          type: "string",
-          description: "Target IP, hostname, or CIDR block (e.g. 'scanme.nmap.org', '192.168.1.0/24')."
-        },
-        arguments: {
-          type: "string",
-          description: "Optional nmap flags (e.g. '-F', '-p 80,443', '-sV'). Restricted to safe options.",
-          default: "-F"
-        }
-      },
-      required: ["target"]
-    }
-  },
-  {
-    name: "file_creator",
-    description: "Resolves directories recursively and writes the specified content into the target file path.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Target file path (can be relative or absolute). Directories will be created recursively if needed."
-        },
-        content: {
-          type: "string",
-          description: "Content to write to the file."
-        }
-      },
-      required: ["path", "content"]
-    }
-  },
-];
-
-/**
  * Tool handlers for the CallTool endpoint
  */
 export const toolHandlers = {
@@ -157,6 +114,82 @@ export const toolHandlers = {
           }, null, 2)
         }],
         isError: true
+      };
+    }
+  },
+
+  read_file: async (request) => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const filePath = request.params.arguments?.path;
+    const requestedMax = Number(request.params.arguments?.max_chars ?? 20000);
+    const maxChars = Number.isFinite(requestedMax) ? Math.max(1, Math.min(Math.floor(requestedMax), 100000)) : 20000;
+    if (!filePath) {
+      return { content: [{ type: "text", text: "Error: File path is required." }], isError: true };
+    }
+    try {
+      const resolvedPath = path.resolve(filePath);
+      const content = fs.readFileSync(resolvedPath, "utf8");
+      const truncated = content.length > maxChars;
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ path: resolvedPath, content: content.slice(0, maxChars), truncated }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to read file: ${error.message}` }], isError: true };
+    }
+  },
+
+  write_file: async (request) => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const filePath = request.params.arguments?.path;
+    const content = request.params.arguments?.content;
+    if (!filePath || content === undefined) {
+      return { content: [{ type: "text", text: "Error: path and content are required." }], isError: true };
+    }
+    try {
+      const resolvedPath = path.resolve(filePath);
+      fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+      fs.writeFileSync(resolvedPath, content, "utf8");
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ status: "success", path: resolvedPath, bytes_written: Buffer.byteLength(content, "utf8") }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to write file: ${error.message}` }], isError: true };
+    }
+  },
+
+  terminal_execute: async (request) => {
+    const command = request.params.arguments?.command;
+    const requestedTimeout = Number(request.params.arguments?.timeout_seconds ?? 30);
+    const timeoutSeconds = Number.isFinite(requestedTimeout)
+      ? Math.max(1, Math.min(Math.floor(requestedTimeout), 120))
+      : 30;
+    if (!command || !command.trim()) {
+      return { content: [{ type: "text", text: "Error: Command is required." }], isError: true };
+    }
+    try {
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const { stdout, stderr } = await promisify(exec)(command, {
+        cwd: process.cwd(), timeout: timeoutSeconds * 1000, maxBuffer: 1024 * 1024,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify({ stdout, stderr, exit_code: 0 }, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ stdout: error.stdout || "", stderr: error.stderr || error.message, exit_code: error.code ?? 1 }, null, 2),
+        }],
+        isError: true,
       };
     }
   },

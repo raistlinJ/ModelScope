@@ -90,11 +90,30 @@ class TestStartRemoteManagedMCPServer:
         try:
             assert isinstance(handle, RemoteManagedServer)
             assert handle.local_port > 0
-            assert env.write_file.call_count == 5
+            # Runtime files plus the selected MCP manifest are staged remotely.
+            assert env.write_file.call_count == 6
             commands = [call.args[0] for call in env.execute.call_args_list]
             assert any("npm ci --omit=dev" in command for command in commands)
             assert any("MCP_PORT=39191" in command for command in commands)
             assert any("node /home/student/.modelscope/mcp-server/index.js" in command for command in commands)
+        finally:
+            handle.kill()
+
+    def test_passes_selected_tool_groups_to_remote_mcp(self):
+        env = _fake_env([
+            {"stdout": "/home/student", "stderr": "", "exit_code": 0},
+            {"stdout": "", "stderr": "", "exit_code": 0},
+            {"stdout": "", "stderr": "", "exit_code": 0},
+            {"stdout": "39191", "stderr": "", "exit_code": 0},
+            {"stdout": "4242", "stderr": "", "exit_code": 0},
+            {"stdout": "ALIVE", "stderr": "", "exit_code": 0},
+        ])
+        env.write_file.return_value = {}
+        with patch("core.remote_server.requests.post", return_value=MagicMock(ok=True)):
+            handle = start_remote_managed_mcp_server(env, lambda m: None, tool_names=["read_file"])
+        try:
+            launch_cmd = env.execute.call_args_list[4].args[0]
+            assert "MCP_TOOL_NAMES=read_file" in launch_cmd
         finally:
             handle.kill()
 

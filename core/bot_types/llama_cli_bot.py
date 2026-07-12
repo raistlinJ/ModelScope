@@ -12,6 +12,7 @@ from core.bot_types.base import (
 )
 from core.bot_types.bashbot import BashBotPlugin
 from core.environment import BaseEnvironment
+from config.defaults import MCP_CONFIG_PATH
 
 
 LLAMA_CLI_STATE_KEY_MAP: dict[str, str] = {
@@ -133,7 +134,7 @@ LLAMA_CLI_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_cli_openai_verify_ssl":   True,
     "llama_cli_openai_api_key":      "",
     "llama_cli_mcp_enabled":         False,
-    "llama_cli_mcp_config_path":     "",
+    "llama_cli_mcp_config_path":     MCP_CONFIG_PATH,
     "llama_cli_mcp_servers":         [],
     "llama_cli_prompts":             [],
     "llama_cli_commands":            [],
@@ -194,7 +195,7 @@ class LlamaCliBotPlugin(BashBotPlugin):
                 "openai_verify_ssl": True,
                 "openai_api_key": "",
                 "mcp_enabled": False,
-                "mcp_config_path": "",
+                "mcp_config_path": MCP_CONFIG_PATH,
                 "mcp_servers": [],
                 "prompts": [],
                 "commands": [],

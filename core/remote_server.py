@@ -29,7 +29,7 @@ import requests
 
 from core.environment import SSHEnvironment
 from core.llama_metrics import strip_user_metrics_flag
-from config.defaults import MCP_SCRIPT_PATH
+from config.defaults import MCP_CONFIG_PATH, MCP_SCRIPT_PATH
 
 
 class _ForwardHandler(socketserver.BaseRequestHandler):
@@ -292,7 +292,9 @@ def _remote_free_loopback_port(env: SSHEnvironment) -> int:
     return int(raw_port)
 
 
-def _stage_builtin_mcp_server(env: SSHEnvironment, on_log: Callable[[str], None]) -> str:
+def _stage_builtin_mcp_server(
+    env: SSHEnvironment, on_log: Callable[[str], None], manifest_path: str | None = None,
+) -> tuple[str, str]:
     """Copy the versioned built-in MCP server and install its production deps."""
     source_dir = Path(MCP_SCRIPT_PATH).parent
     missing = [name for name in _MCP_DEPLOY_FILES if not (source_dir / name).is_file()]
@@ -309,6 +311,16 @@ def _stage_builtin_mcp_server(env: SSHEnvironment, on_log: Callable[[str], None]
         if written.get("error"):
             raise RuntimeError(f"Could not stage {filename}: {written['error']}")
 
+    source_manifest = Path(manifest_path or MCP_CONFIG_PATH).expanduser()
+    try:
+        manifest_text = source_manifest.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Could not read MCP manifest {source_manifest}: {exc}") from exc
+    remote_manifest = f"{remote_dir}/config.json"
+    written = env.write_file(remote_manifest, manifest_text)
+    if written.get("error"):
+        raise RuntimeError(f"Could not stage MCP manifest: {written['error']}")
+
     on_log(f"[MCP] Staged built-in MCP package on {env.host}:{remote_dir}")
     install = env.execute(
         f"cd {shlex.quote(remote_dir)} && npm ci --omit=dev",
@@ -316,7 +328,7 @@ def _stage_builtin_mcp_server(env: SSHEnvironment, on_log: Callable[[str], None]
     )
     if install.get("exit_code", 1) != 0:
         raise RuntimeError(f"Remote MCP dependency install failed: {install.get('stderr') or install.get('stdout')}")
-    return remote_dir
+    return remote_dir, remote_manifest
 
 
 def _remote_mcp_ready(base_url: str) -> bool:
@@ -341,6 +353,8 @@ def _remote_mcp_ready(base_url: str) -> bool:
 def start_remote_managed_mcp_server(
     env: SSHEnvironment,
     on_log: Callable[[str], None],
+    tool_names: list[str] | None = None,
+    manifest_path: str | None = None,
     ready_timeout: float = 180.0,
 ) -> RemoteManagedServer:
     """Stage, start, and tunnel ModelScope's built-in MCP broker over SSH.
@@ -348,11 +362,14 @@ def start_remote_managed_mcp_server(
     The broker binds only to remote loopback; its ephemeral port is available
     to the local agent loop solely through the returned SSH tunnel.
     """
-    remote_dir = _stage_builtin_mcp_server(env, on_log)
+    remote_dir, remote_manifest = _stage_builtin_mcp_server(env, on_log, manifest_path)
     remote_port = _remote_free_loopback_port(env)
     log_path = f"/tmp/modelscope_mcp_{remote_port}.log"
+    tools_arg = ",".join(tool_names or [])
     launch = (
-        f"nohup env MCP_PORT={remote_port} node {shlex.quote(remote_dir + '/index.js')} "
+        f"nohup env MCP_PORT={remote_port} MCP_TOOL_NAMES={shlex.quote(tools_arg)} "
+        f"MCP_CONFIG_FILE={shlex.quote(remote_manifest)} "
+        f"node {shlex.quote(remote_dir + '/index.js')} "
         f"> {shlex.quote(log_path)} 2>&1 & echo $!"
     )
     result = env.execute(launch, timeout=15)

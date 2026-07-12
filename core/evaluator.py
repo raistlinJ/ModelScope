@@ -24,6 +24,7 @@ from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment, SSHEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
+from core.mcp_catalog import bundled_tool_names, enabled_builtin_tool_names
 from core.llama_metrics import (
     accumulate_llama_cli_performance,
     fetch_llama_server_metrics,
@@ -380,6 +381,16 @@ def _execute_tool_in_env(env: BaseEnvironment, tool_name: str, tool_args: dict) 
             return {"content": content}
         except Exception as exc:
             return {"error": str(exc)}
+
+    if tool_name == "terminal_execute":
+        command = str(tool_args.get("command", "")).strip()
+        if not command:
+            return {"error": "Command is required"}
+        try:
+            timeout = int(tool_args.get("timeout_seconds", 30))
+        except (TypeError, ValueError):
+            timeout = 30
+        return env.execute(command, timeout=max(1, min(timeout, 120)))
 
     return {"error": f"Unknown tool: {tool_name}"}
 
@@ -1697,6 +1708,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             )
 
     mcp_servers    = config.get("mcp_servers", [])
+    selected_mcp_tools = enabled_builtin_tool_names(mcp_servers)
     mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
     tools          = []
     mcp_running    = False
@@ -1710,7 +1722,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         try:
             from core.remote_server import start_remote_managed_mcp_server
             managed_mcp_proc = start_remote_managed_mcp_server(
-                env, lambda msg: on_log(msg, "shell"),
+                env, lambda msg: on_log(msg, "shell"), tool_names=selected_mcp_tools,
+                manifest_path=config.get("mcp_config_path"),
             )
             mcp_server_url = f"http://127.0.0.1:{managed_mcp_proc.local_port}"
             config["mcp_server_url"] = mcp_server_url
@@ -1735,7 +1748,27 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # Load tool schemas for all backends
     if mcp_servers:
         try:
-            tools = _load_tool_schemas("./mcp-server/index.js", on_log=lambda m: on_log(m, "shell"))
+            # Manifest-backed records carry the schema discovered from either
+            # our bundled broker or a Claude Desktop-compatible stdio server.
+            # Legacy server-only records retain the tools.json fallback.
+            manifest_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": server["tool_name"],
+                        "description": server.get("description", ""),
+                        "parameters": server.get("inputSchema", {"type": "object", "properties": {}}),
+                    },
+                }
+                for server in mcp_servers
+                if isinstance(server, dict) and server.get("tool_name")
+            ]
+            tools = manifest_tools or _load_tool_schemas(
+                "./mcp-server/index.js", on_log=lambda m: on_log(m, "shell"),
+            )
+            allowed_tool_names = bundled_tool_names(selected_mcp_tools)
+            if allowed_tool_names is not None and not manifest_tools:
+                tools = [tool for tool in tools if tool.get("function", {}).get("name") in allowed_tool_names]
             if tools:
                 names = [t["function"]["name"] for t in tools]
                 on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}", "shell")

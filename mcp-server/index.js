@@ -1,5 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -18,8 +20,45 @@ import { toolHandlers } from "./tools.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load tool definitions from JSON file
-const toolsList = JSON.parse(fs.readFileSync(path.join(__dirname, "tools.json"), "utf8"));
+// Load bundled tool definitions and optional Claude Desktop-compatible stdio
+// servers from the same manifest used to render ModelScope's checkboxes.
+const bundledTools = JSON.parse(fs.readFileSync(path.join(__dirname, "tools.json"), "utf8"));
+const manifestPath = process.env.MCP_CONFIG_FILE || path.join(__dirname, "mcp_config.json");
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const externalToolClients = new Map();
+const externalTools = [];
+
+for (const [serverName, spec] of Object.entries(manifest.mcpServers || {})) {
+  if (!spec || typeof spec !== "object" || spec.transport === "bundled" || !spec.command) continue;
+  try {
+    const transport = new StdioClientTransport({
+      command: spec.command,
+      args: spec.args || [],
+      env: { ...process.env, ...(spec.env || {}) },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "modelscope-mcp-gateway", version: "1.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const result = await client.listTools();
+    for (const tool of result.tools || []) {
+      if (!tool?.name) continue;
+      const exposedName = `${serverName}__${tool.name}`;
+      externalTools.push({ ...tool, name: exposedName });
+      externalToolClients.set(exposedName, { client, transport, sourceName: tool.name });
+    }
+  } catch (error) {
+    console.error(`[MCP] Failed to start stdio server ${serverName}: ${error.message}`);
+  }
+}
+
+const allToolsList = [...bundledTools, ...externalTools];
+const enabledToolNames = new Set(
+  (process.env.MCP_TOOL_NAMES || "").split(",").map((name) => name.trim()).filter(Boolean)
+);
+const toolsList = enabledToolNames.size
+  ? allToolsList.filter((tool) => enabledToolNames.has(tool.name))
+  : allToolsList;
+const exposedToolNames = new Set(toolsList.map((tool) => tool.name));
 
 const app = express();
 const transports = new Map();
@@ -48,7 +87,15 @@ function registerHandlers(server) {
   // Register CallTool handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
-    const handler = toolHandlers[toolName];
+    const external = externalToolClients.get(toolName);
+    const handler = exposedToolNames.has(toolName) ? toolHandlers[toolName] : undefined;
+    if (external) {
+      try {
+        return await external.client.callTool({ name: external.sourceName, arguments: request.params.arguments || {} });
+      } catch (error) {
+        return { content: [{ type: "text", text: `External tool failed: ${error.message}` }], isError: true };
+      }
+    }
     
     if (!handler) {
       return { 

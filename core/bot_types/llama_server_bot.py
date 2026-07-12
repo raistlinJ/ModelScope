@@ -11,6 +11,7 @@ from core.bot_types.base import (
     merged_defaults,
 )
 from core.bot_types.llama_cli_bot import LlamaCliBotPlugin
+from config.defaults import MCP_CONFIG_PATH
 
 
 LLAMA_SERVER_STATE_KEY_MAP: dict[str, str] = {
@@ -141,7 +142,7 @@ LLAMA_SERVER_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_server_openai_verify_ssl":   True,
     "llama_server_openai_api_key":      "",
     "llama_server_mcp_enabled":         False,
-    "llama_server_mcp_config_path":     "",
+    "llama_server_mcp_config_path":     MCP_CONFIG_PATH,
     "llama_server_mcp_servers":         [],
     "llama_server_prompts":             [],
     "llama_server_commands":            [],
@@ -233,7 +234,7 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
                 "openai_verify_ssl": True,
                 "openai_api_key": "",
                 "mcp_enabled": False,
-                "mcp_config_path": "",
+                "mcp_config_path": MCP_CONFIG_PATH,
                 "mcp_servers": [],
                 "prompts": [],
                 "commands": [],
