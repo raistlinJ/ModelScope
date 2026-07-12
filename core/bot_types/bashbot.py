@@ -46,6 +46,10 @@ BASH_STATE_KEY_MAP: dict[str, str] = {
     "bash_llm_helper_enabled": "llm_helper_enabled",
     "bash_llm_helper_openai_models": "llm_helper_openai_models",
     "bash_llm_helper_ollama_models": "llm_helper_ollama_models",
+    "bash_llm_helper_mcp_enabled": "llm_helper_mcp_enabled",
+    "bash_llm_helper_mcp_config_path": "llm_helper_mcp_config_path",
+    "bash_llm_helper_mcp_tools": "llm_helper_mcp_tools",
+    "bash_llm_helper_mcp_strict": "llm_helper_mcp_strict",
 }
 
 

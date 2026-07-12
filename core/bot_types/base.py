@@ -59,6 +59,10 @@ LLM_HELPER_DEFAULTS: dict[str, Any] = {
     "llm_helper_enabled": False,
     "llm_helper_openai_models": [],
     "llm_helper_ollama_models": [],
+    "llm_helper_mcp_enabled": False,
+    "llm_helper_mcp_config_path": "",
+    "llm_helper_mcp_tools": [],
+    "llm_helper_mcp_strict": False,
 }
 
 

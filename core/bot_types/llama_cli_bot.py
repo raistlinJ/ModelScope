@@ -83,6 +83,10 @@ LLAMA_CLI_STATE_KEY_MAP: dict[str, str] = {
     "llama_cli_llm_helper_enabled": "llm_helper_enabled",
     "llama_cli_llm_helper_openai_models": "llm_helper_openai_models",
     "llama_cli_llm_helper_ollama_models": "llm_helper_ollama_models",
+    "llama_cli_llm_helper_mcp_enabled": "llm_helper_mcp_enabled",
+    "llama_cli_llm_helper_mcp_config_path": "llm_helper_mcp_config_path",
+    "llama_cli_llm_helper_mcp_tools": "llm_helper_mcp_tools",
+    "llama_cli_llm_helper_mcp_strict": "llm_helper_mcp_strict",
 }
 
 

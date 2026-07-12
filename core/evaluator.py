@@ -989,6 +989,44 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         messages.append({"role": "system", "content": system_prompt})
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
+
+    judge_tool_records = [
+        record for record in config.get("llm_helper_mcp_tools", [])
+        if isinstance(record, dict) and record.get("enabled") and record.get("tool_name")
+    ]
+    if not use_main_llm and config.get("llm_helper_mcp_enabled") and judge_tool_records:
+        env = config.get("_judge_env")
+        if env is None:
+            return {"exit_code": 1, "stderr": "Judge MCP runtime is not available"}
+        tools = [{"type": "function", "function": {
+            "name": record["tool_name"], "description": record.get("description", ""),
+            "parameters": record.get("inputSchema", {"type": "object", "properties": {}}),
+        }} for record in judge_tool_records]
+        backend_name = "ollama" if backend == "Ollama" else "llama.cpp"
+        url = (config.get("llm_helper_ollama_url") if backend == "Ollama" else config.get("llm_helper_openai_url", "")).rstrip("/")
+        mcp_url = config.get("_judge_mcp_url", config.get("mcp_server_url", MCP_SERVER_BASE_URL))
+        for _ in range(4):
+            try:
+                response = _call_llm(backend_name, url, model, messages, tools, config.get("context_size", 4096), on_log)
+            except Exception as exc:
+                return {"exit_code": 1, "stderr": str(exc)}
+            message = response.get("message", {})
+            calls = message.get("tool_calls") or []
+            if not calls:
+                response_text = message.get("content", "")
+                if preserve:
+                    context_list.extend(messages[-2:] + [{"role": "assistant", "content": response_text}])
+                return {"stdout": response_text, "exit_code": 0}
+            messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": calls})
+            for call in calls:
+                fn = call.get("function", {})
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    args = {}
+                result = _execute_tool(env, fn.get("name", ""), args, True, mcp_url)
+                messages.append({"role": "tool", "tool_name": fn.get("name", ""), "content": json.dumps(result)})
+        return {"exit_code": 1, "stderr": "Judge exceeded tool-call limit"}
         
     if use_main_llm:
         on_log(f"[PROMPT HELPER] Sending to main LLM ({backend}) at {url}", "llama")
@@ -1388,6 +1426,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # terminate()/wait()/kill(), so teardown below treats them identically.
     managed_server_proc = None
     managed_mcp_proc = None
+    managed_judge_mcp_proc = None
     server_metrics_before = None
 
     def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
@@ -1745,6 +1784,27 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             "shell",
         )
 
+    judge_selected_tools = [
+        item for item in config.get("llm_helper_mcp_tools", [])
+        if isinstance(item, dict) and item.get("enabled") and item.get("tool_name")
+    ]
+    if config.get("llm_helper_mcp_enabled") and judge_selected_tools:
+        config["_judge_env"] = env
+        if config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
+            try:
+                from core.remote_server import start_remote_managed_mcp_server
+                managed_judge_mcp_proc = start_remote_managed_mcp_server(
+                    env, lambda msg: on_log(f"[JUDGE] {msg}", "shell"),
+                    tool_names=[item["tool_name"] for item in judge_selected_tools],
+                    manifest_path=config.get("llm_helper_mcp_config_path"),
+                )
+                config["_judge_mcp_url"] = f"http://127.0.0.1:{managed_judge_mcp_proc.local_port}"
+            except Exception as exc:
+                on_log(f"[ERROR] Failed to start judge MCP server: {exc}", "shell")
+                telemetry["run_aborted"] = True
+                telemetry["error"] = str(exc)
+                return telemetry
+
     # Load tool schemas for all backends
     if mcp_servers:
         try:
@@ -1818,6 +1878,14 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # run rather than being silently swallowed into a tool_call log entry.
     if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
         telemetry["validation_passed"] = False
+
+    if managed_judge_mcp_proc is not None:
+        on_log("[JUDGE] Stopping remote judge MCP broker", "shell")
+        managed_judge_mcp_proc.terminate()
+        try:
+            managed_judge_mcp_proc.wait(timeout=5)
+        except Exception:
+            managed_judge_mcp_proc.kill()
 
     if managed_mcp_proc is not None:
         on_log("[MCP] Stopping remote MCP broker", "shell")

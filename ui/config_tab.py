@@ -288,6 +288,10 @@ def _flush_bash_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", []),
+        "llm_helper_mcp_enabled": st.session_state.get("bash_llm_helper_mcp_enabled", False),
+        "llm_helper_mcp_config_path": st.session_state.get("bash_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
+        "llm_helper_mcp_tools": st.session_state.get("bash_llm_helper_mcp_tools", []),
+        "llm_helper_mcp_strict": st.session_state.get("bash_llm_helper_mcp_strict", False),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1331,6 +1335,33 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 else:
                     st.warning("Enter an Instance URL first.")
 
+        st.divider()
+        st.caption("Judge-only MCP tools are separate from the student bot's tool policy.")
+        st.session_state.setdefault(f"{pfx}_llm_helper_mcp_enabled", False)
+        judge_mcp_enabled = st.toggle("Allow MCP tools for LLM Judge", key=f"{pfx}_llm_helper_mcp_enabled")
+        if not st.session_state.get(f"{pfx}_llm_helper_mcp_config_path"):
+            st.session_state[f"{pfx}_llm_helper_mcp_config_path"] = MCP_CONFIG_PATH
+        st.text_input("Judge MCP Tool Config", key=f"{pfx}_llm_helper_mcp_config_path", disabled=not judge_mcp_enabled)
+        try:
+            judge_declared = load_mcp_tool_config(st.session_state[f"{pfx}_llm_helper_mcp_config_path"])
+            judge_tools = merge_mcp_tool_selections(
+                judge_declared, st.session_state.get(f"{pfx}_llm_helper_mcp_tools", []),
+            )
+        except ValueError as exc:
+            judge_tools = []
+            st.error(str(exc))
+        for tool in judge_tools:
+            tool["enabled"] = st.checkbox(
+                tool["name"], value=tool.get("enabled", False),
+                key=f"{pfx}_judge_mcp_{tool['tool_name']}", disabled=not judge_mcp_enabled,
+            )
+        st.session_state[f"{pfx}_llm_helper_mcp_tools"] = judge_tools
+        st.checkbox(
+            "Require structured tool calls", key=f"{pfx}_llm_helper_mcp_strict",
+            disabled=not judge_mcp_enabled,
+            help="Fail a judge prompt if it needs tools but the model does not return structured tool calls.",
+        )
+
 def _render_bash_runtime(project: dict) -> None:
     """Runtime sub-tab for Bash-Bot: execution target, commands (steps), timeout."""
 
@@ -1798,6 +1829,10 @@ def _flush_llama_cli_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", []),
+        "llm_helper_mcp_enabled": st.session_state.get("llama_cli_llm_helper_mcp_enabled", False),
+        "llm_helper_mcp_config_path": st.session_state.get("llama_cli_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
+        "llm_helper_mcp_tools": st.session_state.get("llama_cli_llm_helper_mcp_tools", []),
+        "llm_helper_mcp_strict": st.session_state.get("llama_cli_llm_helper_mcp_strict", False),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -2697,6 +2732,10 @@ def _flush_llama_server_config(project: dict) -> None:
         "llm_helper_enabled": st.session_state.get("llama_server_llm_helper_enabled", False),
         "llm_helper_openai_models": st.session_state.get("llama_server_llm_helper_openai_models", []),
         "llm_helper_ollama_models": st.session_state.get("llama_server_llm_helper_ollama_models", []),
+        "llm_helper_mcp_enabled": st.session_state.get("llama_server_llm_helper_mcp_enabled", False),
+        "llm_helper_mcp_config_path": st.session_state.get("llama_server_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
+        "llm_helper_mcp_tools": st.session_state.get("llama_server_llm_helper_mcp_tools", []),
+        "llm_helper_mcp_strict": st.session_state.get("llama_server_llm_helper_mcp_strict", False),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
