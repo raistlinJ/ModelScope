@@ -476,7 +476,7 @@ class TestRunLlamaCLIBinaryAutoCorrect:
                 )
 
         kwargs = mock_start.call_args.kwargs
-        assert kwargs["advanced_flags"] == "--temp 0.55"
+        assert kwargs["advanced_flags"] == "--metrics --temp 0.55"
         assert kwargs["custom_flags"] == "--temp 0.1"
 
     def test_llama_server_bot_forwards_configured_ready_timeout(self):
@@ -684,9 +684,9 @@ class TestManagedLlamaServerAdvancedFlags:
         cfg.update(overrides)
         return cfg
 
-    def test_all_disabled_yields_empty_string(self):
+    def test_metrics_is_enabled_when_all_optional_perf_flags_are_disabled(self):
         from core.evaluator import _managed_llama_server_advanced_flags
-        assert _managed_llama_server_advanced_flags(self._base_cfg()) == ""
+        assert _managed_llama_server_advanced_flags(self._base_cfg()) == "--metrics"
 
     def test_predict_never_included(self):
         """-n/--predict is llama-cli-specific (bounds a single CLI call) and
@@ -695,14 +695,14 @@ class TestManagedLlamaServerAdvancedFlags:
         flags = _managed_llama_server_advanced_flags(
             self._base_cfg(en_predict=True, predict=256)
         )
-        assert flags == ""
+        assert flags == "--metrics"
 
     def test_all_enabled_includes_every_flag_except_predict(self):
         from core.evaluator import _managed_llama_server_advanced_flags
         cfg = self._base_cfg(**{k: True for k in self._base_cfg() if k.startswith("en_")})
         flags = _managed_llama_server_advanced_flags(cfg)
         for expected in (
-            "--temp 0.8", "-ngl 99", "-t 4", "--top-k 40", "--top-p 0.9",
+            "--metrics", "--temp 0.8", "-ngl 99", "-t 4", "--top-k 40", "--top-p 0.9",
             "--min-p 0.1", "--repeat-penalty 1.1", "--freq-penalty 0.0",
             "--seed -1", "--rope-freq-base 10000.0", "--rope-freq-scale 1.0",
         ):

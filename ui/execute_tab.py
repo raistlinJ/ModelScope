@@ -598,11 +598,15 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         "server_port":         cfg.get("server_port", 8080),
         "server_ready_timeout": cfg.get("server_ready_timeout", 300),
         "mcp_server_url":      "http://127.0.0.1:9191",
+        "mcp_enabled":         cfg.get("mcp_enabled", False),
         "openai_base_url":     cfg.get("openai_base_url", ""),
         "llm_url":             cfg.get("openai_base_url", ""),
         "openai_api_key":      cfg.get("openai_api_key", ""),
         "openai_verify_ssl":   cfg.get("openai_verify_ssl", True),
-        "mcp_servers":         [s for s in cfg.get("mcp_servers", []) if s.get("enabled")],
+        "mcp_servers":         [
+            s for s in cfg.get("mcp_servers", [])
+            if cfg.get("mcp_enabled", False) and s.get("enabled")
+        ],
         "prompts":             cfg.get("prompts", []),
         "commands":            cfg.get("commands", []),
         "startup_commands":    cfg.get("startup_commands", []),

@@ -24,6 +24,13 @@ from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
 from core.environment import BaseEnvironment, SSHEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
+from core.llama_metrics import (
+    accumulate_llama_cli_performance,
+    fetch_llama_server_metrics,
+    llama_server_metrics_delta,
+    parse_llama_cli_performance,
+    strip_user_metrics_flag,
+)
 from core.models import normalize_openai_base_url
 from core.streaming import stream_ollama, stream_llama_cpp
 from core.utils import effective_verify_ssl
@@ -109,7 +116,10 @@ def _managed_llama_server_advanced_flags(config: dict) -> str:
     long-lived process where each request's own max_tokens should govern
     generation length instead of a fixed server-wide default.
     """
-    parts = []
+    # llama-server exposes its aggregate counters only when this is set. It is
+    # deliberately unconditional for managed server bots so every run has the
+    # opportunity to collect backend-observed telemetry.
+    parts = ["--metrics"]
     if config.get("en_temp"):
         parts.append(f"--temp {config.get('temperature', 0.8)}")
     if config.get("en_gpu_layers"):
@@ -168,8 +178,11 @@ def _start_managed_llama_server(
     ]
     if advanced_flags.strip():
         cmd.extend(shlex.split(advanced_flags.strip()))
-    if custom_flags.strip():
-        cmd.extend(shlex.split(custom_flags.strip()))
+    sanitized_custom_flags = strip_user_metrics_flag(custom_flags)
+    if sanitized_custom_flags != custom_flags.strip():
+        on_log("[METRICS] Ignoring custom --metrics; ModelScope enables it automatically")
+    if sanitized_custom_flags:
+        cmd.extend(shlex.split(sanitized_custom_flags))
     on_log(f"[SERVER] Starting: {' '.join(cmd)}")
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1335,6 +1348,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         "interrupted_by_user":  False,
         "prompt_call_failed":   False,
         "metrics_matrix":       config.get("metrics_matrix", []),
+        # llama-cli has no HTTP metrics endpoint. Its own stderr performance
+        # report is collected whenever the installed build emits it.
+        "llama_cli_performance": {"available": False, "samples": 0},
     }
 
     def _exec_cmd(cmd: str, label: str = "RUN", timeout_override: int = None) -> dict:
@@ -1360,6 +1376,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     # (core.remote_server) when it was launched over SSH — both expose
     # terminate()/wait()/kill(), so teardown below treats them identically.
     managed_server_proc = None
+    managed_mcp_proc = None
+    server_metrics_before = None
 
     def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
         if not prompt_text:
@@ -1471,6 +1489,10 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 on_log(f"[ERROR] llama-cli exited with code {res['exit_code']}", "llama")
                 
             response = res.get("stdout", "").strip()
+            accumulate_llama_cli_performance(
+                telemetry["llama_cli_performance"],
+                parse_llama_cli_performance(res.get("stderr", "")),
+            )
             on_log(f"[RESPONSE] {response}", "llama")
             telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
             if preserve_context:
@@ -1660,10 +1682,55 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
             telemetry["error"] = str(exc)
             return telemetry
 
+        server_metrics_before = fetch_llama_server_metrics(
+            config["openai_base_url"],
+            verify_ssl=effective_verify_ssl(
+                config["openai_base_url"], config.get("openai_verify_ssl", True)
+            ),
+        )
+        if server_metrics_before.get("available"):
+            on_log("[METRICS] llama-server Prometheus endpoint connected", "llama")
+        else:
+            on_log(
+                f"[METRICS] llama-server metrics unavailable: {server_metrics_before.get('error', 'unknown error')}",
+                "llama",
+            )
+
     mcp_servers    = config.get("mcp_servers", [])
     mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
     tools          = []
     mcp_running    = False
+
+    # The agent loop remains on the ModelScope host, but the MCP process and
+    # its tool handlers must run alongside an SSH target.  A loopback-only
+    # remote broker plus SSH tunnel gives the loop a local URL without exposing
+    # the tool service on the lab network.
+    mcp_requested = bool(mcp_servers) and config.get("mcp_enabled", bool(mcp_servers))
+    if mcp_requested and config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
+        try:
+            from core.remote_server import start_remote_managed_mcp_server
+            managed_mcp_proc = start_remote_managed_mcp_server(
+                env, lambda msg: on_log(msg, "shell"),
+            )
+            mcp_server_url = f"http://127.0.0.1:{managed_mcp_proc.local_port}"
+            config["mcp_server_url"] = mcp_server_url
+        except Exception as exc:
+            on_log(f"[ERROR] Failed to start remote MCP server: {exc}", "shell")
+            telemetry["run_aborted"] = True
+            telemetry["error"] = str(exc)
+            if managed_server_proc is not None:
+                managed_server_proc.terminate()
+                try:
+                    managed_server_proc.wait(timeout=5)
+                except Exception:
+                    managed_server_proc.kill()
+            return telemetry
+    elif mcp_requested and config.get("execution_target") == "pct":
+        on_log(
+            "[WARN] Remote MCP deployment currently supports direct SSH targets; "
+            "PCT runs will use the configured local MCP endpoint or built-in fallback tools.",
+            "shell",
+        )
 
     # Load tool schemas for all backends
     if mcp_servers:
@@ -1719,7 +1786,36 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
         telemetry["validation_passed"] = False
 
+    if managed_mcp_proc is not None:
+        on_log("[MCP] Stopping remote MCP broker", "shell")
+        managed_mcp_proc.terminate()
+        try:
+            managed_mcp_proc.wait(timeout=5)
+        except Exception:
+            managed_mcp_proc.kill()
+
     if managed_server_proc is not None:
+        server_metrics_after = fetch_llama_server_metrics(
+            config["openai_base_url"],
+            verify_ssl=effective_verify_ssl(
+                config["openai_base_url"], config.get("openai_verify_ssl", True)
+            ),
+        )
+        telemetry["llama_server_metrics"] = llama_server_metrics_delta(
+            server_metrics_before, server_metrics_after,
+        )
+        telemetry["llama_server_metric_snapshots"] = {
+            "before": server_metrics_before,
+            "after": server_metrics_after,
+        }
+        if telemetry["llama_server_metrics"].get("available"):
+            metrics = telemetry["llama_server_metrics"]
+            on_log(
+                "[METRICS] server run delta: "
+                f"{metrics.get('prompt_tokens', 0):g} prompt + "
+                f"{metrics.get('completion_tokens', 0):g} generated tokens",
+                "llama",
+            )
         on_log("[SERVER] Stopping managed llama-server", "llama")
         managed_server_proc.terminate()
         try:

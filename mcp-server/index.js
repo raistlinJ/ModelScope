@@ -146,6 +146,7 @@ async function handleMcpRequest(req, res) {
 app.post("/sse", handleMcpRequest);
 app.post("/message", handleMcpRequest);
 
-app.listen(9191, () => {
-  console.error("✅ SecOps MCP Server listening on http://127.0.0.1:9191/sse");
+const port = Number(process.env.MCP_PORT || 9191);
+app.listen(port, "127.0.0.1", () => {
+  console.error(`✅ SecOps MCP Server listening on http://127.0.0.1:${port}/sse`);
 });

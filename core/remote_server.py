@@ -22,11 +22,14 @@ import socketserver
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 import requests
 
 from core.environment import SSHEnvironment
+from core.llama_metrics import strip_user_metrics_flag
+from config.defaults import MCP_SCRIPT_PATH
 
 
 class _ForwardHandler(socketserver.BaseRequestHandler):
@@ -210,8 +213,11 @@ def start_remote_managed_llama_server(
     ]
     if advanced_flags.strip():
         cmd_parts.append(advanced_flags.strip())
-    if custom_flags.strip():
-        cmd_parts.append(custom_flags.strip())
+    sanitized_custom_flags = strip_user_metrics_flag(custom_flags)
+    if sanitized_custom_flags != custom_flags.strip():
+        on_log("[METRICS] Ignoring custom --metrics; ModelScope enables it automatically")
+    if sanitized_custom_flags:
+        cmd_parts.append(sanitized_custom_flags)
     remote_cmd = " ".join(cmd_parts)
 
     log_path = f"/tmp/modelscope_llama_server_{remote_port}.log"
@@ -257,3 +263,117 @@ def start_remote_managed_llama_server(
     raise RuntimeError(
         f"Server did not become ready after {int(ready_timeout)}s on {env.host}:{remote_port}"
     )
+
+
+# ── Remote built-in MCP lifecycle ─────────────────────────────────────────────
+
+_MCP_DEPLOY_FILES = ("index.js", "tools.js", "tools.json", "package.json", "package-lock.json")
+
+
+def _remote_home(env: SSHEnvironment) -> str:
+    result = env.execute('printf %s "$HOME"', timeout=10)
+    home = (result.get("stdout") or "").strip()
+    if result.get("exit_code", 1) != 0 or not home.startswith("/"):
+        raise RuntimeError(f"Could not determine remote home directory: {result.get('stderr', 'unknown error')}")
+    return home
+
+
+def _remote_free_loopback_port(env: SSHEnvironment) -> int:
+    # Node is required by the MCP server itself, so use it rather than assuming
+    # Python is installed on every target image.
+    command = (
+        "node -e 'const net=require(\"net\");const s=net.createServer();"
+        "s.listen(0,\"127.0.0.1\",()=>{console.log(s.address().port);s.close()})'"
+    )
+    result = env.execute(command, timeout=10)
+    raw_port = (result.get("stdout") or "").strip()
+    if result.get("exit_code", 1) != 0 or not raw_port.isdigit():
+        raise RuntimeError(f"Could not allocate a remote MCP port: {result.get('stderr', 'node is unavailable')}")
+    return int(raw_port)
+
+
+def _stage_builtin_mcp_server(env: SSHEnvironment, on_log: Callable[[str], None]) -> str:
+    """Copy the versioned built-in MCP server and install its production deps."""
+    source_dir = Path(MCP_SCRIPT_PATH).parent
+    missing = [name for name in _MCP_DEPLOY_FILES if not (source_dir / name).is_file()]
+    if missing:
+        raise RuntimeError(f"Built-in MCP package is incomplete: {', '.join(missing)}")
+
+    remote_dir = f"{_remote_home(env)}/.modelscope/mcp-server"
+    mkdir = env.execute(f"mkdir -p {shlex.quote(remote_dir)}", timeout=15)
+    if mkdir.get("exit_code", 1) != 0:
+        raise RuntimeError(f"Could not create remote MCP directory: {mkdir.get('stderr', '')}")
+
+    for filename in _MCP_DEPLOY_FILES:
+        written = env.write_file(f"{remote_dir}/{filename}", (source_dir / filename).read_text(encoding="utf-8"))
+        if written.get("error"):
+            raise RuntimeError(f"Could not stage {filename}: {written['error']}")
+
+    on_log(f"[MCP] Staged built-in MCP package on {env.host}:{remote_dir}")
+    install = env.execute(
+        f"cd {shlex.quote(remote_dir)} && npm ci --omit=dev",
+        timeout=180,
+    )
+    if install.get("exit_code", 1) != 0:
+        raise RuntimeError(f"Remote MCP dependency install failed: {install.get('stderr') or install.get('stdout')}")
+    return remote_dir
+
+
+def _remote_mcp_ready(base_url: str) -> bool:
+    try:
+        response = requests.post(
+            base_url.rstrip("/") + "/message",
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05", "capabilities": {},
+                    "clientInfo": {"name": "modelscope", "version": "1.0"},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+            timeout=1.0,
+        )
+        return response.ok
+    except requests.RequestException:
+        return False
+
+
+def start_remote_managed_mcp_server(
+    env: SSHEnvironment,
+    on_log: Callable[[str], None],
+    ready_timeout: float = 180.0,
+) -> RemoteManagedServer:
+    """Stage, start, and tunnel ModelScope's built-in MCP broker over SSH.
+
+    The broker binds only to remote loopback; its ephemeral port is available
+    to the local agent loop solely through the returned SSH tunnel.
+    """
+    remote_dir = _stage_builtin_mcp_server(env, on_log)
+    remote_port = _remote_free_loopback_port(env)
+    log_path = f"/tmp/modelscope_mcp_{remote_port}.log"
+    launch = (
+        f"nohup env MCP_PORT={remote_port} node {shlex.quote(remote_dir + '/index.js')} "
+        f"> {shlex.quote(log_path)} 2>&1 & echo $!"
+    )
+    result = env.execute(launch, timeout=15)
+    remote_pid = (result.get("stdout") or "").strip().splitlines()
+    remote_pid = remote_pid[-1].strip() if remote_pid else ""
+    if result.get("exit_code", 1) != 0 or not remote_pid.isdigit():
+        raise RuntimeError(f"Failed to start remote MCP server: {result.get('stderr') or result.get('stdout') or 'unknown error'}")
+
+    tunnel = SSHPortForward(env.get_client(), "127.0.0.1", remote_port)
+    handle = RemoteManagedServer(env, remote_pid, log_path, tunnel)
+    base_url = f"http://127.0.0.1:{handle.local_port}"
+    deadline = time.time() + ready_timeout
+    while time.time() < deadline:
+        if handle.poll() is not None:
+            tail = handle.read_log_tail()
+            handle.kill()
+            raise RuntimeError("Remote MCP server exited immediately" + (f": {tail[-800:]}" if tail else ""))
+        if _remote_mcp_ready(base_url):
+            on_log(f"[MCP] Remote broker ready on {env.host}:{remote_port} (tunnel {handle.local_port})")
+            return handle
+        time.sleep(0.5)
+
+    handle.kill()
+    raise RuntimeError(f"Remote MCP server did not become ready after {int(ready_timeout)}s")

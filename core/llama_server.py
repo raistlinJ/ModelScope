@@ -189,6 +189,7 @@ def start(
                 "--port",     str(port),
                 "--jinja",
                 "--parallel", "1",
+                "--metrics",
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,

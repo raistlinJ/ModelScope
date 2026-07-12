@@ -1904,6 +1904,7 @@ def _scan_models(project: dict) -> None:
         from core.models import scan_gguf_models
         models = scan_gguf_models(model_dir)
     else:
+        import shlex
         _flush_llama_cli_config(project)
         cfg = project["config"]
         from core.environment import SSHEnvironment
@@ -1986,7 +1987,7 @@ def _fetch_mcp_servers(project: dict) -> None:
             remote_cwd=".",
         )
         try:
-            res = env.execute(f'cat "{cfg_path}"', timeout=10)
+            res = env.execute(f"cat {shlex.quote(cfg_path)}", timeout=10)
         finally:
             env.close()
         if res["exit_code"] != 0:
@@ -2458,6 +2459,8 @@ def _render_llama_cli_runtime(project: dict) -> None:
     with st.expander("MCP Servers", expanded=_mcp_en):
         en_mcp = st.toggle("Enable MCP Servers", key="llama_cli_mcp_enabled", help="Turn on MCP support for this runtime.")
         st.caption("Discover MCP servers available on the target machine.")
+        if st.session_state.get("llama_cli_execution_target") == "ssh":
+            st.caption("During execution, ModelScope deploys its built-in MCP broker to the SSH target and reaches it through a private tunnel.")
         col_path, col_fetch = st.columns([4, 1])
         with col_path:
             st.text_input(
@@ -2846,16 +2849,43 @@ def _scan_llama_server_models(project: dict) -> None:
 
 
 def _fetch_llama_server_mcp_servers(project: dict) -> None:
-    """Read a local mcp_config.json and populate llama-server MCP server choices."""
+    """Read an MCP config from the selected target and populate server choices."""
     cfg_path = st.session_state.get("llama_server_mcp_config_path", "").strip()
+    target   = st.session_state.get("llama_server_execution_target", "local")
     if not cfg_path:
         st.warning("Set MCP Config Path first.")
         return
-    import pathlib
-    try:
-        raw = json.loads(pathlib.Path(cfg_path).expanduser().read_text())
-    except Exception as exc:
-        st.error(f"Could not read {cfg_path}: {exc}")
+    if target == "local":
+        import pathlib
+        try:
+            raw = json.loads(pathlib.Path(cfg_path).expanduser().read_text())
+        except Exception as exc:
+            st.error(f"Could not read {cfg_path}: {exc}")
+            return
+    elif target == "ssh":
+        import shlex
+        from core.environment import SSHEnvironment
+        _flush_llama_server_config(project)
+        cfg = project["config"]
+        env = SSHEnvironment(
+            host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
+            username=cfg.get("ssh_user", "root"), password=cfg.get("ssh_password") or None,
+            key_path=cfg.get("ssh_key_path") or None, remote_cwd=".",
+        )
+        try:
+            res = env.execute(f"cat {shlex.quote(cfg_path)}", timeout=10)
+        finally:
+            env.close()
+        if res["exit_code"] != 0:
+            st.error(f"Could not read remote file: {res['stderr']}")
+            return
+        try:
+            raw = json.loads(res["stdout"])
+        except json.JSONDecodeError as exc:
+            st.error(f"Invalid JSON in {cfg_path}: {exc}")
+            return
+    else:
+        st.warning("Remote MCP configuration discovery currently supports Local and SSH targets.")
         return
     if not isinstance(raw, dict):
         st.error(
@@ -3329,14 +3359,16 @@ def _render_llama_server_runtime(project: dict) -> None:
             key="llama_server_mcp_enabled",
             help="Turn on MCP support for this runtime.",
         )
-        st.caption("Discover MCP servers available on the local machine.")
+        st.caption("Discover MCP servers available on the selected target machine.")
+        if st.session_state.get("llama_server_execution_target") == "ssh":
+            st.caption("During execution, ModelScope deploys its built-in MCP broker to the SSH target and reaches it through a private tunnel.")
         col_path, col_fetch = st.columns([4, 1])
         with col_path:
             st.text_input(
                 "MCP Config Path",
                 key="llama_server_mcp_config_path",
                 placeholder="/home/user/.mcp/config.json",
-                help="Path to a local mcp_config.json file.",
+                help="Path to a mcp_config.json file on the selected target machine.",
                 label_visibility="collapsed",
                 disabled=not enabled,
             )

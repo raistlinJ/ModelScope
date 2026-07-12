@@ -18,6 +18,7 @@ from core.remote_server import (
     RemoteManagedServer,
     SSHPortForward,
     _quote_remote_path,
+    start_remote_managed_mcp_server,
     start_remote_managed_llama_server,
 )
 
@@ -68,6 +69,32 @@ class TestStartRemoteManagedLlamaServer:
             assert "llama-server" in launch_cmd
             assert "-m /models/m.gguf" in launch_cmd
             assert "--port 8080" in launch_cmd
+        finally:
+            handle.kill()
+
+
+class TestStartRemoteManagedMCPServer:
+    def test_stages_starts_and_tunnels_builtin_mcp(self):
+        env = _fake_env([
+            {"stdout": "/home/student", "stderr": "", "exit_code": 0},  # home
+            {"stdout": "", "stderr": "", "exit_code": 0},               # mkdir
+            {"stdout": "", "stderr": "", "exit_code": 0},               # npm ci
+            {"stdout": "39191", "stderr": "", "exit_code": 0},          # free port
+            {"stdout": "4242", "stderr": "", "exit_code": 0},           # launch
+            {"stdout": "ALIVE", "stderr": "", "exit_code": 0},          # poll
+        ])
+        env.write_file.return_value = {}
+        with patch("core.remote_server.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(ok=True)
+            handle = start_remote_managed_mcp_server(env, lambda m: None)
+        try:
+            assert isinstance(handle, RemoteManagedServer)
+            assert handle.local_port > 0
+            assert env.write_file.call_count == 5
+            commands = [call.args[0] for call in env.execute.call_args_list]
+            assert any("npm ci --omit=dev" in command for command in commands)
+            assert any("MCP_PORT=39191" in command for command in commands)
+            assert any("node /home/student/.modelscope/mcp-server/index.js" in command for command in commands)
         finally:
             handle.kill()
 

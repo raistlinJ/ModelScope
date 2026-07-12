@@ -482,6 +482,47 @@ def _render_llama_cli_dashboard(
             mime="application/json",
         )
 
+    # Backend-observed performance.  These figures do not depend on agent
+    # code reporting usage: server bots read llama-server's Prometheus
+    # counters, while one-shot CLI bots parse llama-cli's own perf summary.
+    server_metrics = tel.get("llama_server_metrics")
+    cli_perf = tel.get("llama_cli_performance")
+    if server_metrics is not None or cli_perf is not None:
+        st.subheader("Backend Performance")
+        if server_metrics is not None:
+            if server_metrics.get("available"):
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Prompt Tokens", f"{server_metrics.get('prompt_tokens', 0):,.0f}")
+                m2.metric("Generated Tokens", f"{server_metrics.get('completion_tokens', 0):,.0f}")
+                m3.metric("Prompt Throughput", f"{server_metrics.get('prompt_tokens_per_second', 0):,.1f} tok/s")
+                m4.metric("Generation Throughput", f"{server_metrics.get('completion_tokens_per_second', 0):,.1f} tok/s")
+                q1, q2, q3, q4, q5 = st.columns(5)
+                q1.metric("Prompt Processing", f"{server_metrics.get('prompt_seconds', 0):,.2f} s")
+                q2.metric("Generation Processing", f"{server_metrics.get('completion_seconds', 0):,.2f} s")
+                q3.metric("Active Requests", f"{server_metrics.get('requests_processing', 0):,.0f}")
+                q4.metric("Deferred Requests", f"{server_metrics.get('requests_deferred', 0):,.0f}")
+                q5.metric("Context High Watermark", f"{server_metrics.get('context_high_watermark', 0):,.0f} tokens")
+                st.caption(
+                    "Derived from the managed llama-server `/metrics` counter delta. "
+                    "Request and context gauges are their final point-in-time values; raw before/after snapshots are in the JSON export."
+                )
+            else:
+                st.info(
+                    "llama-server metrics were not available for this run"
+                    + (f": {server_metrics.get('error')}" if server_metrics.get("error") else ".")
+                )
+        elif cli_perf and cli_perf.get("available"):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Prompt Tokens", f"{cli_perf.get('prompt_tokens', 0):,}")
+            m2.metric("Generated Tokens", f"{cli_perf.get('completion_tokens', 0):,}")
+            m3.metric("Prompt Throughput", f"{cli_perf.get('prompt_tokens_per_second', 0):,.1f} tok/s")
+            m4.metric("Generation Throughput", f"{cli_perf.get('completion_tokens_per_second', 0):,.1f} tok/s")
+            st.caption(
+                f"Parsed from llama-cli's stderr performance summary across {cli_perf.get('samples', 0)} invocation(s)."
+            )
+        elif cli_perf is not None:
+            st.info("This llama-cli build did not emit a parseable performance summary for this run.")
+
     # Prompt responses
     if prompt_responses:
         st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
