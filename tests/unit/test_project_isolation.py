@@ -12,6 +12,27 @@ def _make_llama_server_project(pid, cfg):
     return {"id": pid, "type": "llama_server_bot", "config": cfg}
 
 
+def test_persisted_last_run_restores_history_and_execute_result(monkeypatch):
+    newest_first = [
+        {"run_timestamp": "2026-07-14 11:00:00", "validation_passed": True},
+        {"run_timestamp": "2026-07-14 10:00:00", "validation_passed": False},
+    ]
+
+    class _Repository:
+        def history_for_project(self, project_id, limit):
+            assert project_id == "A"
+            return newest_first
+
+    monkeypatch.setattr("core.session_log.SessionRepository", _Repository)
+    st.session_state.clear()
+
+    state.hydrate_persisted_run_state("A")
+
+    assert st.session_state["run_history_A"] == list(reversed(newest_first))
+    assert st.session_state["telemetry_A"] == newest_first[0]
+    assert st.session_state["run_completed_A"] is True
+
+
 def test_llama_cli_fields_do_not_leak_between_projects():
     # Two llama-cli projects: A sets prompt/fail/validation; B leaves them blank.
     proj_a = _make_llama_project("A", {

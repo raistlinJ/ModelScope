@@ -19,24 +19,30 @@ def test_parse_prometheus_metrics_extracts_llama_server_samples():
         llamacpp:requests_processing 0
         llamacpp:requests_deferred 1
         llamacpp:n_tokens_max 2048
+        llamacpp:n_decode_total 91
+        llamacpp:n_busy_slots_per_decode 1.75
     """)
 
     assert values["prompt_tokens"] == 42
     assert values["completion_tokens"] == 17
     assert values["completion_tokens_per_second"] == 8.5
     assert values["context_high_watermark"] == 2048
+    assert values["decode_calls"] == 91
+    assert values["busy_slots_per_decode"] == 1.75
 
 
 def test_server_delta_uses_counter_difference_and_final_gauges():
-    before = {"available": True, "prompt_tokens": 10, "prompt_seconds": 1, "completion_tokens": 2, "completion_seconds": 0.5}
-    after = {"available": True, "prompt_tokens": 30, "prompt_seconds": 4, "completion_tokens": 12, "completion_seconds": 2.5, "completion_tokens_per_second": 5, "requests_deferred": 0}
+    before = {"available": True, "prompt_tokens": 10, "prompt_seconds": 1, "completion_tokens": 2, "completion_seconds": 0.5, "decode_calls": 12}
+    after = {"available": True, "prompt_tokens": 30, "prompt_seconds": 4, "completion_tokens": 12, "completion_seconds": 2.5, "decode_calls": 31, "completion_tokens_per_second": 5, "requests_deferred": 0, "busy_slots_per_decode": 1.5}
 
     result = llama_server_metrics_delta(before, after)
 
     assert result["available"] is True
     assert result["prompt_tokens"] == 20
     assert result["completion_tokens"] == 10
+    assert result["decode_calls"] == 19
     assert result["completion_tokens_per_second"] == 5
+    assert result["busy_slots_per_decode"] == 1.5
 
 
 def test_parse_and_accumulate_llama_cli_performance():

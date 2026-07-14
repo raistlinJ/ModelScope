@@ -1,7 +1,13 @@
+import copy
+import json
 from unittest.mock import MagicMock
+
+import streamlit as st
 
 from core.bot_types import get_bot_plugin, iter_bot_plugins, refresh_bot_plugins
 from core.bot_types.bashbot import BashBotPlugin
+from core.settings_store import NESTED_SENSITIVE
+from ui.config_tab import _export_project_json
 
 
 def test_registry_exposes_builtin_bot_types_in_order():
@@ -171,3 +177,33 @@ class CustomBotPlugin(BotTypePlugin):
     finally:
         monkeypatch.delenv("MODELSCOPE_BOT_PLUGIN_PATH", raising=False)
         refresh_bot_plugins()
+
+
+def test_base_plugin_flush_exports_declared_state_mapping():
+    """New plugins get complete export support by declaring a state map."""
+    from core.bot_types.base import BotTypePlugin
+
+    class MinimalPlugin(BotTypePlugin):
+        state_key_map = {"minimal_model": "model_name"}
+
+    st.session_state.clear()
+    st.session_state["minimal_model"] = "model.gguf"
+    project = {"config": {}}
+    MinimalPlugin().flush_config(project)
+
+    assert project["config"] == {"model_name": "model.gguf"}
+
+
+def test_every_registered_plugin_exports_all_declared_non_secret_settings(tmp_path, monkeypatch):
+    """Prevent future plugin additions from silently dropping mapped fields."""
+    monkeypatch.setattr("core.settings_store._SETTINGS_PATH", tmp_path / "settings.json")
+    refresh_bot_plugins()
+
+    for plugin in iter_bot_plugins():
+        st.session_state.clear()
+        st.session_state.update(copy.deepcopy(plugin.session_defaults))
+        project = plugin.make_project(plugin.type_id, plugin.label)
+        config = json.loads(_export_project_json(project))["config"]
+        expected = set(plugin.state_key_map.values()) - NESTED_SENSITIVE
+        missing = expected - set(config)
+        assert not missing, f"{plugin.type_id} export omits mapped fields: {sorted(missing)}"

@@ -5,6 +5,12 @@ from config.metrics import (
     METRIC_TYPES, CATEGORIES,
     evaluate_metric, format_criterion, metric_observed_value,
 )
+from core.metric_thresholds import (
+    assess_metric_thresholds,
+    format_metric_value,
+    metrics_for_bot,
+    observed_dashboard_metrics,
+)
 from ui.components import badge, badge_pass, badge_fail, badge_na, type_badge, CAT_COLOUR
 
 
@@ -51,6 +57,125 @@ def _hydrate_project_history_if_empty(project: dict) -> None:
     if loaded:
         st.session_state[history_key] = loaded
     st.session_state[hydrated_key] = True
+
+
+def _selected_telemetry_for_export(project: dict) -> dict | None:
+    """Return the run currently selected by the dashboard's history picker."""
+    pid = project["id"]
+    bot_type = project.get("type", "bash_bot")
+    history = st.session_state.get(f"run_history_{pid}", [])
+    if bot_type == "bash_bot":
+        history = [item for item in history if item.get("run_bot_type", "bash_bot") == "bash_bot"]
+        selector_key = f"bash_dash_sel_{pid}_{len(history)}"
+    else:
+        history = [item for item in history if item.get("run_bot_type") == bot_type]
+        selector_key = f"{bot_type}_dash_sel_{pid}_{len(history)}"
+    if not history:
+        return None
+    newest_first = list(reversed(history))
+    labels = [
+        f"Run {len(history) - index}  —  {item.get('run_timestamp', '')}"
+        for index, item in enumerate(newest_first)
+    ]
+    selected = st.session_state.get(selector_key, labels[0])
+    return newest_first[labels.index(selected)] if selected in labels else newest_first[0]
+
+
+def _render_dashboard_heading(project: dict | None, telemetry: dict | None) -> None:
+    """Render the dashboard title with the selected run's export aligned right."""
+    title_col, export_col = st.columns([6, 1.65])
+    with title_col:
+        st.header("Analytical Dashboard")
+    if telemetry is not None:
+        bot_type = (project or {}).get("type", "")
+        prefix = "bash" if bot_type == "bash_bot" else "llama"
+        timestamp = telemetry.get("run_timestamp", "run").replace(" ", "_").replace(":", "-")
+        with export_col:
+            st.download_button(
+                "⬇  Export Results",
+                data=json.dumps(telemetry, indent=2, default=str),
+                file_name=f"{prefix}_results_{timestamp}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+
+_THRESHOLD_STYLE = {
+    "hard_fail": ("HARD FAIL", "#e5484d", "rgba(229,72,77,0.16)"),
+    "soft_fail": ("SOFT FAIL", "#ec4899", "rgba(236,72,153,0.16)"),
+    "soft_pass": ("SOFT PASS", "#d4a72c", "rgba(212,167,44,0.16)"),
+    "hard_pass": ("HARD PASS", "#2da44e", "rgba(45,164,78,0.16)"),
+    "unclassified": ("BELOW CONFIGURED BANDS", "#94a3b8", "rgba(148,163,184,0.14)"),
+    "not_available": ("NOT AVAILABLE", "#94a3b8", "rgba(148,163,184,0.14)"),
+}
+
+
+def _configured_metric_assessments(project: dict, telemetry: dict) -> dict[str, dict]:
+    """Return the selected run's threshold assessments keyed by metric name."""
+    thresholds = (
+        telemetry.get("metric_thresholds")
+        if "metric_thresholds" in telemetry
+        else project.get("config", {}).get("metric_thresholds", {})
+    )
+    bot = "llama_server" if project.get("type") == "llama_server_bot" else "llama_cli"
+    supported_metrics = {metric for metric, _ in metrics_for_bot(bot)}
+    return {
+        assessment["metric"]: assessment
+        for assessment in assess_metric_thresholds(telemetry, thresholds)
+        if assessment["metric"] in supported_metrics
+    }
+
+
+def _render_metric_cards(
+    cards: list[tuple[str | None, str, str]],
+    *,
+    assessments: dict[str, dict] | None = None,
+    columns: int = 4,
+) -> None:
+    """Render metrics, inlining any configured threshold state into its card."""
+    assessments = assessments or {}
+    for start in range(0, len(cards), columns):
+        row = st.columns(columns)
+        for column, (metric, label, value) in zip(row, cards[start:start + columns]):
+            assessment = assessments.get(metric) if metric else None
+            if assessment is None:
+                column.metric(label, value)
+                continue
+            status, color, background = _THRESHOLD_STYLE[assessment["level"]]
+            threshold = assessment.get("threshold")
+            threshold_text = (
+                f"Threshold: {format_metric_value(threshold, assessment['unit'])}"
+                if threshold is not None else "No configured band matched"
+            )
+            column.markdown(
+                f'<div style="min-height:92px;border:1px solid {color};border-left:4px solid {color};'
+                f'background:{background};border-radius:0.45rem;padding:0.65rem 0.75rem;">'
+                f'<div style="font-size:0.84rem;color:#94a3b8;margin-bottom:0.25rem;">{html.escape(label)}</div>'
+                f'<div style="font-size:1.45rem;font-weight:650;line-height:1.25;color:#f0f6fc;">{html.escape(value)}</div>'
+                f'<div style="font-size:0.71rem;font-weight:750;color:{color};letter-spacing:0.25px;margin-top:0.35rem;">'
+                f'{status}</div><div style="font-size:0.68rem;color:#94a3b8;margin-top:0.1rem;">'
+                f'{html.escape(threshold_text)}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
+def _backend_performance_cards(telemetry: dict) -> list[tuple[str, str, str]]:
+    """Build cards from llama-server's plugin-owned backend catalog."""
+    from core.bot_types.base import COMMON_DASHBOARD_METRIC_KEYS
+
+    observed = observed_dashboard_metrics(telemetry)
+    cards: list[tuple[str, str, str]] = []
+    for key, spec in metrics_for_bot("llama_server"):
+        if key in COMMON_DASHBOARD_METRIC_KEYS:
+            continue
+        measurement = observed.get(key)
+        cards.append((
+            key,
+            spec["label"],
+            format_metric_value(measurement["value"], spec["unit"])
+            if measurement is not None else "Not available",
+        ))
+    return cards
 
 
 # ── Shared metrics rendering helper ───────────────────────────────────────────
@@ -266,17 +391,6 @@ def _render_bash_dashboard(project: dict) -> None:
 
     st.divider()
 
-    # Export
-    export_col, _ = st.columns([2, 5])
-    with export_col:
-        _ts_safe = tel.get("run_timestamp", "run").replace(" ", "_").replace(":", "-")
-        st.download_button(
-            "⬇  Export Results (JSON)",
-            data=json.dumps(tel, indent=2, default=str),
-            file_name=f"bash_results_{_ts_safe}.json",
-            mime="application/json",
-        )
-
     # Commands executed
     if tool_calls:
         st.subheader(f"Commands Executed  ({len(tool_calls)})")
@@ -463,65 +577,35 @@ def _render_llama_cli_dashboard(
     val_passed = tel.get("validation_passed")
     val_label  = "PASS ✓" if val_passed is True else ("FAIL ✗" if val_passed is False else "N/A")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Latency (s)",      f"{tel.get('total_latency', 0):.2f}")
-    c2.metric("Prompts Run",      len(prompt_responses))
-    c3.metric("Commands Run",     len([tc for tc in tool_calls if tc.get("tool") == "bash"]))
-    c4.metric("Validation",       val_label)
+    metric_assessments = _configured_metric_assessments(project, tel)
+    _render_metric_cards([
+        ("total_latency", "Latency (s)", f"{tel.get('total_latency', 0):.2f}"),
+        ("prompts_run", "Prompts Run", str(len(prompt_responses))),
+        ("commands_run", "Commands Run", str(len([tc for tc in tool_calls if tc.get("tool") == "bash"]))),
+        (None, "Validation", val_label),
+    ], assessments=metric_assessments)
 
     st.divider()
 
-    # Export
-    export_col, _ = st.columns([2, 5])
-    with export_col:
-        _ts_safe = tel.get("run_timestamp", "run").replace(" ", "_").replace(":", "-")
-        st.download_button(
-            "⬇  Export Results (JSON)",
-            data=json.dumps(tel, indent=2, default=str),
-            file_name=f"llama_results_{_ts_safe}.json",
-            mime="application/json",
-        )
-
-    # Backend-observed performance.  These figures do not depend on agent
-    # code reporting usage: server bots read llama-server's Prometheus
-    # counters, while one-shot CLI bots parse llama-cli's own perf summary.
+    # Backend-observed performance is available only for llama-server, which
+    # exposes its Prometheus counters through the managed `/metrics` endpoint.
     server_metrics = tel.get("llama_server_metrics")
-    cli_perf = tel.get("llama_cli_performance")
-    if server_metrics is not None or cli_perf is not None:
+    if server_metrics is not None:
         st.subheader("Backend Performance")
-        if server_metrics is not None:
-            if server_metrics.get("available"):
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Prompt Tokens", f"{server_metrics.get('prompt_tokens', 0):,.0f}")
-                m2.metric("Generated Tokens", f"{server_metrics.get('completion_tokens', 0):,.0f}")
-                m3.metric("Prompt Throughput", f"{server_metrics.get('prompt_tokens_per_second', 0):,.1f} tok/s")
-                m4.metric("Generation Throughput", f"{server_metrics.get('completion_tokens_per_second', 0):,.1f} tok/s")
-                q1, q2, q3, q4, q5 = st.columns(5)
-                q1.metric("Prompt Processing", f"{server_metrics.get('prompt_seconds', 0):,.2f} s")
-                q2.metric("Generation Processing", f"{server_metrics.get('completion_seconds', 0):,.2f} s")
-                q3.metric("Active Requests", f"{server_metrics.get('requests_processing', 0):,.0f}")
-                q4.metric("Deferred Requests", f"{server_metrics.get('requests_deferred', 0):,.0f}")
-                q5.metric("Context High Watermark", f"{server_metrics.get('context_high_watermark', 0):,.0f} tokens")
-                st.caption(
-                    "Derived from the managed llama-server `/metrics` counter delta. "
-                    "Request and context gauges are their final point-in-time values; raw before/after snapshots are in the JSON export."
-                )
-            else:
-                st.info(
-                    "llama-server metrics were not available for this run"
-                    + (f": {server_metrics.get('error')}" if server_metrics.get("error") else ".")
-                )
-        elif cli_perf and cli_perf.get("available"):
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Prompt Tokens", f"{cli_perf.get('prompt_tokens', 0):,}")
-            m2.metric("Generated Tokens", f"{cli_perf.get('completion_tokens', 0):,}")
-            m3.metric("Prompt Throughput", f"{cli_perf.get('prompt_tokens_per_second', 0):,.1f} tok/s")
-            m4.metric("Generation Throughput", f"{cli_perf.get('completion_tokens_per_second', 0):,.1f} tok/s")
+        _render_metric_cards(
+            _backend_performance_cards(tel),
+            assessments=metric_assessments,
+        )
+        if server_metrics.get("available"):
             st.caption(
-                f"Parsed from llama-cli's stderr performance summary across {cli_perf.get('samples', 0)} invocation(s)."
+                "Derived from the managed llama-server `/metrics` counter delta. "
+                "Request and context gauges are their final point-in-time values; raw before/after snapshots are in the JSON export."
             )
-        elif cli_perf is not None:
-            st.info("This llama-cli build did not emit a parseable performance summary for this run.")
+        else:
+            st.caption(
+                "llama-server metrics were not available for this run"
+                + (f": {server_metrics.get('error')}" if server_metrics.get("error") else ".")
+            )
 
     # Prompt responses
     if prompt_responses:
@@ -595,10 +679,11 @@ def _render_llama_cli_dashboard(
 
 
 def render() -> None:
-    st.header("Analytical Dashboard")
-
     # Dispatch to bot-type-specific view
     _proj = _get_active_project()
+    if _proj is not None:
+        _hydrate_project_history_if_empty(_proj)
+    _render_dashboard_heading(_proj, _selected_telemetry_for_export(_proj) if _proj else None)
     if _proj and _proj.get("type") == "bash_bot":
         _render_bash_dashboard(_proj)
         return

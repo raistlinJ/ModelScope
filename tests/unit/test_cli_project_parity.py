@@ -4,6 +4,7 @@ The GUI assembles its run config in ui/execute_tab.py; `_cmd_project` must
 mirror that assembly so a project file runs identically from the CLI.
 """
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -61,6 +62,47 @@ class TestLlamaProjectNormalization:
         cfg = _dry_run_config(capsys, path)
         assert "backend_type" not in cfg
         assert "selected_model" not in cfg
+
+
+class TestProjectSessionArtifacts:
+    @patch("core.session_log.SessionLog")
+    @patch("core.environment.create_environment")
+    @patch("core.bot_types.get_bot_plugin")
+    def test_project_saves_effective_config_with_telemetry(
+        self, mock_plugin_lookup, mock_create_environment, mock_session_log,
+        tmp_path,
+    ):
+        """Headless bot runs must retain both result data and launch settings."""
+        project = _write_project(tmp_path, "llama_cli_bot", {
+            "backend": "llama.cpp",
+            "model_name": "model.gguf",
+        })
+        plugin = MagicMock()
+        telemetry = {
+            "validation_passed": True,
+            "run_scenario": "",
+            "run_model": "model.gguf",
+            "run_backend": "llama.cpp",
+            "total_latency": 0.1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "llm_rounds": 0,
+            "tool_calls": [],
+            "metrics_matrix": [],
+        }
+        plugin.run_evaluation.return_value = telemetry
+        mock_plugin_lookup.return_value = plugin
+        mock_create_environment.return_value = MagicMock()
+        session = mock_session_log.return_value
+
+        assert cli.main(["project", "--file", str(project)]) == 0
+
+        session.save_telemetry.assert_called_once_with(telemetry)
+        session.save_config.assert_called_once()
+        saved_config = session.save_config.call_args.args[0]
+        assert saved_config["model_name"] == "model.gguf"
+        session.close.assert_called_once()
 
 
 class TestLlmHelperApiKeyResolution:

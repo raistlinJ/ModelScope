@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -215,11 +216,69 @@ def _deobscure_projects(projects: list) -> list:
 _SETTINGS_PATH: Path = Path.home() / ".modelscope" / "settings.json"
 
 
+def _backup_path() -> Path:
+    """Return the last-known-good companion file for the settings document."""
+    return _SETTINGS_PATH.with_name(f"{_SETTINGS_PATH.name}.bak")
+
+
+def _project_journal_path() -> Path:
+    """Return an independent durable snapshot of the project collection.
+
+    Older running app instances may still write ``settings.json`` directly
+    during a source reload. Keeping projects separately lets a current
+    instance restore them even if such a stale process overwrites settings.
+    """
+    return _SETTINGS_PATH.with_name("projects.json")
+
+
+def _read_settings_document(path: Path) -> dict[str, Any]:
+    """Read one settings file, rejecting malformed/non-object JSON."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("settings document must be a JSON object")
+    return data
+
+
+def _read_project_journal() -> list:
+    """Return valid journal projects, or no entries when it is unavailable."""
+    try:
+        projects = _read_settings_document(_project_journal_path()).get("projects", [])
+        return projects if isinstance(projects, list) else []
+    except Exception:
+        return []
+
+
+def _write_json_atomically(path: Path, data: dict[str, Any]) -> None:
+    """Replace *path* only after a complete JSON document is on disk.
+
+    A Streamlit reload in another browser session must never observe a partial
+    settings file and bootstrap an empty project list over the user's data.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def _merge_with_disk_projects(session_state: Any, session_projects: list) -> list:
+def _merge_with_disk_projects(
+    session_state: Any,
+    session_projects: list,
+    unserializable_project_ids: set[str] | None = None,
+) -> list:
     """Reconcile this session's project list with whatever is currently on disk.
 
     save_settings() used to overwrite the "projects" key outright with
@@ -231,40 +290,59 @@ def _merge_with_disk_projects(session_state: Any, session_projects: list) -> lis
     instead of overwriting:
 
     - A project id this session still has: its (possibly edited) version wins.
-    - A project id on disk this session never saw at load time (recorded in
-      "_known_project_ids_at_load"): assumed to belong to another, more
-      current session — preserved rather than silently deleted.
-    - A project id this session DID see at load but no longer has: treated as
-      an intentional deletion in this session and is not resurrected.
+    - A project id present only on disk is preserved unless explicitly
+      deleted, including after a browser reconnect or source reload.
+    - A project is removed only when this session explicitly records its id in
+      ``_deleted_project_ids``. A missing project list can also be caused by
+      a Streamlit code reload, and must never imply deletion.
     """
     try:
-        disk_data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+        disk_data = _read_settings_document(_SETTINGS_PATH)
         disk_projects = disk_data.get("projects", [])
         if not isinstance(disk_projects, list):
             disk_projects = []
     except Exception:
         disk_projects = []
 
-    known_at_load = session_state.get("_known_project_ids_at_load")
-    if known_at_load is None:
-        # No baseline recorded for this session — assume it started from
-        # whatever is on disk right now, so nothing looks "unknown" to it.
-        known_at_load = [p.get("id") for p in disk_projects if isinstance(p, dict)]
-    known_at_load = set(known_at_load)
-
+    unserializable_project_ids = unserializable_project_ids or set()
+    deleted_project_ids = set(session_state.get("_deleted_project_ids", []) or [])
     session_ids = {p.get("id") for p in session_projects if isinstance(p, dict)}
     merged = list(session_projects)
-    for proj in disk_projects:
-        pid = proj.get("id") if isinstance(proj, dict) else None
-        if pid is None or pid in session_ids:
-            continue
-        if pid not in known_at_load:
-            # This session never loaded this project into memory, so its
-            # NESTED_OBSCURED fields are still base64-encoded as read from
-            # disk. De-obscure before it re-enters _sanitize_projects()
-            # below, which would otherwise double-encode it.
-            import copy
-            merged.append(_deobscure_projects([copy.deepcopy(proj)])[0])
+    for stored_projects in (disk_projects, _read_project_journal()):
+        for proj in stored_projects:
+            pid = proj.get("id") if isinstance(proj, dict) else None
+            if pid is None or pid in session_ids:
+                continue
+            if pid in unserializable_project_ids:
+                # Never turn a transient/non-persistable widget value into a
+                # project deletion. Preserve the last complete version instead.
+                import copy
+                merged.append(_deobscure_projects([copy.deepcopy(proj)])[0])
+                session_ids.add(pid)
+                continue
+            if pid not in deleted_project_ids:
+                # Its absence may be a freshly-reset Streamlit session rather
+                # than a user request. De-obscure before it re-enters
+                # _sanitize_projects(), which would otherwise double-encode it.
+                import copy
+                merged.append(_deobscure_projects([copy.deepcopy(proj)])[0])
+                session_ids.add(pid)
+    return merged
+
+
+def reconcile_projects(session_state: Any) -> list:
+    """Restore persisted projects that a transient UI session forgot.
+
+    This runs before the project sidebar is rendered, so a hot reload cannot
+    temporarily present a default project as though the user's projects were
+    gone and then autosave that loss.
+    """
+    projects = session_state.get("projects") if hasattr(session_state, "get") else None
+    if not isinstance(projects, list):
+        projects = []
+    merged = _merge_with_disk_projects(session_state, projects)
+    if hasattr(session_state, "__setitem__"):
+        session_state["projects"] = merged
     return merged
 
 
@@ -296,35 +374,41 @@ def save_settings(session_state: Any) -> None:
             if hasattr(session_state, "get") else None
         if isinstance(session_projects, list):
             safe_projects = []
+            unserializable_project_ids: set[str] = set()
             for proj in session_projects:
                 try:
                     json.dumps(proj)
                     safe_projects.append(proj)
                 except TypeError:
-                    continue
-            merged = _merge_with_disk_projects(session_state, safe_projects)
+                    if isinstance(proj, dict) and isinstance(proj.get("id"), str):
+                        unserializable_project_ids.add(proj["id"])
+            merged = _merge_with_disk_projects(
+                session_state,
+                safe_projects,
+                unserializable_project_ids,
+            )
+            # Keep the in-memory UI list in sync too. Without this, a hot
+            # reload could save a recovered project yet continue displaying
+            # only the temporary default until another rerun.
+            session_state["projects"] = merged
             data["projects"] = _sanitize_projects(merged)
 
-        _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # Write projects independently before the aggregate settings
+            # document. A stale app process that lacks this journal can still
+            # overwrite settings, but it cannot erase this recovery source.
+            _write_json_atomically(_project_journal_path(), {"projects": data["projects"]})
 
-        # After a successful save this session is authoritative for every
-        # project it currently holds, so fold those ids into the load-time
-        # baseline. This lets a project created/duplicated in this same
-        # session be deleted permanently (its id is now "known", so
-        # _merge_with_disk_projects treats its later absence as an intentional
-        # deletion instead of resurrecting it). We union with *safe_projects*
-        # (this session's own projects), never *merged* — claiming authority
-        # over another tab's preserved project would let a later save delete
-        # it, the exact cross-session data loss the merge exists to prevent.
-        if isinstance(session_projects, list):
-            try:
-                known = set(session_state.get("_known_project_ids_at_load") or [])
-                known |= {p.get("id") for p in safe_projects
-                          if isinstance(p, dict) and p.get("id")}
-                session_state["_known_project_ids_at_load"] = list(known)
-            except Exception:
-                pass
+        # Keep one complete, readable prior version. Combined with atomic
+        # replacement this makes a code reload or concurrent reader unable to
+        # observe partial JSON and replace a project list with a default one.
+        try:
+            previous = _read_settings_document(_SETTINGS_PATH)
+        except Exception:
+            previous = None
+        if previous is not None:
+            _write_json_atomically(_backup_path(), previous)
+        _write_json_atomically(_SETTINGS_PATH, data)
+
     except Exception:
         pass
 
@@ -336,17 +420,27 @@ def load_settings() -> dict[str, Any]:
     denied, etc.) so that callers can safely iterate over the result.
     """
     try:
-        raw = _SETTINGS_PATH.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return {}
+        try:
+            data = _read_settings_document(_SETTINGS_PATH)
+        except Exception:
+            # If an older release was interrupted while writing settings,
+            # recover the last known good file rather than bootstrapping an
+            # empty project list and persisting that loss.
+            data = _read_settings_document(_backup_path())
         # Only return keys that belong to PERSIST_KEYS and are not sensitive
         result = {
             k: v for k, v in data.items()
             if k in PERSIST_KEYS and k not in _SENSITIVE_KEYS
         }
         if isinstance(result.get("projects"), list):
-            result["projects"] = _deobscure_projects(result["projects"])
+            projects = list(result["projects"])
+            known_ids = {project.get("id") for project in projects if isinstance(project, dict)}
+            for project in _read_project_journal():
+                project_id = project.get("id") if isinstance(project, dict) else None
+                if project_id and project_id not in known_ids:
+                    projects.append(project)
+                    known_ids.add(project_id)
+            result["projects"] = _deobscure_projects(projects)
         return result
     except Exception:
         return {}

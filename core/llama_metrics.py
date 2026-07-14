@@ -20,9 +20,11 @@ _PROMETHEUS_FIELDS = {
     "requests_processing": "llamacpp:requests_processing",
     "requests_deferred": "llamacpp:requests_deferred",
     "context_high_watermark": "llamacpp:n_tokens_max",
+    "decode_calls": "llamacpp:n_decode_total",
+    "busy_slots_per_decode": "llamacpp:n_busy_slots_per_decode",
 }
 _COUNTER_FIELDS = {
-    "prompt_tokens", "prompt_seconds", "completion_tokens", "completion_seconds",
+    "prompt_tokens", "prompt_seconds", "completion_tokens", "completion_seconds", "decode_calls",
 }
 
 

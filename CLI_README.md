@@ -16,6 +16,12 @@ Otherwise, if you are running it directly from the repository, be sure to use th
 
 You can export a bot's configuration from the ModelScope UI as a JSON file and run it entirely headlessly via the CLI. The CLI will automatically create the correct environment (Local, SSH, PCT) and run the evaluation logic.
 
+This is the headless entry point for **Bash-Bot**, **Llama-CLI-Bot**, and
+**Llama-Server-Bot** projects. Managed Llama-Server projects start the configured
+`llama-server` binary, wait for `/health`, collect its Prometheus metrics, and
+stop it when the evaluation completes. Each non-dry run writes `run.log`,
+`telemetry.json`, and a credential-sanitized `config.json` under `logs/sessions/`.
+
 | Flag | Description |
 |------|-------------|
 | `-f`, `--file PATH` | _(required)_ Path to the exported project JSON file |

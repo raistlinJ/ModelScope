@@ -263,6 +263,37 @@ def init_state() -> None:
         st.session_state.setdefault(key, default)
 
 
+def hydrate_persisted_run_state(project_id: str) -> None:
+    """Restore a project's saved run history and latest result once per session.
+
+    SessionLog already persists every evaluation. This makes that durable data
+    available to Execute (result summary), the dashboard, and sidebar status
+    icons immediately after a browser refresh or app restart.
+    """
+    if not project_id:
+        return
+    hydrated_key = f"_run_state_hydrated_{project_id}"
+    if st.session_state.get(hydrated_key):
+        return
+
+    try:
+        from config.defaults import MAX_RUN_HISTORY
+        from core.session_log import SessionRepository
+
+        # Repository order is newest-first; the UI appends runs and expects
+        # the latest entry at the end of its per-project history list.
+        saved = SessionRepository().history_for_project(project_id, limit=MAX_RUN_HISTORY)
+        history = list(reversed(saved))
+    except Exception:
+        history = []
+
+    if history:
+        st.session_state[f"run_history_{project_id}"] = history
+        st.session_state[f"telemetry_{project_id}"] = history[-1]
+        st.session_state[f"run_completed_{project_id}"] = True
+    st.session_state[hydrated_key] = True
+
+
 def sync_project(project_id: str) -> None:
     """
     Sync working-copy keys from the active project's config bundle.

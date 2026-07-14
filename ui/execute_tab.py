@@ -266,6 +266,7 @@ def _run_bash_bot(project: dict, shared: dict) -> None:
         "validation_sets":     _get_selected_validation_sets(cfg),
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
+        "metric_thresholds":   cfg.get("metric_thresholds", {}),
         "bash_sudo":           cfg.get("sudo", False),
         # The evaluator reads "sudo"; keep "bash_sudo" for telemetry/back-compat
         "sudo":                cfg.get("sudo", False),
@@ -620,6 +621,7 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         ),
         "fail_patterns":       cfg.get("fail_patterns", []),
         "metrics_matrix":      cfg.get("metrics_matrix", []),
+        "metric_thresholds":   cfg.get("metric_thresholds", {}),
         "sudo":                cfg.get("sudo", False),
         "sudo_password":       cfg.get("sudo_password", ""),
         "system_prompt":       cfg.get("system_prompt", ""),
@@ -700,7 +702,6 @@ def _render_llama_cli_execute(
     project: dict,
     bot_type: str = "llama_cli_bot",
     llm_label: str = "LLAMA-CLI",
-    state_prefix: str = "llama_cli",
     exec_prefix: str = "llama_exec",
     flush_fn=_flush_llama_cli_config,
 ) -> None:
@@ -824,18 +825,9 @@ def _render_llama_cli_execute(
                 with st.expander(_phase_label("Completion", "completion"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("completion_commands", [])), "completion")
 
-    # ── Scenario system prompt (editable, persisted) ──────────────────────────
-    system_prompt_key = f"{state_prefix}_system_prompt"
-    st.session_state.setdefault(system_prompt_key, cfg.get("system_prompt", ""))
-    sys_prompt = st.text_area(
-        "System Prompt",
-        key=system_prompt_key,
-        height=100,
-        placeholder="Optional system prompt sent to the model before evaluation prompts.",
-        help="Custom system prompt. Leave empty for no system prompt.",
-    )
-    # Persist back to config
-    project["config"]["system_prompt"] = sys_prompt
+    # Keep the project working copy synchronized without exposing a separate
+    # global System Prompt control on the Execute page. Per-validation prompt
+    # details remain read-only in the configured validation summary above.
     flush_fn(project)
 
     # Run / Cancel / Clear buttons
@@ -976,7 +968,6 @@ def _render_llama_server_execute(project: dict) -> None:
         project,
         bot_type="llama_server_bot",
         llm_label="LLAMA-SERVER",
-        state_prefix="llama_server",
         exec_prefix="llama_server_exec",
         flush_fn=_flush_llama_server_config,
     )

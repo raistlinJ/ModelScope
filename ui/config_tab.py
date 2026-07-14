@@ -1,6 +1,7 @@
 import copy
 import html
 import json
+import math
 import re
 import uuid
 import pandas as pd
@@ -21,7 +22,17 @@ def _push_undo(snapshot: dict) -> None:
 
 
 def _export_project_json(project: dict) -> str:
-    # Same secret set the settings store strips before writing to disk
+    """Return a complete, portable snapshot of the active project.
+
+    Widgets are a working copy of the project's config, so flush the owning
+    plugin first. This prevents Export from serializing a stale config when a
+    user has just changed a runtime field such as model name.
+    """
+    plugin = get_bot_plugin(project.get("type", ""))
+    if plugin is not None:
+        plugin.flush_config(project)
+
+    # Same secret set the settings store strips before writing to disk.
     from core.settings_store import NESTED_SENSITIVE
     proj_copy = copy.deepcopy(project)
     for k in NESTED_SENSITIVE:
@@ -92,6 +103,9 @@ def _show_delete_project_dialog(project_id: str) -> None:
                         "projects": copy.deepcopy(projects),
                         "active_project_id": st.session_state.get("active_project_id")})
             remaining = [p for p in projects if p["id"] != project_id]
+            deleted = set(st.session_state.get("_deleted_project_ids", []))
+            deleted.add(project_id)
+            st.session_state["_deleted_project_ids"] = list(deleted)
             st.session_state["projects"] = remaining
             if remaining:
                 st.session_state["active_project_id"] = remaining[0]["id"]
@@ -257,6 +271,7 @@ def _clean_steps(steps_list):
 
 def _flush_bash_config(project: dict) -> None:
     """Write flat bash_* working keys back into the project's config bundle."""
+    get_bot_plugin(project.get("type", "bash_bot")).flush_mapped_config(project)
 
     project["config"].update({
         "execution_target":  st.session_state.get("bash_execution_target", "local"),
@@ -1734,10 +1749,89 @@ def _render_validation_sets_ui(project: dict, prefix: str, flush_fn) -> None:
         _edit_validation_set_dialog(project, sets, nonce, prefix, flush_fn)
 
 
+def _render_metric_thresholds_config(project: dict, prefix: str, flush_fn) -> None:
+    """Configure optional severity thresholds for every Llama dashboard metric."""
+    from core.metric_thresholds import THRESHOLD_LEVELS, configured_thresholds, metrics_for_bot
+
+    state_key = f"{prefix}_metric_thresholds"
+    configured = configured_thresholds(st.session_state.get(state_key, {}))
+    supported_metrics = {metric for metric, _ in metrics_for_bot(prefix)}
+    # A prior release exposed optional llama-cli stderr-performance controls.
+    # Those values are not reliably produced and are no longer configurable;
+    # discard them when this config is next saved.
+    updated = {
+        metric: values for metric, values in configured.items()
+        if metric in supported_metrics
+    }
+
+    st.subheader("Dashboard Metric Thresholds")
+    st.caption(
+        "Optional run labels only — they do not alter validation or stop a run. "
+        "Leave a field blank to ignore that threshold. The first matching band wins: "
+        "Hard Fail uses ≥; Soft Fail, Soft Pass, and Hard Pass use >."
+    )
+
+    headers = st.columns([2.2, 1, 1, 1, 1, 0.72])
+    headers[0].markdown("**Metric**")
+    for col, (_, label, operator) in zip(headers[1:], THRESHOLD_LEVELS):
+        col.markdown(f"**{label}**  `{operator}`")
+    headers[-1].markdown("**Reset**")
+
+    for metric, metric_spec in metrics_for_bot(prefix):
+        metric_label = metric_spec["label"]
+        metric_unit = metric_spec["unit"]
+        values = dict(updated.get(metric, {}))
+        row = st.columns([2.2, 1, 1, 1, 1, 0.72])
+        row[0].markdown(f"**{metric_label}**  \n`{metric_unit}`")
+        for col, (level, _, _) in zip(row[1:], THRESHOLD_LEVELS):
+            widget_key = f"_{prefix}_metric_threshold_{metric}_{level}"
+            if widget_key not in st.session_state:
+                existing = values.get(level)
+                st.session_state[widget_key] = "" if existing is None else f"{existing:g}"
+            raw_value = col.text_input(
+                f"{metric_label} {level}",
+                key=widget_key,
+                label_visibility="collapsed",
+                placeholder="Not set",
+            ).strip()
+            if not raw_value:
+                values.pop(level, None)
+                continue
+            try:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise ValueError
+                values[level] = value
+            except ValueError:
+                col.error("Number required")
+
+        if row[-1].button("Clear", key=f"_{prefix}_metric_threshold_clear_{metric}"):
+            updated.pop(metric, None)
+            for level, _, _ in THRESHOLD_LEVELS:
+                st.session_state.pop(f"_{prefix}_metric_threshold_{metric}_{level}", None)
+            st.session_state[state_key] = updated
+            flush_fn(project)
+            st.rerun()
+
+        if values:
+            updated[metric] = values
+            ordered = [values[level] for level, _, _ in THRESHOLD_LEVELS if level in values]
+            if any(left < right for left, right in zip(ordered, ordered[1:])):
+                st.warning(
+                    f"{metric_label}: configure bands from highest (Hard Fail) to lowest (Hard Pass) "
+                    "to avoid an earlier band masking a later one."
+                )
+        else:
+            updated.pop(metric, None)
+
+    st.session_state[state_key] = updated
+    flush_fn(project)
+
+
 
 
 def _render_bash_bot_config(project: dict) -> None:
-    """Top-level config renderer for Bash-Bot projects (2 sub-tabs: Runtime, Metrics)."""
+    """Top-level config renderer for Bash-Bot projects."""
     st.divider()
 
     sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
@@ -1751,6 +1845,7 @@ def _render_bash_bot_config(project: dict) -> None:
 
 def _flush_llama_cli_config(project: dict) -> None:
     """Write flat llama_cli_* working keys back into the project's config bundle."""
+    get_bot_plugin(project.get("type", "llama_cli_bot")).flush_mapped_config(project)
     # Derive legacy prompts/commands lists from unified steps for evaluator compat
     _steps = st.session_state.get("llama_cli_steps", [])
     _prompts  = [s["content"] for s in _steps if s.get("type") == "prompt"  and s.get("enabled", True)]
@@ -1778,6 +1873,7 @@ def _flush_llama_cli_config(project: dict) -> None:
         "binary_path":         st.session_state.get("llama_cli_binary_path", ""),
         "model_dir":           st.session_state.get("llama_cli_model_dir", ""),
         "model_name":          st.session_state.get("llama_cli_model_name", ""),
+        "server_port":         st.session_state.get("llama_cli_server_port", 8080),
         "openai_base_url":     st.session_state.get("llama_cli_openai_base_url", ""),
         "openai_api_key":      st.session_state.get("llama_cli_openai_api_key", ""),
         "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", True),
@@ -1817,8 +1913,11 @@ def _flush_llama_cli_config(project: dict) -> None:
         "prompts":             _prompts,
         "commands":            _commands,
         "timeout":             st.session_state.get("llama_cli_timeout", 120),
+        "validation_commands": st.session_state.get("llama_cli_validation_commands", []),
+        "fail_patterns":       st.session_state.get("llama_cli_fail_patterns", []),
         "validation_sets":     st.session_state.get("llama_cli_validation_sets", []),
         "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
+        "metric_thresholds":   st.session_state.get("llama_cli_metric_thresholds", {}),
         "system_prompt":       st.session_state.get("llama_cli_system_prompt", ""),
         "llm_helper_backend": st.session_state.get("llama_cli_llm_helper_backend", "OpenAI-Compatible"),
         "llm_helper_openai_url": st.session_state.get("llama_cli_llm_helper_openai_url", ""),
@@ -2635,11 +2734,15 @@ def _render_llama_cli_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-CLI bot configuration."""
     st.divider()
 
-    sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
+    sub_runtime, sub_val, sub_metrics = st.tabs(
+        ["🖥  Runtime", "✅  Validation", "📊  Metrics Config"]
+    )
     with sub_runtime:
         _render_llama_cli_runtime(project)
     with sub_val:
         _render_llama_cli_validation(project)
+    with sub_metrics:
+        _render_metric_thresholds_config(project, "llama_cli", _flush_llama_cli_config)
 
 
 # ── Llama-Server Bot configuration ────────────────────────────────────────────
@@ -2652,6 +2755,7 @@ def _llama_server_client_base_url(host: str, port: int) -> str:
 
 def _flush_llama_server_config(project: dict) -> None:
     """Write flat llama_server_* working keys back into the project's config bundle."""
+    get_bot_plugin(project.get("type", "llama_server_bot")).flush_mapped_config(project)
     _steps = st.session_state.get("llama_server_steps", [])
     _prompts = [s["content"] for s in _steps if s.get("type") == "prompt" and s.get("enabled", True)]
     _commands = [s["content"] for s in _steps if s.get("type") == "command" and s.get("enabled", True)]
@@ -2720,8 +2824,11 @@ def _flush_llama_server_config(project: dict) -> None:
         "prompts":             _prompts,
         "commands":            _commands,
         "timeout":             st.session_state.get("llama_server_timeout", 120),
+        "validation_commands": st.session_state.get("llama_server_validation_commands", []),
+        "fail_patterns":       st.session_state.get("llama_server_fail_patterns", []),
         "validation_sets":     st.session_state.get("llama_server_validation_sets", []),
         "metrics_matrix":      st.session_state.get("llama_server_metrics_matrix", []),
+        "metric_thresholds":   st.session_state.get("llama_server_metric_thresholds", {}),
         "system_prompt":       st.session_state.get("llama_server_system_prompt", ""),
         "llm_helper_backend": st.session_state.get("llama_server_llm_helper_backend", "OpenAI-Compatible"),
         "llm_helper_openai_url": st.session_state.get("llama_server_llm_helper_openai_url", ""),
@@ -2905,6 +3012,13 @@ def _test_llama_server_run(project: dict) -> None:
     exec_target = cfg.get("execution_target", "local")
     use_remote = exec_target == "ssh"
 
+    # Validate the configured launch inputs before accepting an unrelated
+    # process already bound to the default address as a successful test.
+    model_name = cfg.get("model_name", "")
+    if not model_name:
+        st.session_state["_llama_server_svc_result"] = ("error", "No model selected.", "")
+        return
+
     if not use_remote:
         client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
         url = f"http://{client_host}:{port}"
@@ -2926,10 +3040,6 @@ def _test_llama_server_run(project: dict) -> None:
                 )
             return
 
-    model_name = cfg.get("model_name", "")
-    if not model_name:
-        st.session_state["_llama_server_svc_result"] = ("error", "No model selected.", "")
-        return
     model_dir  = cfg.get("model_dir", "")
     model_path = os.path.join(model_dir, model_name) if model_dir else model_name
     if not use_remote:
@@ -3336,8 +3446,12 @@ def _render_llama_server_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-Server bot configuration."""
     st.divider()
 
-    sub_runtime, sub_val = st.tabs(["🖥  Runtime", "✅  Validation"])
+    sub_runtime, sub_val, sub_metrics = st.tabs(
+        ["🖥  Runtime", "✅  Validation", "📊  Metrics Config"]
+    )
     with sub_runtime:
         _render_llama_server_runtime(project)
     with sub_val:
         _render_llama_server_validation(project)
+    with sub_metrics:
+        _render_metric_thresholds_config(project, "llama_server", _flush_llama_server_config)

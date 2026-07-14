@@ -719,6 +719,8 @@ def _calculate_step_tdi(
 
 def _init_telemetry(config: dict) -> dict:
     """Initialise the telemetry accumulator for a new run."""
+    from core.run_status import run_status_fingerprint
+
     return {
         "run_timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "run_scenario":    config.get("active_scenario", ""),
@@ -744,6 +746,8 @@ def _init_telemetry(config: dict) -> dict:
         "llm_response":   "",
         "run_aborted":    False,
         "metrics_matrix": config.get("metrics_matrix", []),
+        "metric_thresholds": config.get("metric_thresholds", {}),
+        "run_status_fingerprint": run_status_fingerprint(config),
         # CAF 4-Pillar
         "caf_trajectory": [],
         "caf_config": {
@@ -1138,6 +1142,8 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
     val_cmds   = config.get("validation_commands", [])
     fail_pats  = config.get("fail_patterns", [])
 
+    from core.run_status import run_status_fingerprint
+
     telemetry: dict = {
         "run_timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "run_bot_type":         "bash_bot",
@@ -1150,6 +1156,8 @@ def run_bash_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[st
         "run_aborted":          False,
         "prompt_call_failed":   False,
         "metrics_matrix":       config.get("metrics_matrix", []),
+        "metric_thresholds":    config.get("metric_thresholds", {}),
+        "run_status_fingerprint": run_status_fingerprint(config),
     }
 
     _sudo_pw   = (config.get("sudo_password") or "").strip()
@@ -1328,6 +1336,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     """Run prompts via llama-cli binary and/or shell commands, then validate."""
     import os
     import shlex
+    from core.run_status import run_status_fingerprint
     start_t    = time.time()
     timeout    = config.get("timeout", 120)
     cancel_ref = config.get("cancel_requested_ref", [False])
@@ -1397,6 +1406,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
         "interrupted_by_user":  False,
         "prompt_call_failed":   False,
         "metrics_matrix":       config.get("metrics_matrix", []),
+        "metric_thresholds":    config.get("metric_thresholds", {}),
+        "run_status_fingerprint": run_status_fingerprint(config),
         # llama-cli has no HTTP metrics endpoint. Its own stderr performance
         # report is collected whenever the installed build emits it.
         "llama_cli_performance": {"available": False, "samples": 0},

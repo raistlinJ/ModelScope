@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from core.bot_types.base import (
+    COMMON_DASHBOARD_METRIC_SPECS,
     COMMON_RUNTIME_DEFAULTS,
     LLM_HELPER_DEFAULTS,
     StatusItem,
@@ -73,6 +74,7 @@ LLAMA_SERVER_STATE_KEY_MAP: dict[str, str] = {
     "llama_server_validation_commands": "validation_commands",
     "llama_server_fail_patterns": "fail_patterns",
     "llama_server_metrics_matrix": "metrics_matrix",
+    "llama_server_metric_thresholds": "metric_thresholds",
     "llama_server_validation_sets": "validation_sets",
     "llama_server_system_prompt": "system_prompt",
     "llama_server_llm_helper_backend": "llm_helper_backend",
@@ -156,6 +158,7 @@ LLAMA_SERVER_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_server_timeout":             120,
     "llama_server_validation_sets":     [],
     "llama_server_metrics_matrix":      [],
+    "llama_server_metric_thresholds":   {},
     "llama_server_validation_commands": [],
     "llama_server_fail_patterns":       [],
     "llama_server_system_prompt":       "",
@@ -189,7 +192,25 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
         "llama_server_is_fetching_",  # transient LLM-helper fetch flags
         "_llama_server_svc_",     # llama-server test-run/status result
         "llama_server_mcp_en_",   # MCP server enable toggles
+        "_llama_server_metric_threshold_",  # Metrics Config widgets
     )
+    # llama-server owns its Prometheus-backed metric catalog. This makes a
+    # plugin the source of truth for metrics its backend can actually emit.
+    metric_specs = {
+        **COMMON_DASHBOARD_METRIC_SPECS,
+        "prompt_tokens": {"label": "Prompt Tokens", "unit": "tokens"},
+        "completion_tokens": {"label": "Generated Tokens", "unit": "tokens"},
+        "total_tokens": {"label": "Total Tokens", "unit": "tokens"},
+        "prompt_tokens_per_second": {"label": "Prompt Throughput", "unit": "tok/s"},
+        "completion_tokens_per_second": {"label": "Generation Throughput", "unit": "tok/s"},
+        "prompt_seconds": {"label": "Prompt Processing", "unit": "s"},
+        "completion_seconds": {"label": "Generation Processing", "unit": "s"},
+        "requests_processing": {"label": "Active Requests", "unit": "requests"},
+        "requests_deferred": {"label": "Deferred Requests", "unit": "requests"},
+        "context_high_watermark": {"label": "Context High Watermark", "unit": "tokens"},
+        "decode_calls": {"label": "Decode Calls", "unit": "calls"},
+        "busy_slots_per_decode": {"label": "Busy Slots / Decode", "unit": "slots"},
+    }
     cache_keys = (
         "llama_server_discovered_models",
         "_llama_server_svc_result",
@@ -245,6 +266,7 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
                 "steps": [],
                 "timeout": 120,
                 "system_prompt": "",
+                "metric_thresholds": {},
             },
             LLM_HELPER_DEFAULTS,
         )

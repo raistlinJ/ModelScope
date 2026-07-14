@@ -761,9 +761,14 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
     if telemetry:
         session_log.save_telemetry(telemetry)
+        # Keep project-mode artefacts equivalent to `run`: telemetry alone is
+        # not enough to reproduce a bot launch or interpret its metrics.
+        # SessionLog strips credentials before writing this effective config.
+        session_log.save_config(config)
         print()
         _print_run_summary(telemetry)
 
+    session_log.close()
     return 0
 
 

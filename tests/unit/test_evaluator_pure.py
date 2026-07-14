@@ -201,7 +201,7 @@ class TestInitTelemetry:
             "llm_rounds", "tool_calls", "validation_stdout",
             "validation_stderr", "validation_exit_code", "validation_passed",
             "inefficiencies", "llm_response", "run_aborted",
-            "metrics_matrix", "caf_trajectory", "caf_config",
+            "metrics_matrix", "metric_thresholds", "caf_trajectory", "caf_config",
         ]
         for key in required:
             assert key in tel, f"Missing key: {key}"
@@ -245,6 +245,11 @@ class TestInitTelemetry:
         cfg = self._config(metrics_matrix=[{"id": "M-001"}, {"id": "M-002"}])
         tel = _init_telemetry(cfg)
         assert len(tel["metrics_matrix"]) == 2
+
+    def test_metric_thresholds_are_snapshotted_with_the_run(self):
+        thresholds = {"total_tokens": {"hard_fail": 100}}
+        tel = _init_telemetry(self._config(metric_thresholds=thresholds))
+        assert tel["metric_thresholds"] == thresholds
 
     def test_run_timestamp_is_string(self):
         tel = _init_telemetry(self._config())

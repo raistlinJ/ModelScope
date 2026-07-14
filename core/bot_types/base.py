@@ -66,6 +66,16 @@ LLM_HELPER_DEFAULTS: dict[str, Any] = {
 }
 
 
+# These values are emitted by ModelScope itself, independently of an LLM
+# backend. Backend-specific catalogs belong to each bot plugin below.
+COMMON_DASHBOARD_METRIC_SPECS: dict[str, dict[str, str]] = {
+    "total_latency": {"label": "Latency", "unit": "s"},
+    "prompts_run": {"label": "Prompts Run", "unit": "runs"},
+    "commands_run": {"label": "Commands Run", "unit": "commands"},
+}
+COMMON_DASHBOARD_METRIC_KEYS: frozenset[str] = frozenset(COMMON_DASHBOARD_METRIC_SPECS)
+
+
 class BotTypePlugin:
     """Base contract for bot-type plugins.
 
@@ -98,6 +108,7 @@ class BotTypePlugin:
     session_defaults: Mapping[str, Any] = {}
     global_keys: frozenset[str] = frozenset()
     owned_prefixes: tuple[str, ...] = ()
+    metric_specs: Mapping[str, Mapping[str, str]] = {}
 
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {}
@@ -131,8 +142,28 @@ class BotTypePlugin:
     def render_execute(self, project: dict[str, Any]) -> None:
         raise NotImplementedError
 
+    def flush_mapped_config(
+        self, project: dict[str, Any], session_state: Mapping[str, Any] | None = None
+    ) -> None:
+        """Copy this plugin's live mapped state into its project config.
+
+        This is the default persistence/export implementation for plugins.
+        A plugin only needs to declare ``state_key_map`` for its ordinary
+        widget values to survive an export. Plugins with derived values may
+        override :meth:`flush_config`, but should call this helper first.
+        """
+        if session_state is None:
+            import streamlit as st
+            session_state = st.session_state
+
+        config = project.setdefault("config", {})
+        for state_key, config_key in self.state_key_map.items():
+            if state_key in session_state:
+                config[config_key] = copy.deepcopy(session_state[state_key])
+
     def flush_config(self, project: dict[str, Any]) -> None:
-        raise NotImplementedError
+        """Persist live mapped settings for plugins without custom handling."""
+        self.flush_mapped_config(project)
 
     def run_evaluation(self, env: BaseEnvironment, config: dict[str, Any], on_log: OnLog) -> dict[str, Any]:
         raise NotImplementedError

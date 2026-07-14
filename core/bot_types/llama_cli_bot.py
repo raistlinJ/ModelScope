@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from core.bot_types.base import (
+    COMMON_DASHBOARD_METRIC_SPECS,
     COMMON_RUNTIME_DEFAULTS,
     LLM_HELPER_DEFAULTS,
     StatusItem,
@@ -72,6 +73,7 @@ LLAMA_CLI_STATE_KEY_MAP: dict[str, str] = {
     "llama_cli_validation_commands": "validation_commands",
     "llama_cli_fail_patterns": "fail_patterns",
     "llama_cli_metrics_matrix": "metrics_matrix",
+    "llama_cli_metric_thresholds": "metric_thresholds",
     "llama_cli_validation_sets": "validation_sets",
     "llama_cli_system_prompt": "system_prompt",
     "llama_cli_llm_helper_backend": "llm_helper_backend",
@@ -148,6 +150,7 @@ LLAMA_CLI_SESSION_DEFAULTS: dict[str, Any] = {
     "llama_cli_timeout":             120,
     "llama_cli_validation_sets":     [],
     "llama_cli_metrics_matrix":      [],
+    "llama_cli_metric_thresholds":   {},
     "llama_cli_validation_commands": [],
     "llama_cli_fail_patterns":       [],
     "llama_cli_system_prompt":       "",
@@ -177,7 +180,12 @@ class LlamaCliBotPlugin(BashBotPlugin):
         "_llama_openai_",       # OpenAI-compatible widget keys
         "_llama_preset_sel",    # preset selector
         "llama_mcp_en_",        # MCP server enable toggles (positional checkbox)
+        "_llama_cli_metric_threshold_",  # Metrics Config widgets
     )
+    # llama-cli reliably exposes only ModelScope's run-level values. Its
+    # optional stderr timing summary varies by llama.cpp build, so it is not a
+    # dashboard/config metric contract.
+    metric_specs = COMMON_DASHBOARD_METRIC_SPECS
     templates = ()
     cache_keys = (
         "llama_cli_discovered_models",
@@ -206,6 +214,7 @@ class LlamaCliBotPlugin(BashBotPlugin):
                 "steps": [],
                 "timeout": 60,
                 "system_prompt": "",
+                "metric_thresholds": {},
             },
             LLM_HELPER_DEFAULTS,
         )

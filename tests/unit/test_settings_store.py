@@ -125,9 +125,9 @@ class TestSaveSettingsProjectMerge:
                 {"id": "b", "name": "B", "type": "bash_bot", "config": {}},
             ],
         }))
-        # This session saw both "a" and "b" at load, then the user deleted "b".
+        # The UI records an explicit deletion; mere absence is not enough.
         state = {"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}],
-                 "_known_project_ids_at_load": ["a", "b"]}
+                 "_deleted_project_ids": ["b"]}
         save_settings(state)
         data = json.loads(path.read_text())
         ids = {p["id"] for p in data["projects"]}
@@ -145,10 +145,8 @@ class TestSaveSettingsProjectMerge:
         data = json.loads(path.read_text())
         assert data["projects"][0]["name"] == "New Name"
 
-    def test_no_known_ids_baseline_falls_back_to_current_disk_state(self, tmp_path, monkeypatch):
-        """No _known_project_ids_at_load recorded (e.g. a non-Streamlit
-        caller) must not spuriously resurrect anything — the safe fallback
-        assumes the session saw whatever is currently on disk."""
+    def test_missing_projects_without_an_explicit_delete_are_preserved(self, tmp_path, monkeypatch):
+        """A reset/reloaded session may have an empty project list temporarily."""
         path = tmp_path / "settings.json"
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
         path.write_text(json.dumps({
@@ -157,7 +155,7 @@ class TestSaveSettingsProjectMerge:
         state = {"projects": []}  # no baseline key at all
         save_settings(state)
         data = json.loads(path.read_text())
-        assert data["projects"] == []
+        assert [project["id"] for project in data["projects"]] == ["a"]
 
     def test_first_ever_save_with_no_disk_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH", tmp_path / "settings.json")
@@ -187,6 +185,7 @@ class TestSaveSettingsProjectMerge:
         save_settings(state)
         # User deletes P3 -> auto-save on the next rerun.
         state["projects"] = [p for p in state["projects"] if p["id"] != "P3"]
+        state["_deleted_project_ids"] = ["P3"]
         save_settings(state)
         # What a browser refresh / server restart would read back.
         data = json.loads(path.read_text())
@@ -199,13 +198,47 @@ class TestSaveSettingsProjectMerge:
         un-deletable."""
         path = tmp_path / "settings.json"
         monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
-        state = {"projects": [], "_known_project_ids_at_load": []}
+        state = {"projects": []}
         state["projects"] = [{"id": "A", "name": "A", "type": "bash_bot", "config": {}}]
         save_settings(state)   # create
         state["projects"] = []
+        state["_deleted_project_ids"] = ["A"]
         save_settings(state)   # delete
         data = json.loads(path.read_text())
         assert data["projects"] == [], "project created in an empty-start session could not be deleted"
+
+    def test_default_project_from_a_reset_session_does_not_replace_saved_llama_project(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        saved = [
+            {"id": "default_bash", "name": "Bash Project 1", "type": "bash_bot", "config": {}},
+            {"id": "server", "name": "Server", "type": "llama_server_bot", "config": {}},
+            {"id": "cli", "name": "CLI", "type": "llama_cli_bot", "config": {}},
+        ]
+        path.write_text(json.dumps({"projects": saved}))
+        reset_state = {"projects": [saved[0]], "_known_project_ids_at_load": [p["id"] for p in saved]}
+
+        save_settings(reset_state)
+
+        assert {project["id"] for project in json.loads(path.read_text())["projects"]} == {
+            "default_bash", "server", "cli",
+        }
+
+    def test_project_journal_recovers_from_a_stale_settings_overwrite(self, tmp_path, monkeypatch):
+        """An older running app must not be able to erase a newer Llama project."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        projects = [
+            {"id": "default_bash", "name": "Bash", "type": "bash_bot", "config": {}},
+            {"id": "server", "name": "Server", "type": "llama_server_bot", "config": {"model_name": "model.gguf"}},
+        ]
+        save_settings({"projects": projects})
+
+        # Simulate an old app process saving only its default project.
+        path.write_text(json.dumps({"projects": [projects[0]]}))
+
+        restored = load_settings()
+        assert {project["id"] for project in restored["projects"]} == {"default_bash", "server"}
 
     def test_local_saves_do_not_claim_authority_over_another_sessions_project(self, tmp_path, monkeypatch):
         """The fix must fold only *this session's own* project ids into the
@@ -245,6 +278,39 @@ class TestSaveSettingsProjectMerge:
         data = json.loads(path.read_text())
         ids = {p["id"] for p in data["projects"]}
         assert ids == {"a", "c"}, "a single bad project must not wipe out the rest"
+
+    def test_non_serializable_project_preserves_its_last_saved_version(self, tmp_path, monkeypatch):
+        """A bad transient value must not delete an existing Llama project."""
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        saved = [
+            {"id": "bash", "name": "Bash", "type": "bash_bot", "config": {}},
+            {"id": "llama", "name": "Llama", "type": "llama_server_bot", "config": {"model_name": "kept.gguf"}},
+        ]
+        path.write_text(json.dumps({"projects": saved}))
+        state = {
+            "projects": [
+                saved[0],
+                {"id": "llama", "name": "Llama", "type": "llama_server_bot", "config": {"widget_value": object()}},
+            ],
+            "_known_project_ids_at_load": ["bash", "llama"],
+        }
+
+        save_settings(state)
+
+        by_id = {project["id"]: project for project in json.loads(path.read_text())["projects"]}
+        assert by_id["llama"]["config"]["model_name"] == "kept.gguf"
+
+    def test_load_recovers_previous_snapshot_when_primary_is_corrupt(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr("core.settings_store._SETTINGS_PATH", path)
+        save_settings({"projects": [{"id": "a", "name": "A", "type": "bash_bot", "config": {}}]})
+        # The second successful save rotates the first one into .bak.
+        save_settings({"projects": [{"id": "b", "name": "B", "type": "llama_cli_bot", "config": {}}]})
+        path.write_text("incomplete settings document")
+
+        recovered = load_settings()
+        assert {project["id"] for project in recovered["projects"]} == {"a", "b"}
 
 
 class TestNestedProjectSecretHandling:
