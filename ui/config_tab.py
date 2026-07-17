@@ -34,6 +34,10 @@ def _export_project_json(project: dict) -> str:
 
     # Same secret set the settings store strips before writing to disk.
     from core.settings_store import NESTED_SENSITIVE
+    bot_type = project.get("type", "bash_bot")
+    plugin = get_bot_plugin(bot_type)
+    if plugin is not None:
+        plugin.flush_config(project)
     proj_copy = copy.deepcopy(project)
     for k in NESTED_SENSITIVE:
         proj_copy.get("config", {}).pop(k, None)
@@ -79,6 +83,13 @@ def _duplicate_project(project_id: str) -> None:
     proj = next((p for p in projects if p["id"] == project_id), None)
     if not proj:
         return
+        
+    # Flush latest UI state into proj before duplicating so we don't miss just-edited values
+    bot_type = proj.get("type", "bash_bot")
+    plugin = get_bot_plugin(bot_type)
+    if plugin is not None:
+        plugin.flush_config(proj)
+
     new_proj = copy.deepcopy(proj)
     new_proj["id"] = str(uuid.uuid4())[:8]
     new_proj["name"] = f"{proj['name']} (copy)"
@@ -102,6 +113,11 @@ def _show_delete_project_dialog(project_id: str) -> None:
     _, c1, c2 = st.columns([2, 1, 1.5])
     with c1:
         if st.button("Delete", type="primary", use_container_width=True):
+            bot_type = proj.get("type", "bash_bot")
+            plugin = get_bot_plugin(bot_type)
+            if plugin is not None:
+                plugin.flush_config(proj)
+
             projects = st.session_state.get("projects", [])
             _push_undo({"desc": f"delete '{proj['name']}'", "type": "project",
                         "projects": copy.deepcopy(projects),
@@ -136,6 +152,11 @@ def _show_rename_project_dialog(project_id: str) -> None:
             if not name_stripped:
                 st.error("Name cannot be empty.")
                 return
+            bot_type = proj.get("type", "bash_bot")
+            plugin = get_bot_plugin(bot_type)
+            if plugin is not None:
+                plugin.flush_config(proj)
+
             projects = st.session_state.get("projects", [])
             _push_undo({"desc": f"rename '{proj['name']}'", "type": "project",
                         "projects": copy.deepcopy(projects),
