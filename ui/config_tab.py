@@ -465,7 +465,7 @@ def _step_commands_preview(commands: list, max_len: int = 35) -> str:
             text = cmd.strip()
         elif isinstance(cmd, dict) and cmd.get("type", "command") == "prompt":
             text = (cmd.get("user_prompt") or cmd.get("system_prompt") or "").strip()
-            text = f"LLM Judge: {text}" if text else "LLM Judge"
+            text = f"Prompt: {text}" if text else "Prompt"
         elif isinstance(cmd, dict):
             text = cmd.get("command", "").strip()
         else:
@@ -798,11 +798,25 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                         _cmd_type = cmd.get("type", "command")
                         if _cmd_type == "prompt":
                             with st.container(border=True):
-                                cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                                cc0, cc1, ccl_to, ccv_to, cc_lr, cc2, cc3, cc4 = st.columns([0.3, 2.7, 0.8, 1.0, 1.1, 1.6, 1.0, 0.7])
                                 with cc0:
                                     st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                                 with cc1:
                                     st.markdown("**LLM Judge**")
+                                with ccl_to:
+                                    st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                                with ccv_to:
+                                    lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                                    is_lr = st.session_state.get(lr_key, cmd.get("long_running", False))
+                                    to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                                    if to_key not in st.session_state:
+                                        st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                                    cmd["timeout_seconds"] = st.number_input(
+                                        "Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0,
+                                        key=to_key, label_visibility="collapsed", disabled=is_lr
+                                    )
+                                with cc_lr:
+                                    cmd["long_running"] = st.checkbox("Long-running", value=cmd.get("long_running", False), key=lr_key, help="Disables per-command timeout")
                                 with cc2:
                                     pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
                                     cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
@@ -944,6 +958,8 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                     "user_prompt":     "",
                     "preserve_context": True,
                     "enabled":         True,
+                    "long_running":    False,
+                    "timeout_seconds": 60,
                 })
             # LLM Judge disabled → pre-populate with a blank command row
             # so the user can type immediately without clicking "+ Add Command".
@@ -989,6 +1005,8 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 "user_prompt":     "",
                 "preserve_context": True,
                 "enabled":         True,
+                "long_running":    False,
+                "timeout_seconds": 60,
             })
         elif m[0] == "del_cmd":
             steps[m[1]]["commands"].pop(m[2])
@@ -1060,6 +1078,8 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
             "user_prompt": "",
             "preserve_context": True,
             "enabled": True,
+            "long_running": False,
+            "timeout_seconds": 60,
             "expected_output_type": "Ignore",
             "expected_output": "",
             "checks": [],
@@ -1143,12 +1163,26 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
 
                         if _cmd_type == "prompt":
                             with st.container(border=True):
-                                cc0, cc1, cc2, cc3, cc4 = st.columns([0.3, 5.7, 1.5, 1.0, 0.7])
+                                cc0, cc1, ccl_to, ccv_to, cc_lr, cc2, cc3, cc4 = st.columns([0.3, 2.7, 0.8, 1.0, 1.1, 1.6, 1.0, 0.7])
                                 with cc0:
                                     st.markdown("<div style='margin-top:8px; font-size:18px;' title='Prompt'>💬</div>", unsafe_allow_html=True)
                                 with cc1:
                                     _title = _validation_bot_prompt_title(bot_type)
                                     st.markdown(f"**{_title}**")
+                                with ccl_to:
+                                    st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                                with ccv_to:
+                                    lr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_lr"
+                                    is_lr = st.session_state.get(lr_key, cmd.get("long_running", False))
+                                    to_key = f"_sc_{pfx}_{step_id}_{cmd_id}_to"
+                                    if to_key not in st.session_state:
+                                        st.session_state[to_key] = float(cmd.get("timeout_seconds", 60.0))
+                                    cmd["timeout_seconds"] = st.number_input(
+                                        "Timeout (s)", min_value=0.1, max_value=3600.0, step=1.0,
+                                        key=to_key, label_visibility="collapsed", disabled=is_lr
+                                    )
+                                with cc_lr:
+                                    cmd["long_running"] = st.checkbox("Long-running", value=cmd.get("long_running", False), key=lr_key, help="Disables per-command timeout")
                                 with cc2:
                                     pc_key = f"_sc_{pfx}_{step_id}_{cmd_id}_pc"
                                     cmd["preserve_context"] = st.checkbox("Preserve Context", value=cmd.get("preserve_context", True), key=pc_key)
@@ -1287,7 +1321,20 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 if _url.strip():
                     from core.models import fetch_ollama_models
                     with st.spinner("Fetching..."):
-                        _found, _err = fetch_ollama_models(_url.strip())
+                        target = st.session_state.get(f"{pfx}_execution_target", "local")
+                        env = None
+                        if target in ("ssh", "pct"):
+                            from core.environment import create_environment
+                            env = create_environment(
+                                ssh=(target == "ssh"),
+                                host=st.session_state.get(f"{pfx}_ssh_host", ""),
+                                port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
+                                username=st.session_state.get(f"{pfx}_ssh_user", "root"),
+                                password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                                key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
+                                pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
+                            )
+                        _found, _err = fetch_ollama_models(_url.strip(), env=env)
                     if _found:
                         st.session_state[f"{pfx}_llm_helper_ollama_models"] = _found
                         st.toast(f"✅ Found {len(_found)} models.")
@@ -1339,7 +1386,20 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                     if _url.strip():
                         from core.models import fetch_llama_cpp_models
                         with st.spinner("Fetching..."):
-                            _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True))
+                            target = st.session_state.get(f"{pfx}_execution_target", "local")
+                            env = None
+                            if target in ("ssh", "pct"):
+                                from core.environment import create_environment
+                                env = create_environment(
+                                    ssh=(target == "ssh"),
+                                    host=st.session_state.get(f"{pfx}_ssh_host", ""),
+                                    port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
+                                    username=st.session_state.get(f"{pfx}_ssh_user", "root"),
+                                    password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                                    key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
+                                    pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
+                                )
+                            _found, _err = fetch_llama_cpp_models(_url.strip(), verify_ssl=st.session_state.get(f"{pfx}_llm_helper_openai_verify_ssl", True), env=env)
                         if _found:
                             st.session_state[f"{pfx}_llm_helper_openai_models"] = _found
                             st.toast(f"✅ Found {len(_found)} models.")
@@ -1372,7 +1432,20 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
             if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
                 if _url.strip():
                     from core.llama_server import get_server_info
-                    _info = get_server_info(_url.strip(), verify_ssl=_ssl)
+                    target = st.session_state.get(f"{pfx}_execution_target", "local")
+                    env = None
+                    if target in ("ssh", "pct"):
+                        from core.environment import create_environment
+                        env = create_environment(
+                            ssh=(target == "ssh"),
+                            host=st.session_state.get(f"{pfx}_ssh_host", ""),
+                            port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
+                            username=st.session_state.get(f"{pfx}_ssh_user", "root"),
+                            password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                            key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
+                            pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
+                        )
+                    _info = get_server_info(_url.strip(), verify_ssl=_ssl, env=env)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
                         st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`")
@@ -2735,25 +2808,24 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
                         value=step.get("enabled", True),
                         key=f"_us_{pfx}_{step_id}_en",
                     )
-                if step["type"] == "command":
-                    with mc2:
-                        step["long_running"] = st.checkbox(
-                            "Long-running",
-                            value=step.get("long_running", False),
-                            key=f"_us_{pfx}_{step_id}_lr",
-                            help="Disables per-step timeout.",
-                        )
-                    with mcl_to:
-                        st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
-                    with mcv_to:
-                        step["timeout_seconds"] = st.number_input(
-                            "Timeout (s)",
-                            min_value=0.1, max_value=3600.0, step=1.0,
-                            value=float(step.get("timeout_seconds", 60.0)),
-                            key=f"_us_{pfx}_{step_id}_to",
-                            label_visibility="collapsed",
-                            disabled=step["long_running"],
-                        )
+                with mc2:
+                    step["long_running"] = st.checkbox(
+                        "Long-running",
+                        value=step.get("long_running", False),
+                        key=f"_us_{pfx}_{step_id}_lr",
+                        help="Disables per-step timeout.",
+                    )
+                with mcl_to:
+                    st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Timeout (s)</div>", unsafe_allow_html=True)
+                with mcv_to:
+                    step["timeout_seconds"] = st.number_input(
+                        "Timeout (s)",
+                        min_value=0.1, max_value=3600.0, step=1.0,
+                        value=float(step.get("timeout_seconds", 60.0)),
+                        key=f"_us_{pfx}_{step_id}_to",
+                        label_visibility="collapsed",
+                        disabled=step.get("long_running", False),
+                    )
 
     if st.button("+ Add Step", key=f"_us_{pfx}_addstep", type="primary"):
         mutation = ("add",)

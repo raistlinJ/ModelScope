@@ -57,7 +57,7 @@ def normalize_openai_base_url(base_url: str) -> str:
     return url
 
 
-def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
+def fetch_ollama_models(base_url: str, env=None) -> tuple[list[dict], str]:
     """
     Return (models, error) where models is [{name, size_gb}] from Ollama /api/tags.
     error is '' on success, otherwise a human-readable message.
@@ -66,11 +66,21 @@ def fetch_ollama_models(base_url: str) -> tuple[list[dict], str]:
     if not url:
         return [], "Server URL is empty."
     try:
-        resp = requests.get(url.rstrip("/") + "/api/tags", timeout=8)
-        resp.raise_for_status()
+        if env and getattr(env, "is_remote_caf", False) or (env and env.__class__.__name__ in ("SSHEnvironment", "PCTEnvironment")):
+            res = env.execute(f"curl -s --max-time 8 {url.rstrip('/')}/api/tags")
+            if res["exit_code"] != 0:
+                return [], f"Cannot connect to {url} via {env.__class__.__name__}"
+            try:
+                data = json.loads(res["stdout"])
+            except Exception:
+                return [], "Invalid JSON returned"
+        else:
+            resp = requests.get(url.rstrip("/") + "/api/tags", timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
         models = [
             {"name": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)}
-            for m in resp.json().get("models", [])
+            for m in data.get("models", [])
         ]
         return models, ""
     except requests.exceptions.MissingSchema:
@@ -230,7 +240,7 @@ def delete_ollama_model(base_url: str, model_name: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list[dict], str]:
+def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True, env=None) -> tuple[list[dict], str]:
     """
     Return (models, error) where models is [{name, size_gb, context_size}]
     from a llama.cpp /v1/models endpoint.  Works for local and remote servers.
@@ -240,10 +250,20 @@ def fetch_llama_cpp_models(base_url: str, verify_ssl: bool = True) -> tuple[list
     if not url:
         return [], "Server URL is empty."
     try:
-        resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8,
-                            verify=effective_verify_ssl(url, verify_ssl))
-        resp.raise_for_status()
-        data = resp.json()
+        if env and getattr(env, "is_remote_caf", False) or (env and env.__class__.__name__ in ("SSHEnvironment", "PCTEnvironment")):
+            k_flag = "" if verify_ssl else "-k "
+            res = env.execute(f"curl -s {k_flag}--max-time 8 {url.rstrip('/')}/v1/models")
+            if res["exit_code"] != 0:
+                return [], f"Cannot connect to {url} via {env.__class__.__name__}"
+            try:
+                data = json.loads(res["stdout"])
+            except Exception:
+                return [], "Invalid JSON returned"
+        else:
+            resp = requests.get(url.rstrip("/") + "/v1/models", timeout=8,
+                                verify=effective_verify_ssl(url, verify_ssl))
+            resp.raise_for_status()
+            data = resp.json()
         # Parse /v1/models: check both top-level `data` (OpenAI list format) and `models`
         raw_list = data.get("data") or data.get("models") or []
         models: list[dict] = []

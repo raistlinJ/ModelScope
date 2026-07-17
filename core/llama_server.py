@@ -43,7 +43,7 @@ def port_open(url: str, timeout: float = 1.5) -> bool:
         return False
 
 
-def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True) -> dict | None:
+def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, env=None) -> dict | None:
     """
     Return {n_ctx, model_path} from a running OpenAI-compatible server, or None.
 
@@ -61,6 +61,35 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True) -
             return int(value) if value is not None else None
         except (TypeError, ValueError):
             return None
+
+    if env and getattr(env, "is_remote_caf", False) or (env and env.__class__.__name__ in ("SSHEnvironment", "PCTEnvironment")):
+        k_flag = "" if verify_ssl else "-k "
+        res = env.execute(f"curl -s {k_flag}--max-time 2 {base}/props")
+        if res["exit_code"] == 0:
+            try:
+                data = json.loads(res["stdout"])
+                dp = data.get("default_generation_settings", {})
+                return {
+                    "n_ctx":      _coerce_int(dp.get("n_ctx")),
+                    "model_path": data.get("system_info", {}).get("model_path", ""),
+                }
+            except Exception:
+                pass
+        
+        # Fall back to /v1/models via curl
+        res = env.execute(f"curl -s {k_flag}--max-time 2 {base}/v1/models")
+        if res["exit_code"] == 0:
+            try:
+                data = json.loads(res["stdout"])
+                raw_list = data.get("data") or data.get("models") or []
+                if raw_list and isinstance(raw_list[0], dict):
+                    m = raw_list[0]
+                    name = m.get("id") or m.get("name") or ""
+                    n_ctx = m.get("meta", {}).get("n_ctx") or 0
+                    return {"n_ctx": _coerce_int(n_ctx), "model_path": name}
+            except Exception:
+                pass
+        return None
 
     try:
         r = requests.get(base + "/props", timeout=3, verify=verify)
