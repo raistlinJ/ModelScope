@@ -119,6 +119,28 @@ class TestSessionPartition:
         assert len(mine) == 20
 
 
+class TestValidationOutputHighlighting:
+    def test_highlights_regex_matches_and_escapes_output(self):
+        from ui.dashboard_tab import _highlight_validation_matches
+
+        rendered = _highlight_validation_matches(
+            "status: PASS <safe>",
+            [{"expected_output_type": "Regex", "expected_output": r"PASS"}],
+        )
+
+        assert '<mark class="validation-output-match">PASS</mark>' in rendered
+        assert "&lt;safe&gt;" in rendered
+
+    def test_highlights_exact_string_only_when_it_passes(self):
+        from ui.dashboard_tab import _highlight_validation_matches
+
+        rendered = _highlight_validation_matches(
+            "all clear\n",
+            [{"expected_output_type": "Exact String", "expected_output": "all clear"}],
+        )
+
+        assert rendered == '<mark class="validation-output-match">all clear\n</mark>'
+
 class TestActiveProjectIdIsPersisted:
     """Regression: the Execute tab must save ``active_project_id`` in config.json
     so the dashboard can correlate sessions with projects.  We assert against

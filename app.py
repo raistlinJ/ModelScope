@@ -4,7 +4,7 @@ import json
 import uuid
 from pathlib import Path
 import streamlit as st
-from core.bot_types import get_bot_plugin, iter_bot_plugins
+from core.bot_types import get_bot_plugin, iter_bot_plugins, refresh_bot_plugins
 from core.state import hydrate_persisted_run_state, init_state, sync_project
 from core import llama_server
 from core.logsetup import configure_logging
@@ -25,7 +25,7 @@ def _source_revision() -> int:
     """
     root = Path(__file__).resolve().parent
     paths = [root / "app.py"]
-    for directory in ("core", "ui", "config"):
+    for directory in ("core", "ui", "config", "plugins"):
         paths.extend((root / directory).rglob("*.py"))
     return max((path.stat().st_mtime_ns for path in paths if path.exists()), default=0)
 
@@ -51,6 +51,10 @@ init_state()
 _current_source_revision = _source_revision()
 _source_reloaded = st.session_state.get("_source_revision") != _current_source_revision
 st.session_state["_source_revision"] = _current_source_revision
+if _source_reloaded:
+    # External bot plugins are loaded dynamically, so Streamlit's ordinary
+    # module reload does not replace their cached plugin instances.
+    refresh_bot_plugins()
 
 if "tab_version" not in st.session_state:
     st.session_state["tab_version"] = 0

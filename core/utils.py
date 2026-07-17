@@ -8,9 +8,9 @@ from __future__ import annotations
 import re
 
 # Matches CSI/escape sequences emitted by interactive CLIs (colour codes,
-# cursor moves). Compiled once at import — _strip_ansi runs on every chunk of
-# streamed remote output, so the per-call re.compile cost is worth avoiding.
-_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])')
+# cursor moves, and private-mode controls such as ``ESC[?25h``). Compiled once
+# at import — strip_ansi runs on every streamed output chunk.
+_ANSI_RE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_][0-?]*[ -/]*[@-~])')
 
 
 def ensure_http_scheme(url: str) -> str:

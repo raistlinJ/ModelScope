@@ -18,8 +18,9 @@ except ImportError:
 _SCROLL_JS = """
 <script>
 (function() {
-    var el = window.parent.document.querySelector('.terminal-window');
-    if (el) { el.scrollTop = el.scrollHeight; }
+    window.parent.document.querySelectorAll('.terminal-window').forEach(function(el) {
+        el.scrollTop = el.scrollHeight;
+    });
 })();
 </script>
 """
@@ -30,6 +31,7 @@ def render_terminal(
     logs: list[dict],
     classify,
     empty_msg: str = "Awaiting run…",
+    height: int = 500,
 ) -> None:
     """Render log entries as a styled HTML terminal in a Streamlit placeholder.
 
@@ -41,7 +43,8 @@ def render_terminal(
     """
     if not logs:
         placeholder.markdown(
-            f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log">{empty_msg}</div>',
+            f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
+            f'style="height: {height}px">{empty_msg}</div>',
             unsafe_allow_html=True,
         )
         return
@@ -59,7 +62,8 @@ def render_terminal(
 
     inner = "<br>".join(lines_html)
     placeholder.markdown(
-        f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log">{inner}</div>',
+        f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
+        f'style="height: {height}px">{inner}</div>',
         unsafe_allow_html=True,
     )
 

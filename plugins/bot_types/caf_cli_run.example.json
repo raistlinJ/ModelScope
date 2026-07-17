@@ -1,0 +1,30 @@
+{
+  "id": "caf-cli-run-example",
+  "name": "CAF CLI Run",
+  "type": "caf_cli_run_bot",
+  "config": {
+    "execution_target": "local",
+    "caf_cli_directory": "~/cyber-agent-flow",
+    "caf_cli_command": "./start_cli.sh",
+    "caf_cli_provider": "ollama_direct",
+    "caf_cli_url": "http://localhost:11434",
+    "selected_model": "llama3",
+    "caf_cli_api_key": "",
+    "caf_scope": "Narrow",
+    "caf_urgency": "Balanced",
+    "caf_cli_context_window": 8192,
+    "caf_cli_max_turns": 20,
+    "caf_cli_tool_timeout": 120,
+    "caf_cli_tool_output_chars": 6000,
+    "caf_cli_allow": "10.0.0.0/8",
+    "caf_cli_disallow": "",
+    "caf_cli_scope_enabled": true,
+    "caf_cli_urgency_enabled": true,
+    "caf_cli_verbose": false,
+    "caf_cli_dangerous_no_prompt": false,
+    "caf_cli_timeout": 600,
+    "validation_sets": [],
+    "llm_helper_enabled": false,
+    "metric_thresholds": {}
+  }
+}

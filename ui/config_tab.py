@@ -55,11 +55,13 @@ def _bot_prefix_from_state_key(state_key: str) -> str:
         return "llama_server"
     if state_key.startswith("llama_cli"):
         return "llama_cli"
+    if state_key.startswith("caf_cli"):
+        return "caf_cli"
     return "bash"
 
 
 def _validation_bot_supports_prompts(bot_type: str) -> bool:
-    return bot_type in ("llama_cli", "llama_server")
+    return bot_type in ("llama_cli", "llama_server", "caf_cli")
 
 
 def _validation_bot_prompt_title(bot_type: str) -> str:
@@ -67,6 +69,8 @@ def _validation_bot_prompt_title(bot_type: str) -> str:
         return "Configured LLAMA-SERVER LLM"
     if bot_type == "llama_cli":
         return "Configured LLAMA-CLI LLM"
+    if bot_type == "caf_cli":
+        return "Configured CYBERAGENTFLOW CLI"
     return "Configured LLM"
 
 
@@ -614,9 +618,13 @@ def _validation_checks_summary(cmd: dict, max_len: int = 70) -> str:
 def _render_validation_checks_control(cmd: dict, key_prefix: str, disabled: bool = False) -> None:
     checks = _normalize_validation_checks(cmd)
     _sync_validation_checks(cmd, checks)
+    seen_check_ids: set = set()
     for check in cmd["checks"]:
-        if "_id" not in check:
+        # A duplicated persisted check ID creates duplicate Streamlit widget
+        # keys inside this popover. Treat it like any missing editor ID.
+        if "_id" not in check or check["_id"] in seen_check_ids:
             check["_id"] = _next_step_id()
+        seen_check_ids.add(check["_id"])
 
     with st.popover(_validation_checks_button_label(cmd), use_container_width=True, disabled=disabled):
         st.markdown("**Accepted Output Checks**")
@@ -886,8 +894,19 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                         if st.button(f"+ Add Command", key=f"_sc_{pfx}_{step_id}_addcmd"):
                             mutation = ("add_cmd", si)
 
-    # Add Step button
-    if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
+    # A direct prompt action makes LLM Judge-backed Startup/Completion work
+    # discoverable even before the user has created the first step.
+    _bot_pfx = _bot_prefix_from_state_key(state_key)
+    _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
+    if not steps and _llm_enabled:
+        add_step_col, add_prompt_col, _ = st.columns([2, 2, 6])
+        with add_step_col:
+            if st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary", use_container_width=True):
+                mutation = ("add_step",)
+        with add_prompt_col:
+            if st.button("+ Add LLM Judge", key=f"_sc_{pfx}_addprompt_step", use_container_width=True):
+                mutation = ("add_prompt_step",)
+    elif st.button("+ Add Step", key=f"_sc_{pfx}_addstep", type="primary"):
         mutation = ("add_step",)
 
     # ── Handle expand/collapse toggle (UI-only, no undo entry) ──────────────
@@ -907,7 +926,7 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
         _push_undo({"desc": f"edit {pfx} commands", "type": "cmd",
                     "state_key": state_key, "data": copy.deepcopy(steps)})
         m = mutation
-        if m[0] == "add_step":
+        if m[0] in ("add_step", "add_prompt_step"):
             _bot_pfx = _bot_prefix_from_state_key(state_key)
             _llm_enabled = st.session_state.get(f"{_bot_pfx}_llm_helper_enabled", False)
 
@@ -917,9 +936,18 @@ def _render_command_steps(state_key: str, pfx: str, placeholder: str) -> None:
                 "commands":      [],
             }
 
+            if m[0] == "add_prompt_step":
+                new_step["commands"].append({
+                    "_id":             _next_step_id(),
+                    "type":            "prompt",
+                    "system_prompt":   "",
+                    "user_prompt":     "",
+                    "preserve_context": True,
+                    "enabled":         True,
+                })
             # LLM Judge disabled → pre-populate with a blank command row
             # so the user can type immediately without clicking "+ Add Command".
-            if not _llm_enabled:
+            elif not _llm_enabled:
                 new_step["commands"].append({
                     "_id":             _next_step_id(),
                     "type":            "command",
@@ -1130,11 +1158,14 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                 with cc4:
                                     st.button("✕", key=f"_sc_{pfx}_{step_id}_{cmd_id}_del", use_container_width=True, on_click=_val_del_cmd, args=(si, ci))
                                 
-                                sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
-                                if sys_key not in st.session_state:
-                                    st.session_state[sys_key] = cmd.get("system_prompt", "")
-                                with st.expander("System Prompt", expanded=False):
-                                    cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                                if bot_type != "caf_cli":
+                                    sys_key = f"_sc_{pfx}_{step_id}_{cmd_id}_sys"
+                                    if sys_key not in st.session_state:
+                                        st.session_state[sys_key] = cmd.get("system_prompt", "")
+                                    with st.expander("System Prompt", expanded=False):
+                                        cmd["system_prompt"] = st.text_area("System Prompt", key=sys_key, placeholder="System instructions...", label_visibility="collapsed")
+                                else:
+                                    cmd.pop("system_prompt", None)
                                 
                                 usr_key = f"_sc_{pfx}_{step_id}_{cmd_id}_usr"
                                 if usr_key not in st.session_state:
@@ -1751,10 +1782,14 @@ def _render_validation_sets_ui(project: dict, prefix: str, flush_fn) -> None:
 
 def _render_metric_thresholds_config(project: dict, prefix: str, flush_fn) -> None:
     """Configure optional severity thresholds for every Llama dashboard metric."""
-    from core.metric_thresholds import THRESHOLD_LEVELS, configured_thresholds, metrics_for_bot
+    from core.metric_thresholds import (
+        THRESHOLD_LEVELS, configured_thresholds, metrics_for_bot,
+        threshold_direction, threshold_levels,
+    )
 
     state_key = f"{prefix}_metric_thresholds"
-    configured = configured_thresholds(st.session_state.get(state_key, {}))
+    raw_thresholds = st.session_state.get(state_key, {})
+    configured = configured_thresholds(raw_thresholds)
     supported_metrics = {metric for metric, _ in metrics_for_bot(prefix)}
     # A prior release exposed optional llama-cli stderr-performance controls.
     # Those values are not reliably produced and are no longer configurable;
@@ -1767,32 +1802,63 @@ def _render_metric_thresholds_config(project: dict, prefix: str, flush_fn) -> No
     st.subheader("Dashboard Metric Thresholds")
     st.caption(
         "Optional run labels only — they do not alter validation or stop a run. "
-        "Leave a field blank to ignore that threshold. The first matching band wins: "
-        "Hard Fail uses ≥; Soft Fail, Soft Pass, and Hard Pass use >."
+        "Leave a field blank to ignore that threshold. Use the direction button for metrics "
+        "where higher values are better; the first matching band wins."
     )
 
-    headers = st.columns([2.2, 1, 1, 1, 1, 0.72])
+    threshold_layout = [2.2, 1.25, 1, 0.22, 1, 0.22, 1, 0.22, 1, 0.72]
+    headers = st.columns(threshold_layout)
     headers[0].markdown("**Metric**")
-    for col, (_, label, operator) in zip(headers[1:], THRESHOLD_LEVELS):
-        col.markdown(f"**{label}**  `{operator}`")
+    headers[1].markdown("**Direction**")
+    for col_idx, (_, label, _) in zip((2, 4, 6, 8), THRESHOLD_LEVELS):
+        headers[col_idx].markdown(f"**{label}**")
     headers[-1].markdown("**Reset**")
 
     for metric, metric_spec in metrics_for_bot(prefix):
         metric_label = metric_spec["label"]
         metric_unit = metric_spec["unit"]
         values = dict(updated.get(metric, {}))
-        row = st.columns([2.2, 1, 1, 1, 1, 0.72])
+        direction_key = f"_{prefix}_metric_threshold_direction_{metric}"
+        if direction_key not in st.session_state:
+            st.session_state[direction_key] = threshold_direction(
+                raw_thresholds.get(metric) if isinstance(raw_thresholds, dict) else None
+            )
+        direction = st.session_state[direction_key]
+        levels = threshold_levels(direction)
+
+        row = st.columns(threshold_layout)
         row[0].markdown(f"**{metric_label}**  \n`{metric_unit}`")
-        for col, (level, _, _) in zip(row[1:], THRESHOLD_LEVELS):
+        direction_label = "↓ Lower is better" if direction == "lower" else "↑ Higher is better"
+        if row[1].button(direction_label, key=f"_{prefix}_metric_threshold_switch_{metric}",
+                         help="Switch whether lower or higher values are better"):
+            direction = "higher" if direction == "lower" else "lower"
+            st.session_state[direction_key] = direction
+            if values:
+                updated[metric] = {
+                    **values,
+                    **({"direction": "higher"} if direction == "higher" else {}),
+                }
+            st.session_state[state_key] = updated
+            flush_fn(project)
+            st.rerun()
+
+        for idx, (level, _, operator) in enumerate(levels):
+            if idx:
+                row[3 + (idx - 1) * 2].markdown(
+                    f"<div style='padding-top: 0.5rem; text-align: center; font-size: 1.2rem;'>"
+                    f"{'&lt;' if direction == 'higher' else '&gt;'}</div>",
+                    unsafe_allow_html=True,
+                )
+            col = row[2 + idx * 2]
             widget_key = f"_{prefix}_metric_threshold_{metric}_{level}"
             if widget_key not in st.session_state:
                 existing = values.get(level)
                 st.session_state[widget_key] = "" if existing is None else f"{existing:g}"
             raw_value = col.text_input(
-                f"{metric_label} {level}",
+                f"{metric_label} {level} {operator}",
                 key=widget_key,
                 label_visibility="collapsed",
-                placeholder="Not set",
+                placeholder=f"{operator} value",
             ).strip()
             if not raw_value:
                 values.pop(level, None)
@@ -1809,18 +1875,16 @@ def _render_metric_thresholds_config(project: dict, prefix: str, flush_fn) -> No
             updated.pop(metric, None)
             for level, _, _ in THRESHOLD_LEVELS:
                 st.session_state.pop(f"_{prefix}_metric_threshold_{metric}_{level}", None)
+            st.session_state.pop(direction_key, None)
             st.session_state[state_key] = updated
             flush_fn(project)
             st.rerun()
 
         if values:
-            updated[metric] = values
-            ordered = [values[level] for level, _, _ in THRESHOLD_LEVELS if level in values]
-            if any(left < right for left, right in zip(ordered, ordered[1:])):
-                st.warning(
-                    f"{metric_label}: configure bands from highest (Hard Fail) to lowest (Hard Pass) "
-                    "to avoid an earlier band masking a later one."
-                )
+            updated[metric] = {
+                **values,
+                **({"direction": "higher"} if direction == "higher" else {}),
+            }
         else:
             updated.pop(metric, None)
 

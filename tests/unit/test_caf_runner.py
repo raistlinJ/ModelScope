@@ -39,6 +39,9 @@ class TestStripAnsi:
         text = "plain text no escape codes"
         assert _strip_ansi(text) == text
 
+    def test_removes_private_cursor_mode_sequences(self):
+        assert _strip_ansi("ready\x1b[?25h") == "ready"
+
     def test_empty_string(self):
         assert _strip_ansi("") == ""
 

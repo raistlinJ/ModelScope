@@ -1,5 +1,6 @@
 import html
 import json
+import re
 import streamlit as st
 from config.metrics import (
     METRIC_TYPES, CATEGORIES,
@@ -12,6 +13,91 @@ from core.metric_thresholds import (
     observed_dashboard_metrics,
 )
 from ui.components import badge, badge_pass, badge_fail, badge_na, type_badge, CAT_COLOUR
+
+
+def _render_scrollable_output(
+    label: str,
+    value: object,
+    *,
+    key: str,
+    height: int = 140,
+) -> None:
+    """Render run output in the same bounded, scrollable control as stdout."""
+    st.text_area(label, value=str(value or ""), height=height, key=key)
+
+
+def _highlight_validation_matches(output: object, checks: list[dict] | None = None) -> str:
+    """Return escaped output with portions satisfying validation checks marked green."""
+    text = str(output or "")
+    spans: list[tuple[int, int]] = []
+    for check in checks or []:
+        if not isinstance(check, dict):
+            continue
+        check_type = check.get("expected_output_type", check.get("type", "Ignore"))
+        expected = str(check.get("expected_output", check.get("value", "")) or "")
+        if not expected:
+            continue
+        if check_type == "Exact String":
+            if text.strip() == expected.strip() and text:
+                spans.append((0, len(text)))
+        elif check_type == "Regex":
+            try:
+                spans.extend((match.start(), match.end()) for match in re.finditer(expected, text)
+                             if match.start() != match.end())
+            except re.error:
+                continue
+
+    if not spans:
+        return html.escape(text)
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    rendered: list[str] = []
+    position = 0
+    for start, end in merged:
+        rendered.append(html.escape(text[position:start]))
+        rendered.append(f'<mark class="validation-output-match">{html.escape(text[start:end])}</mark>')
+        position = end
+    rendered.append(html.escape(text[position:]))
+    return "".join(rendered)
+
+
+def _render_scrollable_validation_output(
+    label: str,
+    value: object,
+    *,
+    matched_checks: list[dict] | None = None,
+    height: int = 140,
+) -> None:
+    """Render scrollable validation output, highlighting expected matches in green."""
+    rendered = _highlight_validation_matches(value, matched_checks)
+    st.markdown(f"**{label}**")
+    st.markdown(
+        f'''<style>
+            .validation-output {{ max-height: {height}px; overflow: auto; padding: 0.6rem;
+                border: 1px solid rgba(151, 166, 195, 0.25); border-radius: 0.35rem;
+                background: rgba(151, 166, 195, 0.08); }}
+            .validation-output pre {{ margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }}
+            .validation-output-match {{ background: rgba(46, 160, 67, 0.35); color: #b7f5c2;
+                border-radius: 0.15rem; padding: 0 0.1rem; }}
+        </style><div class="validation-output"><pre>{rendered}</pre></div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def _matched_validation_checks(telemetry: dict) -> list[dict]:
+    """Collect the checks that passed for this run's detailed validation output."""
+    matches: list[dict] = []
+    for validation_set in telemetry.get("validation_sets_results") or []:
+        for step in validation_set.get("steps", []) if isinstance(validation_set, dict) else []:
+            if step.get("passed") and isinstance(step.get("matched_check"), dict):
+                matches.append(step["matched_check"])
+    return matches
 
 
 def _get_active_project() -> "dict | None":
@@ -117,7 +203,7 @@ def _configured_metric_assessments(project: dict, telemetry: dict) -> dict[str, 
         if "metric_thresholds" in telemetry
         else project.get("config", {}).get("metric_thresholds", {})
     )
-    bot = "llama_server" if project.get("type") == "llama_server_bot" else "llama_cli"
+    bot = project.get("type", "llama_cli_bot")
     supported_metrics = {metric for metric, _ in metrics_for_bot(bot)}
     return {
         assessment["metric"]: assessment
@@ -144,7 +230,8 @@ def _render_metric_cards(
             status, color, background = _THRESHOLD_STYLE[assessment["level"]]
             threshold = assessment.get("threshold")
             threshold_text = (
-                f"Threshold: {format_metric_value(threshold, assessment['unit'])}"
+                f"Threshold: {assessment.get('operator', '')} "
+                f"{format_metric_value(threshold, assessment['unit'])}"
                 if threshold is not None else "No configured band matched"
             )
             column.markdown(
@@ -403,11 +490,21 @@ def _render_bash_dashboard(project: dict) -> None:
                 result = tc.get("result", {})
                 if isinstance(result, dict):
                     if result.get("stdout"):
-                        st.code(result["stdout"][:1000], language="bash")
+                        _render_scrollable_output(
+                            "Stdout", result["stdout"],
+                            key=f"bash_cmd_stdout_{pid}_{_run_tok}_{i}",
+                        )
                     if result.get("stderr"):
-                        st.warning(result["stderr"][:400])
+                        _render_scrollable_output(
+                            "Stderr", result["stderr"],
+                            key=f"bash_cmd_stderr_{pid}_{_run_tok}_{i}",
+                            height=100,
+                        )
                 else:
-                    st.code(str(result))
+                    _render_scrollable_output(
+                        "Output", result,
+                        key=f"bash_cmd_output_{pid}_{_run_tok}_{i}",
+                    )
                 st.caption(f"Exit code: {exit_code}")
 
     st.divider()
@@ -465,8 +562,12 @@ def _render_bash_dashboard(project: dict) -> None:
                             
                         # Stdout / Stderr details
                         if cmd_res.get("stdout"):
-                            st.text_area("Stdout", value=cmd_res["stdout"], height=120,
-                                         key=f"bash_vr_stdout_{pid}_{_run_tok}_{s_idx}_{c_idx}")
+                            _render_scrollable_validation_output(
+                                "Stdout", cmd_res["stdout"],
+                                matched_checks=[cmd_res["matched_check"]]
+                                if cmd_res.get("passed") and cmd_res.get("matched_check") else [],
+                                height=120,
+                            )
                         if cmd_res.get("stderr"):
                             st.text_area("Stderr", value=cmd_res["stderr"], height=80,
                                          key=f"bash_vr_stderr_{pid}_{_run_tok}_{s_idx}_{c_idx}")
@@ -498,8 +599,10 @@ def _render_bash_dashboard(project: dict) -> None:
         else:
             st.error(f"FAIL ✗  (exit code: {tel['validation_exit_code']})")
         if tel.get("validation_stdout"):
-            st.text_area("Stdout", value=tel["validation_stdout"], height=160,
-                         key=f"bash_val_stdout_{pid}_{_run_tok}")
+            _render_scrollable_validation_output(
+                "Stdout", tel["validation_stdout"],
+                matched_checks=_matched_validation_checks(tel), height=160,
+            )
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
                          key=f"bash_val_stderr_{pid}_{_run_tok}")
@@ -613,9 +716,17 @@ def _render_llama_cli_dashboard(
         for i, pr in enumerate(prompt_responses):
             with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):
                 st.markdown("**Prompt**")
-                st.code(pr.get("prompt", ""), language="text")
+                _render_scrollable_output(
+                    "Prompt", pr.get("prompt", ""),
+                    key=f"{bot_type}_prompt_{pid}_{_run_tok}_{i}",
+                    height=120,
+                )
                 st.markdown("**Response**")
-                st.code(pr.get("response", ""), language="text")
+                _render_scrollable_output(
+                    "Response", pr.get("response", ""),
+                    key=f"{bot_type}_response_{pid}_{_run_tok}_{i}",
+                    height=180,
+                )
 
     # Shell commands
     shell_calls = [tc for tc in tool_calls if tc.get("tool") == "bash"]
@@ -629,9 +740,21 @@ def _render_llama_cli_dashboard(
                 result = tc.get("result", {})
                 if isinstance(result, dict):
                     if result.get("stdout"):
-                        st.code(result["stdout"][:1000], language="bash")
+                        _render_scrollable_output(
+                            "Stdout", result["stdout"],
+                            key=f"{bot_type}_cmd_stdout_{pid}_{_run_tok}_{i}",
+                        )
                     if result.get("stderr"):
-                        st.warning(result["stderr"][:400])
+                        _render_scrollable_output(
+                            "Stderr", result["stderr"],
+                            key=f"{bot_type}_cmd_stderr_{pid}_{_run_tok}_{i}",
+                            height=100,
+                        )
+                else:
+                    _render_scrollable_output(
+                        "Output", result,
+                        key=f"{bot_type}_cmd_output_{pid}_{_run_tok}_{i}",
+                    )
                 st.caption(f"Exit code: {exit_code}")
 
     st.divider()
@@ -650,8 +773,10 @@ def _render_llama_cli_dashboard(
         else:
             st.error(f"FAIL ✗  (exit code: {val_exit})")
         if tel.get("validation_stdout"):
-            st.text_area("Stdout", value=tel["validation_stdout"], height=160,
-                         key=f"llama_val_stdout_{pid}_{_run_tok}")
+            _render_scrollable_validation_output(
+                "Stdout", tel["validation_stdout"],
+                matched_checks=_matched_validation_checks(tel), height=160,
+            )
         if tel.get("validation_stderr"):
             st.text_area("Stderr", value=tel["validation_stderr"], height=100,
                          key=f"llama_val_stderr_{pid}_{_run_tok}")
@@ -695,6 +820,13 @@ def render() -> None:
             _proj,
             bot_type="llama_server_bot",
             metrics_key="llama_server_metrics_matrix",
+        )
+        return
+    if _proj and _proj.get("type") == "caf_cli_run_bot":
+        _render_llama_cli_dashboard(
+            _proj,
+            bot_type="caf_cli_run_bot",
+            metrics_key="caf_cli_metrics_matrix",
         )
         return
 

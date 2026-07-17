@@ -33,6 +33,27 @@ def test_threshold_bands_follow_configured_comparisons():
         assert result[0]["level"] == expected
 
 
+def test_higher_is_better_threshold_bands_reverse_the_comparisons():
+    thresholds = {
+        "total_tokens": {
+            "direction": "higher",
+            "hard_fail": 25,
+            "soft_fail": 50,
+            "soft_pass": 75,
+            "hard_pass": 100,
+        }
+    }
+
+    for value, expected in ((25, "hard_fail"), (49, "soft_fail"), (50, "soft_pass"), (99, "hard_pass"), (100, "unclassified")):
+        result = assess_metric_thresholds({"total_tokens": value}, thresholds)
+        assert result[0]["level"] == expected
+    assert result[0]["direction"] == "higher"
+    assert result[0]["operator"] is None
+
+    hard_pass = assess_metric_thresholds({"total_tokens": 99}, thresholds)[0]
+    assert hard_pass["operator"] == "<"
+
+
 def test_server_token_metrics_are_sourced_from_metrics_endpoint():
     server = assess_token_thresholds(
         {"llama_server_metrics": {"available": True, "prompt_tokens": 10, "completion_tokens": 20}},
@@ -44,8 +65,10 @@ def test_server_token_metrics_are_sourced_from_metrics_endpoint():
 def test_metrics_config_includes_every_dashboard_card_for_each_llama_bot():
     cli_metrics = {key for key, _ in metrics_for_bot("llama_cli")}
     server_metrics = {key for key, _ in metrics_for_bot("llama_server")}
+    caf_metrics = {key for key, _ in metrics_for_bot("caf_cli_run_bot")}
 
     assert cli_metrics == {"total_latency", "prompts_run", "commands_run"}
+    assert caf_metrics == cli_metrics
     assert {"requests_processing", "requests_deferred", "context_high_watermark", "decode_calls", "busy_slots_per_decode"} <= server_metrics
     assert {"prompt_tokens", "completion_tokens", "total_tokens"} <= server_metrics
 

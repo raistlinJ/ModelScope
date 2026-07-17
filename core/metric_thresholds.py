@@ -49,6 +49,25 @@ THRESHOLD_LEVELS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def threshold_direction(values: Any) -> str:
+    """Return a metric's preferred direction, defaulting to lower-is-better."""
+    if isinstance(values, Mapping) and str(values.get("direction", "")).lower() == "higher":
+        return "higher"
+    return "lower"
+
+
+def threshold_levels(direction: str = "lower") -> tuple[tuple[str, str, str], ...]:
+    """Return severity comparisons for lower- or higher-is-better metrics."""
+    if direction == "higher":
+        return (
+            ("hard_fail", "Hard Fail", "<="),
+            ("soft_fail", "Soft Fail", "<"),
+            ("soft_pass", "Soft Pass", "<"),
+            ("hard_pass", "Hard Pass", "<"),
+        )
+    return THRESHOLD_LEVELS
+
+
 def _number(value: Any) -> float | None:
     """Return a finite numeric value, excluding booleans and malformed data."""
     if isinstance(value, bool):
@@ -141,6 +160,7 @@ def assess_metric_thresholds(telemetry: dict[str, Any], raw_thresholds: Any) -> 
     measurements = observed_dashboard_metrics(telemetry)
     results: list[dict[str, Any]] = []
     for metric, metric_thresholds in thresholds.items():
+        direction = threshold_direction(raw_thresholds.get(metric) if isinstance(raw_thresholds, dict) else None)
         measurement = measurements.get(metric)
         spec = metric_spec(metric)
         if spec is None:
@@ -154,17 +174,24 @@ def assess_metric_thresholds(telemetry: dict[str, Any], raw_thresholds: Any) -> 
             "source": measurement.get("source") if measurement else None,
             "level": "not_available" if measurement is None else "unclassified",
             "threshold": None,
+            "operator": None,
+            "direction": direction,
         }
         if measurement is not None:
-            for level, _, operator in THRESHOLD_LEVELS:
+            for level, _, operator in threshold_levels(direction):
                 threshold = metric_thresholds.get(level)
                 if threshold is None:
                     continue
                 if (operator == ">=" and measurement["value"] >= threshold) or (
                     operator == ">" and measurement["value"] > threshold
+                ) or (
+                    operator == "<=" and measurement["value"] <= threshold
+                ) or (
+                    operator == "<" and measurement["value"] < threshold
                 ):
                     result["level"] = level
                     result["threshold"] = threshold
+                    result["operator"] = operator
                     break
         results.append(result)
     return results
