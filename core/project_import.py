@@ -8,16 +8,21 @@ from typing import Any, Iterable
 from core.bot_types import get_bot_plugin
 
 
-def _unique_name(name: str, existing_names: Iterable[str]) -> str:
+def _unique_name(name: str, existing_names: Iterable[str], suffix: str = "imported") -> str:
     taken = {item.casefold() for item in existing_names}
     if name.casefold() not in taken:
         return name
-    candidate = f"{name} (imported)"
+    
+    base_candidate = f"{name} ({suffix})" if suffix else name
+    if base_candidate.casefold() not in taken:
+        return base_candidate
+
     index = 2
-    while candidate.casefold() in taken:
-        candidate = f"{name} (imported {index})"
+    while True:
+        candidate = f"{name} ({suffix} {index})" if suffix else f"{name} ({index})"
+        if candidate.casefold() not in taken:
+            return candidate
         index += 1
-    return candidate
 
 
 def prepare_imported_project(payload: Any, existing_names: Iterable[str]) -> dict[str, Any]:

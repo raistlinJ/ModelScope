@@ -225,11 +225,17 @@ def _show_add_project_dialog() -> None:
     col_create, col_cancel = st.columns(2)
     with col_create:
         if st.button("Create", type="primary", use_container_width=True):
-            proj_name  = name.strip() or f"Project {len(st.session_state['projects']) + 1}"
-            existing_names = [p["name"].lower() for p in st.session_state.get("projects", [])]
-            if proj_name.lower() in existing_names:
-                st.error(f"A project named '{proj_name}' already exists. Please pick a unique name.")
-                st.stop()
+            if name.strip():
+                proj_name = name.strip()
+                existing_names = [p["name"].casefold() for p in st.session_state.get("projects", [])]
+                if proj_name.casefold() in existing_names:
+                    st.error(f"A project named '{proj_name}' already exists. Please pick a unique name.")
+                    st.stop()
+            else:
+                from core.project_import import _unique_name
+                existing_names = [p["name"] for p in st.session_state.get("projects", [])]
+                proj_name = _unique_name(f"Project {len(existing_names) + 1}", existing_names, suffix="")
+
             _push_undo({"desc": "create project", "type": "project",
                         "projects": copy.deepcopy(st.session_state.get("projects", [])),
                         "active_project_id": st.session_state.get("active_project_id")})

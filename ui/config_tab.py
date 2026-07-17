@@ -92,7 +92,11 @@ def _duplicate_project(project_id: str) -> None:
 
     new_proj = copy.deepcopy(proj)
     new_proj["id"] = str(uuid.uuid4())[:8]
-    new_proj["name"] = f"{proj['name']} (copy)"
+    
+    from core.project_import import _unique_name
+    existing_names = [p["name"] for p in projects]
+    new_proj["name"] = _unique_name(proj["name"], existing_names, suffix="copy")
+    
     _strip_step_ids(new_proj.get("config", {}))
     _push_undo({"desc": "duplicate project", "type": "project",
                 "projects": copy.deepcopy(projects),
@@ -152,12 +156,18 @@ def _show_rename_project_dialog(project_id: str) -> None:
             if not name_stripped:
                 st.error("Name cannot be empty.")
                 return
+            
+            projects = st.session_state.get("projects", [])
+            existing_names = [p["name"].casefold() for p in projects if p["id"] != project_id]
+            if name_stripped.casefold() in existing_names:
+                st.error(f"A project named '{name_stripped}' already exists. Please pick a unique name.")
+                return
+
             bot_type = proj.get("type", "bash_bot")
             plugin = get_bot_plugin(bot_type)
             if plugin is not None:
                 plugin.flush_config(proj)
 
-            projects = st.session_state.get("projects", [])
             _push_undo({"desc": f"rename '{proj['name']}'", "type": "project",
                         "projects": copy.deepcopy(projects),
                         "active_project_id": st.session_state.get("active_project_id")})
@@ -315,9 +325,8 @@ def _flush_bash_config(project: dict) -> None:
         "validation_sets":   st.session_state.get("bash_validation_sets", []),
         "sudo":              st.session_state.get("bash_sudo", False),
         "sudo_password":     (
-            st.session_state.get("bash_ssh_password", "")
-            if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct")
-            else st.session_state.get("bash_sudo_password", "")
+            st.session_state.get("bash_sudo_password", "") or
+            (st.session_state.get("bash_ssh_password", "") if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct") else "")
         ) if st.session_state.get("bash_sudo") else "",
         "llm_helper_backend": st.session_state.get("bash_llm_helper_backend", "OpenAI-Compatible"),
         "llm_helper_openai_url": st.session_state.get("bash_llm_helper_openai_url", ""),
@@ -1520,15 +1529,12 @@ def _render_bash_runtime(project: dict) -> None:
             help="Run every startup, validation, and completion command as root via `sudo bash -c`.",
         )
         if st.session_state.get("bash_sudo"):
-            if target in ("local", "pct"):
-                st.text_input(
-                    "Sudo password",
-                    key="bash_sudo_password",
-                    type="password",
-                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
-                )
-            else:
-                st.caption("SSH password will be reused for sudo.")
+            st.text_input(
+                "Sudo password",
+                key="bash_sudo_password",
+                type="password",
+                help="Piped to `sudo -S`. Leave blank to reuse the SSH password or if passwordless sudo (NOPASSWD) is configured.",
+            )
         if target == "local":
             st.divider()
             _render_test_button("local", "bash")
@@ -2023,9 +2029,8 @@ def _flush_llama_cli_config(project: dict) -> None:
         "ssh_key_path":        st.session_state.get("llama_cli_ssh_key_path", ""),
         "sudo":                st.session_state.get("llama_cli_sudo", False),
         "sudo_password":       (
-            st.session_state.get("llama_cli_ssh_password", "")
-            if st.session_state.get("llama_cli_execution_target", "local") in ("ssh", "pct")
-            else st.session_state.get("llama_cli_sudo_password", "")
+            st.session_state.get("llama_cli_sudo_password", "") or
+            (st.session_state.get("llama_cli_ssh_password", "") if st.session_state.get("llama_cli_execution_target", "local") in ("ssh", "pct") else "")
         ) if st.session_state.get("llama_cli_sudo") else "",
         "backend":             st.session_state.get("llama_cli_backend", "llama.cpp"),
         "binary_path":         st.session_state.get("llama_cli_binary_path", ""),
@@ -2373,15 +2378,12 @@ def _render_llama_cli_runtime(project: dict) -> None:
             help="Prefix shell commands and the llama-cli invocation with `sudo`.",
         )
         if st.session_state.get("llama_cli_sudo"):
-            if target in ("local", "pct"):
-                st.text_input(
-                    "Sudo password",
-                    key="llama_cli_sudo_password",
-                    type="password",
-                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
-                )
-            else:
-                st.caption("SSH password will be reused for sudo.")
+            st.text_input(
+                "Sudo password",
+                key="llama_cli_sudo_password",
+                type="password",
+                help="Piped to `sudo -S`. Leave blank to reuse the SSH password or if passwordless sudo (NOPASSWD) is configured.",
+            )
         if target == "local":
             st.divider()
             _render_test_button("local", "llama_cli")
@@ -2934,7 +2936,10 @@ def _flush_llama_server_config(project: dict) -> None:
         "ssh_password":        st.session_state.get("llama_server_ssh_password", ""),
         "ssh_key_path":        st.session_state.get("llama_server_ssh_key_path", ""),
         "sudo":                st.session_state.get("llama_server_sudo", False),
-        "sudo_password":       st.session_state.get("llama_server_sudo_password", "") if st.session_state.get("llama_server_sudo") else "",
+        "sudo_password":       (
+            st.session_state.get("llama_server_sudo_password", "") or
+            (st.session_state.get("llama_server_ssh_password", "") if st.session_state.get("llama_server_execution_target", "local") in ("ssh", "pct") else "")
+        ) if st.session_state.get("llama_server_sudo") else "",
         "backend":             "llama-server (managed)",
         "binary_path":         st.session_state.get("llama_server_binary_path", ""),
         "model_dir":           st.session_state.get("llama_server_model_dir", ""),
@@ -3299,15 +3304,12 @@ def _render_llama_server_runtime(project: dict) -> None:
             help="Prefix shell commands with `sudo`.",
         )
         if st.session_state.get("llama_server_sudo"):
-            if target in ("local", "pct"):
-                st.text_input(
-                    "Sudo password",
-                    key="llama_server_sudo_password",
-                    type="password",
-                    help="Piped to `sudo -S`. Leave blank if passwordless sudo (NOPASSWD) is configured.",
-                )
-            else:
-                st.caption("SSH password will be reused for sudo.")
+            st.text_input(
+                "Sudo password",
+                key="llama_server_sudo_password",
+                type="password",
+                help="Piped to `sudo -S`. Leave blank to reuse the SSH password or if passwordless sudo (NOPASSWD) is configured.",
+            )
         if target == "local":
             st.divider()
             _render_test_button("local", "llama_server")
