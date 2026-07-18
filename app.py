@@ -39,10 +39,15 @@ configure_logging()
 
 inject()
 # Override any stale ::after rule lingering in the Streamlit module cache
+# and adjust popover width for project status overflow
 st.markdown(
     "<style>"
     ".spark-title::after{content:none!important;display:none!important}"
     ".spark-title::before{content:none!important;display:none!important}"
+    "div[data-testid=\"stPopoverBody\"]:has(.project-status-icons) {"
+    "    min-width: min-content !important;"
+    "    width: fit-content !important;"
+    "}"
     "</style>",
     unsafe_allow_html=True,
 )

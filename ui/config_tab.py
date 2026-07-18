@@ -7,6 +7,7 @@ import uuid
 import pandas as pd
 import streamlit as st
 from core.bot_types import get_bot_plugin
+from core.settings_store import _unobscure
 from core import llama_server
 from config.defaults import MCP_CONFIG_PATH
 from core.mcp_catalog import load_mcp_tool_config, merge_mcp_tool_selections
@@ -308,39 +309,41 @@ def _flush_bash_config(project: dict) -> None:
     """Write flat bash_* working keys back into the project's config bundle."""
     get_bot_plugin(project.get("type", "bash_bot")).flush_mapped_config(project)
 
+    cfg = project.setdefault("config", {})
     project["config"].update({
-        "execution_target":  st.session_state.get("bash_execution_target", "local"),
-        "pct_vmid":          st.session_state.get("bash_pct_vmid", ""),
-        "ssh_host":          st.session_state.get("bash_ssh_host", ""),
-        "ssh_port":          st.session_state.get("bash_ssh_port", 22),
-        "ssh_user":          st.session_state.get("bash_ssh_user", "root"),
-        "ssh_password":      st.session_state.get("bash_ssh_password", ""),
-        "ssh_key_path":      st.session_state.get("bash_ssh_key_path", ""),
+        "execution_target":  st.session_state.get("bash_execution_target", cfg.get("execution_target", "local")),
+        "pct_vmid":          st.session_state.get("bash_pct_vmid", cfg.get("pct_vmid", "")),
+        "ssh_host":          st.session_state.get("bash_ssh_host", cfg.get("ssh_host", "")),
+        "ssh_port":          st.session_state.get("bash_ssh_port", cfg.get("ssh_port", 22)),
+        "ssh_user":          st.session_state.get("bash_ssh_user", cfg.get("ssh_user", "root")),
+        "ssh_password":      st.session_state.get("bash_ssh_password", cfg.get("ssh_password", "")),
+        "ssh_key_path":      st.session_state.get("bash_ssh_key_path", cfg.get("ssh_key_path", "")),
         "startup_commands":  _clean_steps(st.session_state.get("bash_startup_commands", [])),
-        "bash_timeout":      st.session_state.get("bash_timeout", 60),
+        "bash_timeout":      st.session_state.get("bash_timeout", cfg.get("bash_timeout", 60)),
         "completion_commands": _clean_steps(st.session_state.get("bash_completion_commands", [])),
-        "validation_commands": st.session_state.get("bash_validation_commands", []),
-        "fail_patterns":     st.session_state.get("bash_fail_patterns", []),
-        "metrics_matrix":    st.session_state.get("bash_metrics_matrix", []),
-        "validation_sets":   st.session_state.get("bash_validation_sets", []),
-        "sudo":              st.session_state.get("bash_sudo", False),
+        "validation_commands": st.session_state.get("bash_validation_commands", cfg.get("validation_commands", [])),
+        "fail_patterns":     st.session_state.get("bash_fail_patterns", cfg.get("fail_patterns", [])),
+        "metrics_matrix":    st.session_state.get("bash_metrics_matrix", cfg.get("metrics_matrix", [])),
+        "validation_sets":   st.session_state.get("bash_validation_sets", cfg.get("validation_sets", [])),
+        "sudo":              st.session_state.get("bash_sudo", cfg.get("sudo", False)),
         "sudo_password":     (
-            st.session_state.get("bash_sudo_password", "") or
-            (st.session_state.get("bash_ssh_password", "") if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct") else "")
+            st.session_state.get("bash_sudo_password", cfg.get("sudo_password", "")) or
+            (st.session_state.get("bash_ssh_password", cfg.get("ssh_password", "")) if st.session_state.get("bash_execution_target", "local") in ("ssh", "pct") else "")
         ) if st.session_state.get("bash_sudo") else "",
-        "llm_helper_backend": st.session_state.get("bash_llm_helper_backend", "OpenAI-Compatible"),
-        "llm_helper_openai_url": st.session_state.get("bash_llm_helper_openai_url", ""),
-        "llm_helper_openai_apikey": st.session_state.get("bash_llm_helper_openai_apikey", ""),
-        "llm_helper_openai_verify_ssl": st.session_state.get("bash_llm_helper_openai_verify_ssl", True),
-        "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", "http://localhost:11434"),
-        "llm_helper_model": st.session_state.get("bash_llm_helper_model", ""),
-        "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", False),
-        "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", []),
-        "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", []),
-        "llm_helper_mcp_enabled": st.session_state.get("bash_llm_helper_mcp_enabled", False),
-        "llm_helper_mcp_config_path": st.session_state.get("bash_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
-        "llm_helper_mcp_tools": st.session_state.get("bash_llm_helper_mcp_tools", []),
-        "llm_helper_mcp_strict": st.session_state.get("bash_llm_helper_mcp_strict", False),
+        "llm_helper_backend": st.session_state.get("bash_llm_helper_backend", cfg.get("llm_helper_backend", "OpenAI-Compatible")),
+        "llm_helper_openai_url": st.session_state.get("bash_llm_helper_openai_url", cfg.get("llm_helper_openai_url", "")),
+        "llm_helper_openai_apikey": st.session_state.get("bash_llm_helper_openai_apikey", cfg.get("llm_helper_openai_apikey", "")),
+        "llm_helper_openai_verify_ssl": st.session_state.get("bash_llm_helper_openai_verify_ssl", cfg.get("llm_helper_openai_verify_ssl", True)),
+        "llm_helper_ollama_url": st.session_state.get("bash_llm_helper_ollama_url", cfg.get("llm_helper_ollama_url", "http://localhost:11434")),
+        "llm_helper_model": st.session_state.get("bash_llm_helper_model", cfg.get("llm_helper_model", "")),
+        "llm_helper_context_length": st.session_state.get("bash_llm_helper_context_length", cfg.get("llm_helper_context_length", 8192)),
+        "llm_helper_enabled": st.session_state.get("bash_llm_helper_enabled", cfg.get("llm_helper_enabled", False)),
+        "llm_helper_openai_models": st.session_state.get("bash_llm_helper_openai_models", cfg.get("llm_helper_openai_models", [])),
+        "llm_helper_ollama_models": st.session_state.get("bash_llm_helper_ollama_models", cfg.get("llm_helper_ollama_models", [])),
+        "llm_helper_mcp_enabled": st.session_state.get("bash_llm_helper_mcp_enabled", cfg.get("llm_helper_mcp_enabled", False)),
+        "llm_helper_mcp_config_path": st.session_state.get("bash_llm_helper_mcp_config_path", cfg.get("llm_helper_mcp_config_path", MCP_CONFIG_PATH)),
+        "llm_helper_mcp_tools": st.session_state.get("bash_llm_helper_mcp_tools", cfg.get("llm_helper_mcp_tools", [])),
+        "llm_helper_mcp_strict": st.session_state.get("bash_llm_helper_mcp_strict", cfg.get("llm_helper_mcp_strict", False)),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -1359,10 +1362,10 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                                 ssh=(target == "ssh"),
                                 host=st.session_state.get(f"{pfx}_ssh_host", ""),
                                 port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
-                                username=st.session_state.get(f"{pfx}_ssh_user", "root"),
-                                password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                                password=_unobscure(st.session_state.get(f"{pfx}_ssh_password", "")),
                                 key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
                                 pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
+                                remote_cwd=".",
                             )
                         _found, _err = fetch_ollama_models(_url.strip(), env=env)
                     if _found:
@@ -1386,6 +1389,16 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 st.session_state.setdefault(f"{pfx}_llm_helper_ollama_model_manual_widget", st.session_state.get(f"{pfx}_llm_helper_model", ""))
                 _man = st.text_input("Model", key=f"{pfx}_llm_helper_ollama_model_manual_widget")
                 st.session_state[f"{pfx}_llm_helper_model"] = _man
+
+            st.session_state.setdefault(f"{pfx}_llm_helper_context_length_widget", st.session_state.get(f"{pfx}_llm_helper_context_length", 8192))
+            _ctx = st.number_input(
+                "Context Window Length (Tokens)",
+                key=f"{pfx}_llm_helper_context_length_widget",
+                min_value=512,
+                step=1024,
+                help="Maximum number of tokens to process. Set this manually if your server doesn't report it automatically."
+            )
+            st.session_state[f"{pfx}_llm_helper_context_length"] = _ctx
 
         else:
             # OpenAI-Compatible
@@ -1425,7 +1438,7 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                                     host=st.session_state.get(f"{pfx}_ssh_host", ""),
                                     port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
                                     username=st.session_state.get(f"{pfx}_ssh_user", "root"),
-                                    password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                                    password=_unobscure(st.session_state.get(f"{pfx}_ssh_password", "")),
                                     key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
                                     pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
                                 )
@@ -1459,7 +1472,23 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                 _man = st.text_input("Model", key=f"{pfx}_llm_helper_openai_model_manual_widget")
                 st.session_state[f"{pfx}_llm_helper_model"] = _man
 
-            if st.button("Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True):
+            st.session_state.setdefault(f"{pfx}_llm_helper_context_length_widget", st.session_state.get(f"{pfx}_llm_helper_context_length", 8192))
+            _ctx = st.number_input(
+                "Context Window Length (Tokens)",
+                key=f"{pfx}_llm_helper_context_length_widget",
+                min_value=512,
+                step=1024,
+                help="Maximum number of tokens to process. Set this manually if your server doesn't report it automatically."
+            )
+            st.session_state[f"{pfx}_llm_helper_context_length"] = _ctx
+
+            checking = st.session_state.get(f"{pfx}_checking_openai_status", False)
+            if st.button("Checking..." if checking else "Check Status", key=f"btn_{pfx}_check_openai_status", use_container_width=True, disabled=checking):
+                st.session_state[f"{pfx}_checking_openai_status"] = True
+                st.session_state.pop(f"{pfx}_openai_status_result", None)
+                st.rerun()
+
+            if checking:
                 if _url.strip():
                     from core.llama_server import get_server_info
                     target = st.session_state.get(f"{pfx}_execution_target", "local")
@@ -1471,18 +1500,35 @@ def _render_llm_prompt_helper_tab(pfx: str) -> None:
                             host=st.session_state.get(f"{pfx}_ssh_host", ""),
                             port=int(st.session_state.get(f"{pfx}_ssh_port", 22)),
                             username=st.session_state.get(f"{pfx}_ssh_user", "root"),
-                            password=st.session_state.get(f"{pfx}_ssh_password", ""),
+                            password=_unobscure(st.session_state.get(f"{pfx}_ssh_password", "")),
                             key_path=st.session_state.get(f"{pfx}_ssh_key_path", ""),
                             pct_vmid=st.session_state.get(f"{pfx}_pct_vmid", ""),
                         )
-                    _info = get_server_info(_url.strip(), verify_ssl=_ssl, env=env)
+                    _info, _logs = get_server_info(_url.strip(), verify_ssl=_ssl, env=env, return_logs=True)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`")
+                        _disp_ctx = st.session_state.get(f"{pfx}_llm_helper_context_length") or _info.get('n_ctx') or '?'
+                        _max_ctx = _info.get('n_ctx') or '?'
+                        st.session_state[f"{pfx}_openai_status_result"] = ("success", f"Online  |  model: `{_mname}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)", [])
                     else:
-                        st.error("Could not reach server.")
+                        st.session_state[f"{pfx}_openai_status_result"] = ("error", "Could not reach server.", _logs)
                 else:
-                    st.warning("Enter an Instance URL first.")
+                    st.session_state[f"{pfx}_openai_status_result"] = ("warning", "Enter an Instance URL first.", [])
+                
+                st.session_state[f"{pfx}_checking_openai_status"] = False
+                st.rerun()
+
+            _status_res = st.session_state.get(f"{pfx}_openai_status_result")
+            if _status_res:
+                if _status_res[0] == "success":
+                    st.success(_status_res[1])
+                elif _status_res[0] == "error":
+                    st.error(_status_res[1])
+                    if len(_status_res) > 2 and _status_res[2]:
+                        with st.expander("Debug Logs", expanded=True):
+                            st.code("\\n".join(_status_res[2]))
+                else:
+                    st.warning(_status_res[1])
 
         st.divider()
         st.caption("Judge-only MCP tools are separate from the student bot's tool policy.")
@@ -1566,10 +1612,17 @@ def _render_bash_runtime(project: dict) -> None:
                           help="Path to private key file. Leave empty if using password auth.")
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_bash_test_ssh", type="secondary", use_container_width=True):
+                testing = st.session_state.get("bash_testing_ssh", False)
+                if st.button("Testing..." if testing else "Test Connection", key="btn_bash_test_ssh", type="secondary", use_container_width=True, disabled=testing):
+                    st.session_state["bash_testing_ssh"] = True
                     st.session_state.pop("bash_ssh_test_result", None)
+                    st.rerun()
+                
+                if testing:
                     with st.spinner("Please wait..."):
                         _test_bash_ssh_connection()
+                    st.session_state["bash_testing_ssh"] = False
+                    st.rerun()
 
             _ssh_result = st.session_state.get("bash_ssh_test_result")
             if _ssh_result:
@@ -1690,13 +1743,20 @@ def _render_test_button(target_type: str, state_prefix: str, vmid_key: str = "")
 
     _, col_test, _ = st.columns([1, 2, 1])
     with col_test:
-        if st.button(btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True):
+        testing = st.session_state.get(f"btn_{state_prefix}_testing_{target_type}", False)
+        if st.button("Testing..." if testing else btn_label, key=f"btn_{state_prefix}_test_{target_type}", type="secondary", use_container_width=True, disabled=testing):
+            st.session_state[f"btn_{state_prefix}_testing_{target_type}"] = True
             st.session_state.pop(result_key, None)
+            st.rerun()
+
+        if testing:
             with st.spinner("Please wait..."):
                 if target_type == "local":
                     _test_local_connection(result_key)
                 elif target_type == "pct":
                     _test_pct_connection(vmid_key, result_key)
+            st.session_state[f"btn_{state_prefix}_testing_{target_type}"] = False
+            st.rerun()
 
         _res = st.session_state.get(result_key)
         if _res:
@@ -1928,10 +1988,16 @@ def _render_metric_thresholds_config(project: dict, prefix: str, flush_fn) -> No
 
         row = st.columns(threshold_layout)
         row[0].markdown(f"**{metric_label}**  \n`{metric_unit}`")
-        direction_label = "↓ Lower is better" if direction == "lower" else "↑ Higher is better"
-        if row[1].button(direction_label, key=f"_{prefix}_metric_threshold_switch_{metric}",
-                         help="Switch whether lower or higher values are better"):
-            direction = "higher" if direction == "lower" else "lower"
+        is_higher = direction == "higher"
+        direction_label = "Higher is better" if is_higher else "Lower is better"
+        new_is_higher = row[1].toggle(
+            direction_label,
+            value=is_higher,
+            key=f"_{prefix}_metric_threshold_switch_{metric}",
+            help="Toggle between < (lower is better) and > (higher is better)",
+        )
+        if new_is_higher != is_higher:
+            direction = "higher" if new_is_higher else "lower"
             st.session_state[direction_key] = direction
             if values:
                 updated[metric] = {
@@ -2019,82 +2085,84 @@ def _flush_llama_cli_config(project: dict) -> None:
         _prompts  = st.session_state.get("llama_cli_prompts", [])
         _commands = st.session_state.get("llama_cli_commands", [])
 
+    cfg = project.setdefault("config", {})
     project["config"].update({
-        "execution_target":    st.session_state.get("llama_cli_execution_target", "local"),
-        "pct_vmid":            st.session_state.get("llama_cli_pct_vmid", ""),
-        "ssh_host":            st.session_state.get("llama_cli_ssh_host", ""),
-        "ssh_port":            st.session_state.get("llama_cli_ssh_port", 22),
-        "ssh_user":            st.session_state.get("llama_cli_ssh_user", "root"),
-        "ssh_password":        st.session_state.get("llama_cli_ssh_password", ""),
-        "ssh_key_path":        st.session_state.get("llama_cli_ssh_key_path", ""),
-        "sudo":                st.session_state.get("llama_cli_sudo", False),
+        "execution_target":    st.session_state.get("llama_cli_execution_target", cfg.get("execution_target", "local")),
+        "pct_vmid":            st.session_state.get("llama_cli_pct_vmid", cfg.get("pct_vmid", "")),
+        "ssh_host":            st.session_state.get("llama_cli_ssh_host", cfg.get("ssh_host", "")),
+        "ssh_port":            st.session_state.get("llama_cli_ssh_port", cfg.get("ssh_port", 22)),
+        "ssh_user":            st.session_state.get("llama_cli_ssh_user", cfg.get("ssh_user", "root")),
+        "ssh_password":        st.session_state.get("llama_cli_ssh_password", cfg.get("ssh_password", "")),
+        "ssh_key_path":        st.session_state.get("llama_cli_ssh_key_path", cfg.get("ssh_key_path", "")),
+        "sudo":                st.session_state.get("llama_cli_sudo", cfg.get("sudo", False)),
         "sudo_password":       (
-            st.session_state.get("llama_cli_sudo_password", "") or
-            (st.session_state.get("llama_cli_ssh_password", "") if st.session_state.get("llama_cli_execution_target", "local") in ("ssh", "pct") else "")
+            st.session_state.get("llama_cli_sudo_password", cfg.get("sudo_password", "")) or
+            (st.session_state.get("llama_cli_ssh_password", cfg.get("ssh_password", "")) if st.session_state.get("llama_cli_execution_target", "local") in ("ssh", "pct") else "")
         ) if st.session_state.get("llama_cli_sudo") else "",
-        "backend":             st.session_state.get("llama_cli_backend", "llama.cpp"),
-        "binary_path":         st.session_state.get("llama_cli_binary_path", ""),
-        "model_dir":           st.session_state.get("llama_cli_model_dir", ""),
-        "model_name":          st.session_state.get("llama_cli_model_name", ""),
-        "server_port":         st.session_state.get("llama_cli_server_port", 8080),
-        "openai_base_url":     st.session_state.get("llama_cli_openai_base_url", ""),
-        "openai_api_key":      st.session_state.get("llama_cli_openai_api_key", ""),
-        "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", True),
-        "tokens":              st.session_state.get("llama_cli_tokens", 32768),
-        "temperature":         st.session_state.get("llama_cli_temperature", 0.8),
-        "en_temp":             st.session_state.get("llama_cli_en_temp", False),
-        "gpu_layers":          st.session_state.get("llama_cli_gpu_layers", 99),
-        "en_gpu_layers":       st.session_state.get("llama_cli_en_gpu_layers", False),
-        "threads":             st.session_state.get("llama_cli_threads", 4),
-        "en_threads":          st.session_state.get("llama_cli_en_threads", False),
-        "top_k":               st.session_state.get("llama_cli_top_k", 40),
-        "en_top_k":            st.session_state.get("llama_cli_en_top_k", False),
-        "top_p":               st.session_state.get("llama_cli_top_p", 0.9),
-        "en_top_p":            st.session_state.get("llama_cli_en_top_p", False),
-        "min_p":               st.session_state.get("llama_cli_min_p", 0.1),
-        "en_min_p":            st.session_state.get("llama_cli_en_min_p", False),
-        "repeat_penalty":      st.session_state.get("llama_cli_repeat_penalty", 1.1),
-        "en_repeat_penalty":   st.session_state.get("llama_cli_en_repeat_penalty", False),
-        "predict":             st.session_state.get("llama_cli_predict", 512),
-        "en_predict":          st.session_state.get("llama_cli_en_predict", False),
-        "freq_penalty":        st.session_state.get("llama_cli_freq_penalty", 0.0),
-        "en_freq_penalty":     st.session_state.get("llama_cli_en_freq_penalty", False),
-        "rope_freq_base":      st.session_state.get("llama_cli_rope_freq_base", 10000.0),
-        "en_rope_freq_base":   st.session_state.get("llama_cli_en_rope_freq_base", False),
-        "rope_freq_scale":     st.session_state.get("llama_cli_rope_freq_scale", 1.0),
-        "en_rope_freq_scale":  st.session_state.get("llama_cli_en_rope_freq_scale", False),
-        "seed":                st.session_state.get("llama_cli_seed", -1),
-        "en_seed":             st.session_state.get("llama_cli_en_seed", False),
-        "flash_attn":          st.session_state.get("llama_cli_flash_attn", False),
-        "custom_flags":        st.session_state.get("llama_cli_custom_flags", ""),
-        "mcp_enabled":         st.session_state.get("llama_cli_mcp_enabled", False),
-        "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", ""),
-        "mcp_servers":         st.session_state.get("llama_cli_mcp_servers", []),
+        "backend":             st.session_state.get("llama_cli_backend", cfg.get("backend", "llama.cpp")),
+        "binary_path":         st.session_state.get("llama_cli_binary_path", cfg.get("binary_path", "")),
+        "model_dir":           st.session_state.get("llama_cli_model_dir", cfg.get("model_dir", "")),
+        "model_name":          st.session_state.get("llama_cli_model_name", cfg.get("model_name", "")),
+        "server_port":         st.session_state.get("llama_cli_server_port", cfg.get("server_port", 8080)),
+        "openai_base_url":     st.session_state.get("llama_cli_openai_base_url", cfg.get("openai_base_url", "")),
+        "openai_api_key":      st.session_state.get("llama_cli_openai_api_key", cfg.get("openai_api_key", "")),
+        "openai_verify_ssl":   st.session_state.get("llama_cli_openai_verify_ssl", cfg.get("openai_verify_ssl", True)),
+        "tokens":              st.session_state.get("llama_cli_tokens", cfg.get("tokens", 32768)),
+        "temperature":         st.session_state.get("llama_cli_temperature", cfg.get("temperature", 0.8)),
+        "en_temp":             st.session_state.get("llama_cli_en_temp", cfg.get("en_temp", False)),
+        "gpu_layers":          st.session_state.get("llama_cli_gpu_layers", cfg.get("gpu_layers", 99)),
+        "en_gpu_layers":       st.session_state.get("llama_cli_en_gpu_layers", cfg.get("en_gpu_layers", False)),
+        "threads":             st.session_state.get("llama_cli_threads", cfg.get("threads", 4)),
+        "en_threads":          st.session_state.get("llama_cli_en_threads", cfg.get("en_threads", False)),
+        "top_k":               st.session_state.get("llama_cli_top_k", cfg.get("top_k", 40)),
+        "en_top_k":            st.session_state.get("llama_cli_en_top_k", cfg.get("en_top_k", False)),
+        "top_p":               st.session_state.get("llama_cli_top_p", cfg.get("top_p", 0.9)),
+        "en_top_p":            st.session_state.get("llama_cli_en_top_p", cfg.get("en_top_p", False)),
+        "min_p":               st.session_state.get("llama_cli_min_p", cfg.get("min_p", 0.1)),
+        "en_min_p":            st.session_state.get("llama_cli_en_min_p", cfg.get("en_min_p", False)),
+        "repeat_penalty":      st.session_state.get("llama_cli_repeat_penalty", cfg.get("repeat_penalty", 1.1)),
+        "en_repeat_penalty":   st.session_state.get("llama_cli_en_repeat_penalty", cfg.get("en_repeat_penalty", False)),
+        "predict":             st.session_state.get("llama_cli_predict", cfg.get("predict", 512)),
+        "en_predict":          st.session_state.get("llama_cli_en_predict", cfg.get("en_predict", False)),
+        "freq_penalty":        st.session_state.get("llama_cli_freq_penalty", cfg.get("freq_penalty", 0.0)),
+        "en_freq_penalty":     st.session_state.get("llama_cli_en_freq_penalty", cfg.get("en_freq_penalty", False)),
+        "rope_freq_base":      st.session_state.get("llama_cli_rope_freq_base", cfg.get("rope_freq_base", 10000.0)),
+        "en_rope_freq_base":   st.session_state.get("llama_cli_en_rope_freq_base", cfg.get("en_rope_freq_base", False)),
+        "rope_freq_scale":     st.session_state.get("llama_cli_rope_freq_scale", cfg.get("rope_freq_scale", 1.0)),
+        "en_rope_freq_scale":  st.session_state.get("llama_cli_en_rope_freq_scale", cfg.get("en_rope_freq_scale", False)),
+        "seed":                st.session_state.get("llama_cli_seed", cfg.get("seed", -1)),
+        "en_seed":             st.session_state.get("llama_cli_en_seed", cfg.get("en_seed", False)),
+        "flash_attn":          st.session_state.get("llama_cli_flash_attn", cfg.get("flash_attn", False)),
+        "custom_flags":        st.session_state.get("llama_cli_custom_flags", cfg.get("custom_flags", "")),
+        "mcp_enabled":         st.session_state.get("llama_cli_mcp_enabled", cfg.get("mcp_enabled", False)),
+        "mcp_config_path":     st.session_state.get("llama_cli_mcp_config_path", cfg.get("mcp_config_path", "")),
+        "mcp_servers":         st.session_state.get("llama_cli_mcp_servers", cfg.get("mcp_servers", [])),
         "startup_commands":    _clean_steps(st.session_state.get("llama_cli_startup_commands", [])),
         "completion_commands": _clean_steps(st.session_state.get("llama_cli_completion_commands", [])),
         "steps":               _steps,
         "prompts":             _prompts,
         "commands":            _commands,
-        "timeout":             st.session_state.get("llama_cli_timeout", 120),
-        "validation_commands": st.session_state.get("llama_cli_validation_commands", []),
-        "fail_patterns":       st.session_state.get("llama_cli_fail_patterns", []),
-        "validation_sets":     st.session_state.get("llama_cli_validation_sets", []),
-        "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", []),
-        "metric_thresholds":   st.session_state.get("llama_cli_metric_thresholds", {}),
-        "system_prompt":       st.session_state.get("llama_cli_system_prompt", ""),
-        "llm_helper_backend": st.session_state.get("llama_cli_llm_helper_backend", "OpenAI-Compatible"),
-        "llm_helper_openai_url": st.session_state.get("llama_cli_llm_helper_openai_url", ""),
-        "llm_helper_openai_apikey": st.session_state.get("llama_cli_llm_helper_openai_apikey", ""),
-        "llm_helper_openai_verify_ssl": st.session_state.get("llama_cli_llm_helper_openai_verify_ssl", True),
-        "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", "http://localhost:11434"),
-        "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", ""),
-        "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", False),
-        "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", []),
-        "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", []),
-        "llm_helper_mcp_enabled": st.session_state.get("llama_cli_llm_helper_mcp_enabled", False),
-        "llm_helper_mcp_config_path": st.session_state.get("llama_cli_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
-        "llm_helper_mcp_tools": st.session_state.get("llama_cli_llm_helper_mcp_tools", []),
-        "llm_helper_mcp_strict": st.session_state.get("llama_cli_llm_helper_mcp_strict", False),
+        "timeout":             st.session_state.get("llama_cli_timeout", cfg.get("timeout", 120)),
+        "validation_commands": st.session_state.get("llama_cli_validation_commands", cfg.get("validation_commands", [])),
+        "fail_patterns":       st.session_state.get("llama_cli_fail_patterns", cfg.get("fail_patterns", [])),
+        "validation_sets":     st.session_state.get("llama_cli_validation_sets", cfg.get("validation_sets", [])),
+        "metrics_matrix":      st.session_state.get("llama_cli_metrics_matrix", cfg.get("metrics_matrix", [])),
+        "metric_thresholds":   st.session_state.get("llama_cli_metric_thresholds", cfg.get("metric_thresholds", {})),
+        "system_prompt":       st.session_state.get("llama_cli_system_prompt", cfg.get("system_prompt", "")),
+        "llm_helper_backend": st.session_state.get("llama_cli_llm_helper_backend", cfg.get("llm_helper_backend", "OpenAI-Compatible")),
+        "llm_helper_openai_url": st.session_state.get("llama_cli_llm_helper_openai_url", cfg.get("llm_helper_openai_url", "")),
+        "llm_helper_openai_apikey": st.session_state.get("llama_cli_llm_helper_openai_apikey", cfg.get("llm_helper_openai_apikey", "")),
+        "llm_helper_openai_verify_ssl": st.session_state.get("llama_cli_llm_helper_openai_verify_ssl", cfg.get("llm_helper_openai_verify_ssl", True)),
+        "llm_helper_ollama_url": st.session_state.get("llama_cli_llm_helper_ollama_url", cfg.get("llm_helper_ollama_url", "http://localhost:11434")),
+        "llm_helper_model": st.session_state.get("llama_cli_llm_helper_model", cfg.get("llm_helper_model", "")),
+        "llm_helper_context_length": st.session_state.get("llama_cli_llm_helper_context_length", cfg.get("llm_helper_context_length", 8192)),
+        "llm_helper_enabled": st.session_state.get("llama_cli_llm_helper_enabled", cfg.get("llm_helper_enabled", False)),
+        "llm_helper_openai_models": st.session_state.get("llama_cli_llm_helper_openai_models", cfg.get("llm_helper_openai_models", [])),
+        "llm_helper_ollama_models": st.session_state.get("llama_cli_llm_helper_ollama_models", cfg.get("llm_helper_ollama_models", [])),
+        "llm_helper_mcp_enabled": st.session_state.get("llama_cli_llm_helper_mcp_enabled", cfg.get("llm_helper_mcp_enabled", False)),
+        "llm_helper_mcp_config_path": st.session_state.get("llama_cli_llm_helper_mcp_config_path", cfg.get("llm_helper_mcp_config_path", MCP_CONFIG_PATH)),
+        "llm_helper_mcp_tools": st.session_state.get("llama_cli_llm_helper_mcp_tools", cfg.get("llm_helper_mcp_tools", [])),
+        "llm_helper_mcp_strict": st.session_state.get("llama_cli_llm_helper_mcp_strict", cfg.get("llm_helper_mcp_strict", False)),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -2210,7 +2278,7 @@ def _scan_models(project: dict) -> None:
         env = SSHEnvironment(
             host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
             username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
+            password=_unobscure(cfg.get("ssh_password", "")) or None,
             key_path=cfg.get("ssh_key_path") or None,
             remote_cwd=".",
         )
@@ -2300,7 +2368,7 @@ def _test_llama_cli_run(project: dict) -> None:
         env = SSHEnvironment(
             host=host, port=int(cfg.get("ssh_port", 22)),
             username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
+            password=_unobscure(cfg.get("ssh_password", "")) or None,
             key_path=cfg.get("ssh_key_path") or None,
             remote_cwd=".",
         )
@@ -2348,7 +2416,7 @@ def _test_llama_cli_run(project: dict) -> None:
             out = res.get("stdout", "").strip()
             import re
             out = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', out)
-            st.session_state["_llama_svc_result"] = ("ok", "Test successful! (Model loaded and executed correctly)", cmd)
+            st.session_state["_llama_svc_result"] = ("ok", "(Model loaded and executed correctly)", cmd)
 
     except Exception as exc:
         st.session_state["_llama_svc_result"] = ("error", f"Execution error: {exc}", "")
@@ -2414,10 +2482,17 @@ def _render_llama_cli_runtime(project: dict) -> None:
                           placeholder="~/.ssh/id_rsa")
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_llama_test_ssh", type="secondary", use_container_width=True):
+                testing = st.session_state.get("llama_cli_testing_ssh", False)
+                if st.button("Testing..." if testing else "Test Connection", key="btn_llama_test_ssh", type="secondary", use_container_width=True, disabled=testing):
+                    st.session_state["llama_cli_testing_ssh"] = True
                     st.session_state.pop("llama_cli_ssh_test_result", None)
+                    st.rerun()
+
+                if testing:
                     with st.spinner("Please wait..."):
                         _test_llama_cli_ssh_connection()
+                    st.session_state["llama_cli_testing_ssh"] = False
+                    st.rerun()
 
             _llama_ssh_result = st.session_state.get("llama_cli_ssh_test_result")
             if _llama_ssh_result:
@@ -2451,8 +2526,14 @@ def _render_llama_cli_runtime(project: dict) -> None:
             with col_scan:
                 st.write("")
                 st.write("")
-                if st.button("Scan", key="btn_llama_scan_models", use_container_width=True):
+                scanning = st.session_state.get("btn_llama_scanning_models", False)
+                if st.button("Scanning..." if scanning else "Scan", key="btn_llama_scan_models", use_container_width=True, disabled=scanning):
+                    st.session_state["btn_llama_scanning_models"] = True
+                    st.rerun()
+                if scanning:
                     _scan_models(project)
+                    st.session_state["btn_llama_scanning_models"] = False
+                    st.rerun()
             discovered: list = st.session_state.get("llama_cli_discovered_models", [])
             model_names = []
             for m in discovered:
@@ -2502,20 +2583,32 @@ def _render_llama_cli_runtime(project: dict) -> None:
             with col_fetch:
                 st.write("")
                 st.write("")
-                if st.button("Fetch", key="btn_llama_fetch_openai_models", use_container_width=True):
+                fetching = st.session_state.get("btn_llama_fetching_openai_models", False)
+                if st.button("Fetching..." if fetching else "Fetch", key="btn_llama_fetch_openai_models", use_container_width=True, disabled=fetching):
+                    st.session_state["btn_llama_fetching_openai_models"] = True
+                    st.rerun()
+                if fetching:
                     _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
                     if _base:
                         from core.models import fetch_llama_cpp_models
                         _found, _err = fetch_llama_cpp_models(_base)
                         if _found:
                             st.session_state["llama_cli_openai_models"] = _found
-                            st.success(f"{len(_found)} model(s) found")
+                            st.session_state["btn_llama_fetch_openai_res"] = ("success", f"{len(_found)} model(s) found")
                         else:
                             _clear_llama_openai_model_selection()
-                            st.error(_err or "No models returned — is the server running?")
+                            st.session_state["btn_llama_fetch_openai_res"] = ("error", _err or "No models returned — is the server running?")
                     else:
                         _clear_llama_openai_model_selection()
-                        st.warning("Enter an Instance URL first.")
+                        st.session_state["btn_llama_fetch_openai_res"] = ("warning", "Enter an Instance URL first.")
+                    st.session_state["btn_llama_fetching_openai_models"] = False
+                    st.rerun()
+                
+                _res = st.session_state.get("btn_llama_fetch_openai_res")
+                if _res:
+                    if _res[0] == "success": st.success(_res[1])
+                    elif _res[0] == "error": st.error(_res[1])
+                    else: st.warning(_res[1])
 
             _ssl = st.checkbox(
                 "Require SSL Certificate Verification",
@@ -2554,17 +2647,40 @@ def _render_llama_cli_runtime(project: dict) -> None:
                 )
                 st.session_state["llama_cli_model_name"] = _manual_model
 
-            if st.button("Check Status", key="btn_llama_check_openai_status", use_container_width=True):
+            checking = st.session_state.get("llama_cli_checking_openai_status", False)
+            if st.button("Checking..." if checking else "Check Status", key="btn_llama_check_openai_status", use_container_width=True, disabled=checking):
+                st.session_state["llama_cli_checking_openai_status"] = True
+                st.session_state.pop("llama_cli_openai_status_result", None)
+                st.rerun()
+            
+            if checking:
                 _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
                 if _base:
-                    _info = llama_server.get_server_info(_base)
+                    _info, _logs = llama_server.get_server_info(_base, return_logs=True)
                     if _info:
                         _mname = (_info.get("model_path") or "").split("/")[-1] or "?"
-                        st.success(f"Online  |  model: `{_mname}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`")
+                        _disp_ctx = st.session_state.get("llama_cli_context_size") or _info.get('n_ctx') or '?'
+                        _max_ctx = _info.get('n_ctx') or '?'
+                        st.session_state["llama_cli_openai_status_result"] = ("success", f"Online  |  model: `{_mname}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)", [])
                     else:
-                        st.error("Could not reach server.")
+                        st.session_state["llama_cli_openai_status_result"] = ("error", "Could not reach server.", _logs)
                 else:
-                    st.warning("Enter an Instance URL first.")
+                    st.session_state["llama_cli_openai_status_result"] = ("warning", "Enter an Instance URL first.", [])
+                
+                st.session_state["llama_cli_checking_openai_status"] = False
+                st.rerun()
+
+            _status_res = st.session_state.get("llama_cli_openai_status_result")
+            if _status_res:
+                if _status_res[0] == "success":
+                    st.success(_status_res[1])
+                elif _status_res[0] == "error":
+                    st.error(_status_res[1])
+                    if len(_status_res) > 2 and _status_res[2]:
+                        with st.expander("Debug Logs", expanded=True):
+                            st.code("\\n".join(_status_res[2]))
+                else:
+                    st.warning(_status_res[1])
 
 
 
@@ -2641,32 +2757,41 @@ def _render_llama_cli_runtime(project: dict) -> None:
         
         _, _col_svc, _ = st.columns([1, 2, 1])
         with _col_svc:
-            if st.button("Test Run", key="btn_llama_test_run",
-                         use_container_width=True, type="primary",
+            testing = st.session_state.get("llama_cli_testing_run", False)
+            if st.button("Testing..." if testing else "Test Run", key="btn_llama_test_run",
+                         use_container_width=True, type="primary", disabled=testing,
                          help="Run a test prompt (llama-cli), or test connectivity (OpenAI)."):
+                st.session_state["llama_cli_testing_run"] = True
                 st.session_state.pop("_llama_svc_result", None)
+                st.rerun()
+            
+            if testing:
                 with st.spinner("Testing model execution... (Loading the model into memory may take a few minutes)"):
                     if _backend.lower().startswith("openai"):
                         _base = (st.session_state.get("llama_cli_openai_base_url") or "").strip()
                         if not _base:
                             st.session_state["_llama_svc_result"] = ("error", "No Instance URL configured.", "")
                         else:
-                            _info = llama_server.get_server_info(_base)
+                            _info, _logs = llama_server.get_server_info(_base, return_logs=True)
                             if _info:
                                 _mn = (_info.get("model_path") or "").split("/")[-1] or "?"
+                                _disp_ctx = st.session_state.get("llama_cli_context_size") or _info.get('n_ctx') or '?'
+                                _max_ctx = _info.get('n_ctx') or '?'
                                 st.session_state["_llama_svc_result"] = (
                                     "ok",
-                                    f"Online  |  model: `{_mn}`  |  Context Window Length: `{_info.get('n_ctx') or '?'}`",
-                                    "",
+                                    f"Online  |  model: `{_mn}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)",
+                                    "\\n".join(_logs),
                                 )
                             else:
                                 st.session_state["_llama_svc_result"] = (
                                     "error",
                                     f"Could not reach `{_base}` — check URL and network.",
-                                    "",
+                                    "\\n".join(_logs),
                                 )
                     else:
                         _test_llama_cli_run(project)
+                st.session_state["llama_cli_testing_run"] = False
+                st.rerun()
 
         # ── Test Run status display (always shown) ─────────────────────────────
         _svc_result = st.session_state.get("_llama_svc_result")
@@ -2927,84 +3052,86 @@ def _flush_llama_server_config(project: dict) -> None:
     base_url = _llama_server_client_base_url(host, port)
     st.session_state["llama_server_openai_base_url"] = base_url
 
+    cfg = project.setdefault("config", {})
     project["config"].update({
-        "execution_target":    st.session_state.get("llama_server_execution_target", "local"),
-        "pct_vmid":            st.session_state.get("llama_server_pct_vmid", ""),
-        "ssh_host":            st.session_state.get("llama_server_ssh_host", ""),
-        "ssh_port":            st.session_state.get("llama_server_ssh_port", 22),
-        "ssh_user":            st.session_state.get("llama_server_ssh_user", "root"),
-        "ssh_password":        st.session_state.get("llama_server_ssh_password", ""),
-        "ssh_key_path":        st.session_state.get("llama_server_ssh_key_path", ""),
-        "sudo":                st.session_state.get("llama_server_sudo", False),
+        "execution_target":    st.session_state.get("llama_server_execution_target", cfg.get("execution_target", "local")),
+        "pct_vmid":            st.session_state.get("llama_server_pct_vmid", cfg.get("pct_vmid", "")),
+        "ssh_host":            st.session_state.get("llama_server_ssh_host", cfg.get("ssh_host", "")),
+        "ssh_port":            st.session_state.get("llama_server_ssh_port", cfg.get("ssh_port", 22)),
+        "ssh_user":            st.session_state.get("llama_server_ssh_user", cfg.get("ssh_user", "root")),
+        "ssh_password":        st.session_state.get("llama_server_ssh_password", cfg.get("ssh_password", "")),
+        "ssh_key_path":        st.session_state.get("llama_server_ssh_key_path", cfg.get("ssh_key_path", "")),
+        "sudo":                st.session_state.get("llama_server_sudo", cfg.get("sudo", False)),
         "sudo_password":       (
-            st.session_state.get("llama_server_sudo_password", "") or
-            (st.session_state.get("llama_server_ssh_password", "") if st.session_state.get("llama_server_execution_target", "local") in ("ssh", "pct") else "")
+            st.session_state.get("llama_server_sudo_password", cfg.get("sudo_password", "")) or
+            (st.session_state.get("llama_server_ssh_password", cfg.get("ssh_password", "")) if st.session_state.get("llama_server_execution_target", "local") in ("ssh", "pct") else "")
         ) if st.session_state.get("llama_server_sudo") else "",
         "backend":             "llama-server (managed)",
-        "binary_path":         st.session_state.get("llama_server_binary_path", ""),
-        "model_dir":           st.session_state.get("llama_server_model_dir", ""),
-        "model_name":          st.session_state.get("llama_server_model_name", ""),
-        "tokens":              st.session_state.get("llama_server_tokens", 32768),
-        "server_ready_timeout": st.session_state.get("llama_server_ready_timeout", 300),
-        "en_temp":             st.session_state.get("llama_server_en_temp", False),
-        "temperature":         st.session_state.get("llama_server_temperature", 0.8),
-        "en_gpu_layers":       st.session_state.get("llama_server_en_gpu_layers", False),
-        "gpu_layers":          st.session_state.get("llama_server_gpu_layers", 99),
-        "en_threads":          st.session_state.get("llama_server_en_threads", False),
-        "threads":             st.session_state.get("llama_server_threads", 4),
-        "flash_attn":          st.session_state.get("llama_server_flash_attn", False),
-        "en_top_k":            st.session_state.get("llama_server_en_top_k", False),
-        "top_k":               st.session_state.get("llama_server_top_k", 40),
-        "en_top_p":            st.session_state.get("llama_server_en_top_p", False),
-        "top_p":               st.session_state.get("llama_server_top_p", 0.9),
-        "en_min_p":            st.session_state.get("llama_server_en_min_p", False),
-        "min_p":               st.session_state.get("llama_server_min_p", 0.1),
-        "en_repeat_penalty":   st.session_state.get("llama_server_en_repeat_penalty", False),
-        "repeat_penalty":      st.session_state.get("llama_server_repeat_penalty", 1.1),
-        "en_freq_penalty":     st.session_state.get("llama_server_en_freq_penalty", False),
-        "freq_penalty":        st.session_state.get("llama_server_freq_penalty", 0.0),
-        "en_predict":          st.session_state.get("llama_server_en_predict", False),
-        "predict":             st.session_state.get("llama_server_predict", 512),
-        "en_rope_freq_base":   st.session_state.get("llama_server_en_rope_freq_base", False),
-        "rope_freq_base":      st.session_state.get("llama_server_rope_freq_base", 10000.0),
-        "en_rope_freq_scale":  st.session_state.get("llama_server_en_rope_freq_scale", False),
-        "rope_freq_scale":     st.session_state.get("llama_server_rope_freq_scale", 1.0),
-        "en_seed":             st.session_state.get("llama_server_en_seed", False),
-        "seed":                st.session_state.get("llama_server_seed", -1),
-        "custom_flags":        st.session_state.get("llama_server_custom_flags", ""),
+        "binary_path":         st.session_state.get("llama_server_binary_path", cfg.get("binary_path", "")),
+        "model_dir":           st.session_state.get("llama_server_model_dir", cfg.get("model_dir", "")),
+        "model_name":          st.session_state.get("llama_server_model_name", cfg.get("model_name", "")),
+        "tokens":              st.session_state.get("llama_server_tokens", cfg.get("tokens", 32768)),
+        "server_ready_timeout": st.session_state.get("llama_server_ready_timeout", cfg.get("server_ready_timeout", 300)),
+        "en_temp":             st.session_state.get("llama_server_en_temp", cfg.get("en_temp", False)),
+        "temperature":         st.session_state.get("llama_server_temperature", cfg.get("temperature", 0.8)),
+        "en_gpu_layers":       st.session_state.get("llama_server_en_gpu_layers", cfg.get("en_gpu_layers", False)),
+        "gpu_layers":          st.session_state.get("llama_server_gpu_layers", cfg.get("gpu_layers", 99)),
+        "en_threads":          st.session_state.get("llama_server_en_threads", cfg.get("en_threads", False)),
+        "threads":             st.session_state.get("llama_server_threads", cfg.get("threads", 4)),
+        "flash_attn":          st.session_state.get("llama_server_flash_attn", cfg.get("flash_attn", False)),
+        "en_top_k":            st.session_state.get("llama_server_en_top_k", cfg.get("en_top_k", False)),
+        "top_k":               st.session_state.get("llama_server_top_k", cfg.get("top_k", 40)),
+        "en_top_p":            st.session_state.get("llama_server_en_top_p", cfg.get("en_top_p", False)),
+        "top_p":               st.session_state.get("llama_server_top_p", cfg.get("top_p", 0.9)),
+        "en_min_p":            st.session_state.get("llama_server_en_min_p", cfg.get("en_min_p", False)),
+        "min_p":               st.session_state.get("llama_server_min_p", cfg.get("min_p", 0.1)),
+        "en_repeat_penalty":   st.session_state.get("llama_server_en_repeat_penalty", cfg.get("en_repeat_penalty", False)),
+        "repeat_penalty":      st.session_state.get("llama_server_repeat_penalty", cfg.get("repeat_penalty", 1.1)),
+        "en_freq_penalty":     st.session_state.get("llama_server_en_freq_penalty", cfg.get("en_freq_penalty", False)),
+        "freq_penalty":        st.session_state.get("llama_server_freq_penalty", cfg.get("freq_penalty", 0.0)),
+        "en_predict":          st.session_state.get("llama_server_en_predict", cfg.get("en_predict", False)),
+        "predict":             st.session_state.get("llama_server_predict", cfg.get("predict", 512)),
+        "en_rope_freq_base":   st.session_state.get("llama_server_en_rope_freq_base", cfg.get("en_rope_freq_base", False)),
+        "rope_freq_base":      st.session_state.get("llama_server_rope_freq_base", cfg.get("rope_freq_base", 10000.0)),
+        "en_rope_freq_scale":  st.session_state.get("llama_server_en_rope_freq_scale", cfg.get("en_rope_freq_scale", False)),
+        "rope_freq_scale":     st.session_state.get("llama_server_rope_freq_scale", cfg.get("rope_freq_scale", 1.0)),
+        "en_seed":             st.session_state.get("llama_server_en_seed", cfg.get("en_seed", False)),
+        "seed":                st.session_state.get("llama_server_seed", cfg.get("seed", -1)),
+        "custom_flags":        st.session_state.get("llama_server_custom_flags", cfg.get("custom_flags", "")),
         "server_host":         host,
         "server_port":         port,
         "openai_base_url":     base_url,
-        "openai_api_key":      st.session_state.get("llama_server_openai_api_key", ""),
-        "openai_verify_ssl":   st.session_state.get("llama_server_openai_verify_ssl", True),
-        "mcp_enabled":         st.session_state.get("llama_server_mcp_enabled", False),
-        "mcp_config_path":     st.session_state.get("llama_server_mcp_config_path", ""),
-        "mcp_servers":         st.session_state.get("llama_server_mcp_servers", []),
+        "openai_api_key":      st.session_state.get("llama_server_openai_api_key", cfg.get("openai_api_key", "")),
+        "openai_verify_ssl":   st.session_state.get("llama_server_openai_verify_ssl", cfg.get("openai_verify_ssl", True)),
+        "mcp_enabled":         st.session_state.get("llama_server_mcp_enabled", cfg.get("mcp_enabled", False)),
+        "mcp_config_path":     st.session_state.get("llama_server_mcp_config_path", cfg.get("mcp_config_path", "")),
+        "mcp_servers":         st.session_state.get("llama_server_mcp_servers", cfg.get("mcp_servers", [])),
         "startup_commands":    _clean_steps(st.session_state.get("llama_server_startup_commands", [])),
         "completion_commands": _clean_steps(st.session_state.get("llama_server_completion_commands", [])),
         "steps":               _steps,
         "prompts":             _prompts,
         "commands":            _commands,
-        "timeout":             st.session_state.get("llama_server_timeout", 120),
-        "validation_commands": st.session_state.get("llama_server_validation_commands", []),
-        "fail_patterns":       st.session_state.get("llama_server_fail_patterns", []),
-        "validation_sets":     st.session_state.get("llama_server_validation_sets", []),
-        "metrics_matrix":      st.session_state.get("llama_server_metrics_matrix", []),
-        "metric_thresholds":   st.session_state.get("llama_server_metric_thresholds", {}),
-        "system_prompt":       st.session_state.get("llama_server_system_prompt", ""),
-        "llm_helper_backend": st.session_state.get("llama_server_llm_helper_backend", "OpenAI-Compatible"),
-        "llm_helper_openai_url": st.session_state.get("llama_server_llm_helper_openai_url", ""),
-        "llm_helper_openai_apikey": st.session_state.get("llama_server_llm_helper_openai_apikey", ""),
-        "llm_helper_openai_verify_ssl": st.session_state.get("llama_server_llm_helper_openai_verify_ssl", True),
-        "llm_helper_ollama_url": st.session_state.get("llama_server_llm_helper_ollama_url", "http://localhost:11434"),
-        "llm_helper_model": st.session_state.get("llama_server_llm_helper_model", ""),
-        "llm_helper_enabled": st.session_state.get("llama_server_llm_helper_enabled", False),
-        "llm_helper_openai_models": st.session_state.get("llama_server_llm_helper_openai_models", []),
-        "llm_helper_ollama_models": st.session_state.get("llama_server_llm_helper_ollama_models", []),
-        "llm_helper_mcp_enabled": st.session_state.get("llama_server_llm_helper_mcp_enabled", False),
-        "llm_helper_mcp_config_path": st.session_state.get("llama_server_llm_helper_mcp_config_path", MCP_CONFIG_PATH),
-        "llm_helper_mcp_tools": st.session_state.get("llama_server_llm_helper_mcp_tools", []),
-        "llm_helper_mcp_strict": st.session_state.get("llama_server_llm_helper_mcp_strict", False),
+        "timeout":             st.session_state.get("llama_server_timeout", cfg.get("timeout", 120)),
+        "validation_commands": st.session_state.get("llama_server_validation_commands", cfg.get("validation_commands", [])),
+        "fail_patterns":       st.session_state.get("llama_server_fail_patterns", cfg.get("fail_patterns", [])),
+        "validation_sets":     st.session_state.get("llama_server_validation_sets", cfg.get("validation_sets", [])),
+        "metrics_matrix":      st.session_state.get("llama_server_metrics_matrix", cfg.get("metrics_matrix", [])),
+        "metric_thresholds":   st.session_state.get("llama_server_metric_thresholds", cfg.get("metric_thresholds", {})),
+        "system_prompt":       st.session_state.get("llama_server_system_prompt", cfg.get("system_prompt", "")),
+        "llm_helper_backend": st.session_state.get("llama_server_llm_helper_backend", cfg.get("llm_helper_backend", "OpenAI-Compatible")),
+        "llm_helper_openai_url": st.session_state.get("llama_server_llm_helper_openai_url", cfg.get("llm_helper_openai_url", "")),
+        "llm_helper_openai_apikey": st.session_state.get("llama_server_llm_helper_openai_apikey", cfg.get("llm_helper_openai_apikey", "")),
+        "llm_helper_openai_verify_ssl": st.session_state.get("llama_server_llm_helper_openai_verify_ssl", cfg.get("llm_helper_openai_verify_ssl", True)),
+        "llm_helper_ollama_url": st.session_state.get("llama_server_llm_helper_ollama_url", cfg.get("llm_helper_ollama_url", "http://localhost:11434")),
+        "llm_helper_model": st.session_state.get("llama_server_llm_helper_model", cfg.get("llm_helper_model", "")),
+        "llm_helper_context_length": st.session_state.get("llama_server_llm_helper_context_length", cfg.get("llm_helper_context_length", 8192)),
+        "llm_helper_enabled": st.session_state.get("llama_server_llm_helper_enabled", cfg.get("llm_helper_enabled", False)),
+        "llm_helper_openai_models": st.session_state.get("llama_server_llm_helper_openai_models", cfg.get("llm_helper_openai_models", [])),
+        "llm_helper_ollama_models": st.session_state.get("llama_server_llm_helper_ollama_models", cfg.get("llm_helper_ollama_models", [])),
+        "llm_helper_mcp_enabled": st.session_state.get("llama_server_llm_helper_mcp_enabled", cfg.get("llm_helper_mcp_enabled", False)),
+        "llm_helper_mcp_config_path": st.session_state.get("llama_server_llm_helper_mcp_config_path", cfg.get("llm_helper_mcp_config_path", MCP_CONFIG_PATH)),
+        "llm_helper_mcp_tools": st.session_state.get("llama_server_llm_helper_mcp_tools", cfg.get("llm_helper_mcp_tools", [])),
+        "llm_helper_mcp_strict": st.session_state.get("llama_server_llm_helper_mcp_strict", cfg.get("llm_helper_mcp_strict", False)),
     })
     from core.settings_store import save_settings
     save_settings(st.session_state)
@@ -3033,7 +3160,7 @@ def _scan_llama_server_models(project: dict) -> None:
         env = SSHEnvironment(
             host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
             username=cfg.get("ssh_user", "root"),
-            password=cfg.get("ssh_password") or None,
+            password=_unobscure(cfg.get("ssh_password", "")) or None,
             key_path=cfg.get("ssh_key_path") or None,
             remote_cwd=".",
         )
@@ -3188,16 +3315,14 @@ def _test_llama_server_run(project: dict) -> None:
             info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
             if info:
                 model = (info.get("model_path") or "").split("/")[-1] or "?"
-                st.session_state["_llama_server_svc_result"] = (
-                    "ok",
-                    f"A server is already running here (e.g. an active Execute run)  |  "
-                    f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
-                    "",
-                )
+                _disp_ctx = st.session_state.get("llama_server_context_size") or info.get('n_ctx') or '?'
+                _max_ctx = info.get('n_ctx') or '?'
+                msg = f"A server is already running here (e.g. an active Execute run)  |  model: `{model}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)"
+                st.session_state["_llama_server_svc_result"] = ("ok", msg, "")
             else:
                 st.session_state["_llama_server_svc_result"] = (
                     "error",
-                    "A server is already listening at this address but didn't return model info.",
+                    "Connection failed. A server is listening at this address but didn't return valid model info.",
                     "",
                 )
             return
@@ -3228,7 +3353,7 @@ def _test_llama_server_run(project: dict) -> None:
             ssh_env = SSHEnvironment(
                 host=cfg.get("ssh_host", ""), port=int(cfg.get("ssh_port", 22)),
                 username=cfg.get("ssh_user", "root"),
-                password=cfg.get("ssh_password") or None,
+                password=_unobscure(cfg.get("ssh_password", "")) or None,
                 key_path=cfg.get("ssh_key_path") or None,
                 remote_cwd=".",
             )
@@ -3260,15 +3385,17 @@ def _test_llama_server_run(project: dict) -> None:
         info = _llama_server_mod.get_server_info(url, verify_ssl=verify_ssl)
         if info:
             model = (info.get("model_path") or "").split("/")[-1] or "?"
+            _disp_ctx = st.session_state.get("llama_server_context_size") or info.get('n_ctx') or '?'
+            _max_ctx = info.get('n_ctx') or '?'
             st.session_state["_llama_server_svc_result"] = (
                 "ok",
-                f"Test successful! Server started and responded correctly  |  "
-                f"model: `{model}`  |  Context Window Length: `{info.get('n_ctx') or '?'}`",
-                "\n".join(logs),
+                f"Server started and responded correctly  |  "
+                f"model: `{model}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)",
+                "",
             )
         else:
             st.session_state["_llama_server_svc_result"] = (
-                "error", "Server started but didn't return model info.", "\n".join(logs),
+                "error", "Connection failed. Server started but didn't return valid model info.", "",
             )
     finally:
         proc.terminate()
@@ -3340,10 +3467,17 @@ def _render_llama_server_runtime(project: dict) -> None:
                           placeholder="~/.ssh/id_rsa")
             _, col_test, _ = st.columns([1, 2, 1])
             with col_test:
-                if st.button("Test Connection", key="btn_llama_server_test_ssh", type="secondary", use_container_width=True):
+                testing = st.session_state.get("llama_server_testing_ssh", False)
+                if st.button("Testing..." if testing else "Test Connection", key="btn_llama_server_test_ssh", type="secondary", use_container_width=True, disabled=testing):
+                    st.session_state["llama_server_testing_ssh"] = True
                     st.session_state.pop("llama_server_ssh_test_result", None)
+                    st.rerun()
+
+                if testing:
                     with st.spinner("Please wait..."):
                         _test_llama_server_ssh_connection()
+                    st.session_state["llama_server_testing_ssh"] = False
+                    st.rerun()
 
             _llama_server_ssh_result = st.session_state.get("llama_server_ssh_test_result")
             if _llama_server_ssh_result:
@@ -3538,17 +3672,25 @@ def _render_llama_server_runtime(project: dict) -> None:
 
         _, col_status, _ = st.columns([1, 2, 1])
         with col_status:
+            checking = st.session_state.get("llama_server_checking_status", False)
             if st.button(
-                "Check Status",
+                "Checking..." if checking else "Check Status",
                 key="btn_llama_server_check_status",
                 use_container_width=True,
                 type="primary",
+                disabled=checking,
                 help="Launches the managed llama-server with the current settings to verify "
                      "they work, then stops it again (unless a server is already running here).",
             ):
+                st.session_state["llama_server_checking_status"] = True
                 st.session_state.pop("_llama_server_svc_result", None)
+                st.rerun()
+            
+            if checking:
                 with st.spinner("Starting llama-server... (loading the model into memory may take a few minutes)"):
                     _test_llama_server_run(project)
+                st.session_state["llama_server_checking_status"] = False
+                st.rerun()
 
         _svc_result = st.session_state.get("_llama_server_svc_result")
         if _svc_result:

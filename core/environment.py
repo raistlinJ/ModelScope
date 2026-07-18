@@ -114,14 +114,14 @@ class SSHEnvironment(BaseEnvironment):
         username: str = "root",
         password: Optional[str] = None,
         key_path: Optional[str] = None,
-        remote_cwd: str = "~/cyber-agent-flow",
+        remote_cwd: str = "~/modelscope",
     ) -> None:
         self._host           = host
         self._port           = int(port)
         self._username       = username
         self._password       = password or None
         self._key_path       = key_path or None
-        self._remote_cwd     = remote_cwd or "~/cyber-agent-flow"  # user-supplied, never mutated
+        self._remote_cwd     = remote_cwd or "~/modelscope"  # user-supplied, never mutated
         self._resolved_cwd: Optional[str] = None  # set on first connect after tilde/cwd resolution
         self._client: Any    = None
         self._sftp:   Any    = None
@@ -401,7 +401,7 @@ class PCTEnvironment(BaseEnvironment):
 
 # Default install location of CyberAgentFlow on a remote Kali target. Centralised
 # here so the UI, CLI and tests all agree on one fallback value.
-DEFAULT_REMOTE_CWD = "~/cyber-agent-flow"
+DEFAULT_REMOTE_CWD = "~/modelscope"
 
 
 def create_environment(
@@ -412,8 +412,9 @@ def create_environment(
     username: str = "root",
     password: Optional[str] = None,
     key_path: Optional[str] = None,
-    remote_cwd: str = DEFAULT_REMOTE_CWD,
+    remote_cwd: Optional[str] = None,
     pct_vmid: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> BaseEnvironment:
     """Return the right :class:`BaseEnvironment` for the requested target.
 
@@ -429,6 +430,8 @@ def create_environment(
             (ignored for the local environment).
         pct_vmid: If provided, wraps the environment in a PCTEnvironment for LXC.
     """
+    _cwd = remote_cwd or (f"~/modelscope/{project_id}" if project_id else DEFAULT_REMOTE_CWD)
+    
     if ssh:
         env = SSHEnvironment(
             host=host,
@@ -436,7 +439,7 @@ def create_environment(
             username=username or "root",
             password=password or None,
             key_path=key_path or None,
-            remote_cwd=remote_cwd or DEFAULT_REMOTE_CWD,
+            remote_cwd=_cwd,
         )
     else:
         env = LocalEnvironment()

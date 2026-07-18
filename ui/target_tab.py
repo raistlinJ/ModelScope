@@ -164,7 +164,7 @@ def render() -> None:
         st.text_input(
             "Remote CAF Directory",
             key="target_ssh_caf_dir",
-            placeholder="~/cyber-agent-flow",
+            placeholder="~/modelscope",
             help="Absolute path on the remote machine where CyberAgentFlow is installed.",
         )
 
@@ -181,7 +181,7 @@ def render() -> None:
         # Status summary
         host    = (st.session_state.get("target_ssh_host") or "").strip()
         user    = st.session_state.get("target_ssh_user", "root")
-        caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
+        caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/modelscope"
         if host:
             st.info(f"Target: `{user}@{host}` | CAF dir: `{caf_dir}`")
 

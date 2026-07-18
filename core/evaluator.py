@@ -568,11 +568,14 @@ def _run_validation_sets(
                     
                     use_main = config.get("type") in ("llama_cli_bot", "llama_server_bot")
                     cb = config.get("execute_prompt_callback")
-                    if use_main and cb:
-                        prompt_str = f"{sys_p}\n\n{usr_p}" if sys_p else usr_p
-                        res = cb(prompt_str, "VALIDATE CMD", cmd_obj.get("preserve_context", True))
+                    if use_main:
+                        if cb:
+                            prompt_str = f"{sys_p}\n\n{usr_p}" if sys_p else usr_p
+                            res = cb(prompt_str, "VALIDATE CMD", cmd_obj.get("preserve_context", True))
+                        else:
+                            res = {"stdout": "", "stderr": "Cannot execute prompt: managed server/cli callback unavailable.", "exit_code": -1}
                     else:
-                        res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=use_main)
+                        res = execute_helper_prompt(cmd_obj, config, prompt_context_list, on_log, use_main_llm=False)
                     stdout = res.get("stdout", "")
                     stderr = res.get("stderr", "")
                     exit_code = res.get("exit_code", -1)
@@ -1011,7 +1014,8 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         mcp_url = config.get("_judge_mcp_url", config.get("mcp_server_url", MCP_SERVER_BASE_URL))
         for _ in range(4):
             try:
-                response = _call_llm(backend_name, url, model, messages, tools, config.get("context_size", 4096), on_log)
+                _ctx_size = config.get("context_size", 4096) if use_main_llm else int(config.get("llm_helper_context_length", config.get("context_size", 8192)))
+                response = _call_llm(backend_name, url, model, messages, tools, _ctx_size, on_log)
             except Exception as exc:
                 return {"exit_code": 1, "stderr": str(exc)}
             message = response.get("message", {})
@@ -1070,7 +1074,8 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         payload = {
             "model": model,
             "messages": messages,
-            "temperature": 0.2
+            "temperature": 0.2,
+            "max_tokens": int(config.get("llm_helper_context_length", 8192))
         }
 
         on_log(f"[PROMPT HELPER] Sending to {url}/v1/chat/completions", "llama")
@@ -1103,7 +1108,10 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.2}
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": int(config.get("llm_helper_context_length", 8192))
+            }
         }
         on_log(f"[PROMPT HELPER] Sending to {url}/api/chat", "llama")
         try:
@@ -1439,501 +1447,503 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     managed_mcp_proc = None
     managed_judge_mcp_proc = None
     server_metrics_before = None
+    try:
 
-    def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
-        if not prompt_text:
-            return {}
+        def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
+            if not prompt_text:
+                return {}
         
-        nonlocal binary
-        if backend.lower().startswith("openai") or managed_llama_server:
-            base_url   = (config.get("openai_base_url") or "").strip()
-            if not base_url:
-                on_log("[ERROR] No Base URL configured for OpenAI backend.", "llama")
-                return {"exit_code": 1, "stderr": "No Base URL"}
+            nonlocal binary
+            if backend.lower().startswith("openai") or managed_llama_server:
+                base_url   = (config.get("openai_base_url") or "").strip()
+                if not base_url:
+                    on_log("[ERROR] No Base URL configured for OpenAI backend.", "llama")
+                    return {"exit_code": 1, "stderr": "No Base URL"}
             
-            on_log(f"[{label}] {prompt_text[:80]}...", "llama")
-            try:
-                tool_calls, response = _run_llm_agent_loop(
-                    base_url, model_name, prompt_text, tools, tokens,
-                    mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
-                    max_turns=max_iter, deadline=eval_deadline,
-                    history=main_llm_context if preserve_context else None,
+                on_log(f"[{label}] {prompt_text[:80]}...", "llama")
+                try:
+                    tool_calls, response = _run_llm_agent_loop(
+                        base_url, model_name, prompt_text, tools, tokens,
+                        mcp_running, mcp_server_url, env, cancel_ref, lambda m: on_log(m, "llama"),
+                        max_turns=max_iter, deadline=eval_deadline,
+                        history=main_llm_context if preserve_context else None,
+                    )
+                    on_log(f"[RESPONSE] {response[:2000]}", "llama")
+                    telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
+                    telemetry["tool_calls"].extend(tool_calls)
+                    if preserve_context:
+                        main_llm_context.append({"role": "user", "content": prompt_text})
+                        main_llm_context.append({"role": "assistant", "content": response})
+                    return {"stdout": response, "exit_code": 0}
+                except Exception as exc:
+                    on_log(f"[ERROR] HTTP request failed: {exc}", "llama")
+                    return {"stdout": "", "stderr": str(exc), "exit_code": 1}
+                
+            else: # llama-cli
+                if not binary:
+                    on_log("[ERROR] No llama-cli binary path configured.", "llama")
+                    return {"exit_code": 1, "stderr": "No binary path configured"}
+
+                if os.path.basename(binary) in ("llama-server", "llama-server.exe"):
+                    corrected = os.path.join(os.path.dirname(binary), "llama-cli")
+                    on_log(f"[WARN] Auto-correcting llama-server to llama-cli: {corrected}", "llama")
+                    binary = corrected
+
+                model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+                if config.get("execution_target", "local") == "local":
+                    model_path = os.path.abspath(os.path.expanduser(model_path))
+                if not model_path:
+                    on_log("[ERROR] No model selected.", "llama")
+                    return {"exit_code": 1}
+
+                sys_prompt_parts = [
+                    "You are an autonomous AI agent. You MUST call the appropriate tool rather than describing steps.",
+                    "When you need to perform an action, respond ONLY with a tool call in this exact format (no other text):",
+                    '<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>',
+                    "",
+                    "Available tools:",
+                ]
+                for t in tools:
+                    fn = t["function"]
+                    props = fn.get("parameters", {}).get("properties", {})
+                    arg_names = ", ".join(props.keys())
+                    if arg_names:
+                        sys_prompt_parts.append(f'  {fn["name"]}({arg_names}): {fn["description"]}')
+                    else:
+                        sys_prompt_parts.append(f'  {fn["name"]}: {fn["description"]}')
+                tool_sys_prompt = "\n".join(sys_prompt_parts) if tools else ""
+
+                effective_prompt = (
+                    _format_preserved_llama_cli_prompt(main_llm_context, prompt_text)
+                    if preserve_context else prompt_text
                 )
-                on_log(f"[RESPONSE] {response[:2000]}", "llama")
+                safe_prompt = shlex.quote(effective_prompt)
+                sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
+                custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
+                model_path_quoted = f'\"$HOME/\"{shlex.quote(model_path[2:])}' if model_path.startswith("~/") else shlex.quote(model_path)
+            
+                cmd = (
+                    f"{binary}"
+                    f" -m {model_path_quoted}"
+                    f" -c {tokens}"
+                    f"{f' --temp {temperature}' if en_temp else ''}"
+                    f"{f' -ngl {gpu_layers}' if en_gpu_layers else ''}"
+                    f"{f' -t {threads}' if en_threads else ''}"
+                    f"{f' --top-k {top_k}' if en_top_k else ''}"
+                    f"{f' --top-p {top_p}' if en_top_p else ''}"
+                    f"{f' --min-p {min_p}' if en_min_p else ''}"
+                    f"{f' --repeat-penalty {repeat_penalty}' if en_repeat_penalty else ''}"
+                    f"{f' --freq-penalty {freq_penalty}' if en_freq_penalty else ''}"
+                    f"{f' -n {predict}' if en_predict else ' -n 512'}"
+                    f"{f' --seed {seed}' if en_seed else ''}"
+                    f"{f' --rope-freq-base {rope_freq_base}' if en_rope_freq_base else ''}"
+                    f"{f' --rope-freq-scale {rope_freq_scale}' if en_rope_freq_scale else ''}"
+                    f"{' -fa on' if flash_attn else ''}"
+                    f"{sys_flag}"
+                    f"{custom_flag_str}"
+                    f" --prompt {safe_prompt}"
+                    f" --simple-io --no-display-prompt --single-turn"
+                )
+                if _use_sudo:
+                    if _sudo_pw:
+                        cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
+                    else:
+                        cmd = f"sudo {cmd}"
+
+                on_log(f"[{label}] {prompt_text[:80]}...", "llama")
+                res = env.execute(cmd, timeout=timeout)
+            
+                if res.get("stderr"):
+                    on_log(f"[BACKEND] {res['stderr'][:600]}", "shell")
+                if res.get("exit_code", 0) != 0 and not res.get("stdout", "").strip():
+                    on_log(f"[ERROR] llama-cli exited with code {res['exit_code']}", "llama")
+                
+                response = res.get("stdout", "").strip()
+                accumulate_llama_cli_performance(
+                    telemetry["llama_cli_performance"],
+                    parse_llama_cli_performance(res.get("stderr", "")),
+                )
+                on_log(f"[RESPONSE] {response}", "llama")
                 telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
-                telemetry["tool_calls"].extend(tool_calls)
                 if preserve_context:
                     main_llm_context.append({"role": "user", "content": prompt_text})
                     main_llm_context.append({"role": "assistant", "content": response})
-                return {"stdout": response, "exit_code": 0}
-            except Exception as exc:
-                on_log(f"[ERROR] HTTP request failed: {exc}", "llama")
-                return {"stdout": "", "stderr": str(exc), "exit_code": 1}
-                
-        else: # llama-cli
-            if not binary:
-                on_log("[ERROR] No llama-cli binary path configured.", "llama")
-                return {"exit_code": 1, "stderr": "No binary path configured"}
-
-            if os.path.basename(binary) in ("llama-server", "llama-server.exe"):
-                corrected = os.path.join(os.path.dirname(binary), "llama-cli")
-                on_log(f"[WARN] Auto-correcting llama-server to llama-cli: {corrected}", "llama")
-                binary = corrected
-
-            model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
-            if config.get("execution_target", "local") == "local":
-                model_path = os.path.abspath(os.path.expanduser(model_path))
-            if not model_path:
-                on_log("[ERROR] No model selected.", "llama")
-                return {"exit_code": 1}
-
-            sys_prompt_parts = [
-                "You are an autonomous AI agent. You MUST call the appropriate tool rather than describing steps.",
-                "When you need to perform an action, respond ONLY with a tool call in this exact format (no other text):",
-                '<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>',
-                "",
-                "Available tools:",
-            ]
-            for t in tools:
-                fn = t["function"]
-                props = fn.get("parameters", {}).get("properties", {})
-                arg_names = ", ".join(props.keys())
-                if arg_names:
-                    sys_prompt_parts.append(f'  {fn["name"]}({arg_names}): {fn["description"]}')
-                else:
-                    sys_prompt_parts.append(f'  {fn["name"]}: {fn["description"]}')
-            tool_sys_prompt = "\n".join(sys_prompt_parts) if tools else ""
-
-            effective_prompt = (
-                _format_preserved_llama_cli_prompt(main_llm_context, prompt_text)
-                if preserve_context else prompt_text
-            )
-            safe_prompt = shlex.quote(effective_prompt)
-            sys_flag = f" -sys {shlex.quote(tool_sys_prompt)}" if tool_sys_prompt else ""
-            custom_flag_str = f" {custom_flags.strip()}" if custom_flags.strip() else ""
-            model_path_quoted = f'\"$HOME/\"{shlex.quote(model_path[2:])}' if model_path.startswith("~/") else shlex.quote(model_path)
-            
-            cmd = (
-                f"{binary}"
-                f" -m {model_path_quoted}"
-                f" -c {tokens}"
-                f"{f' --temp {temperature}' if en_temp else ''}"
-                f"{f' -ngl {gpu_layers}' if en_gpu_layers else ''}"
-                f"{f' -t {threads}' if en_threads else ''}"
-                f"{f' --top-k {top_k}' if en_top_k else ''}"
-                f"{f' --top-p {top_p}' if en_top_p else ''}"
-                f"{f' --min-p {min_p}' if en_min_p else ''}"
-                f"{f' --repeat-penalty {repeat_penalty}' if en_repeat_penalty else ''}"
-                f"{f' --freq-penalty {freq_penalty}' if en_freq_penalty else ''}"
-                f"{f' -n {predict}' if en_predict else ' -n 512'}"
-                f"{f' --seed {seed}' if en_seed else ''}"
-                f"{f' --rope-freq-base {rope_freq_base}' if en_rope_freq_base else ''}"
-                f"{f' --rope-freq-scale {rope_freq_scale}' if en_rope_freq_scale else ''}"
-                f"{' -fa on' if flash_attn else ''}"
-                f"{sys_flag}"
-                f"{custom_flag_str}"
-                f" --prompt {safe_prompt}"
-                f" --simple-io --no-display-prompt --single-turn"
-            )
-            if _use_sudo:
-                if _sudo_pw:
-                    cmd = f"echo {shlex.quote(_sudo_pw)} | sudo -S bash -c {shlex.quote(cmd)}"
-                else:
-                    cmd = f"sudo {cmd}"
-
-            on_log(f"[{label}] {prompt_text[:80]}...", "llama")
-            res = env.execute(cmd, timeout=timeout)
-            
-            if res.get("stderr"):
-                on_log(f"[BACKEND] {res['stderr'][:600]}", "shell")
-            if res.get("exit_code", 0) != 0 and not res.get("stdout", "").strip():
-                on_log(f"[ERROR] llama-cli exited with code {res['exit_code']}", "llama")
-                
-            response = res.get("stdout", "").strip()
-            accumulate_llama_cli_performance(
-                telemetry["llama_cli_performance"],
-                parse_llama_cli_performance(res.get("stderr", "")),
-            )
-            on_log(f"[RESPONSE] {response}", "llama")
-            telemetry["prompt_responses"].append({"prompt": prompt_text, "response": response})
-            if preserve_context:
-                main_llm_context.append({"role": "user", "content": prompt_text})
-                main_llm_context.append({"role": "assistant", "content": response})
-            telemetry["tool_calls"].append({
-                "tool": "llama-cli",
-                "args": {"prompt": prompt_text},
-                "result": res,
-                "exit_code": res.get("exit_code", -1),
-            })
-            
-            # Execute inline tool calls
-            inline_calls = _parse_inline_tool_calls(response)
-            for tc in inline_calls:
-                fn   = tc.get("function", {})
-                name = fn.get("name", "")
-                try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
-                on_log(f"[TOOL] Executing {name}({args})", "llama")
-                result = _execute_tool(env, name, args, mcp_running, mcp_server_url)
-                on_log(f"[TOOL RESULT] {str(result)[:300]}", "llama")
                 telemetry["tool_calls"].append({
-                    "tool": name,
-                    "args": args,
-                    "result": result,
-                    "exit_code": result.get("exit_code", 0),
-                })
-            return res
-
-    helper_context = []
-
-    def _run_step_list(steps: list, label: str = "RUN") -> bool:
-        for step_idx, step in enumerate(steps):
-            if cancel_ref[0]:
-                on_log("[CANCEL] Cancelled by user", "shell")
-                telemetry["run_aborted"] = True
-                return False
-
-            if isinstance(step, str):
-                cmd_text = step.strip()
-                if not cmd_text:
-                    continue
-                res = _exec_cmd(cmd_text, label=label)
-                telemetry["tool_calls"].append({
-                    "tool":      "bash",
-                    "args":      {"command": cmd_text},
-                    "result":    res,
+                    "tool": "llama-cli",
+                    "args": {"prompt": prompt_text},
+                    "result": res,
                     "exit_code": res.get("exit_code", -1),
                 })
-                continue
+            
+                # Execute inline tool calls
+                inline_calls = _parse_inline_tool_calls(response)
+                for tc in inline_calls:
+                    fn   = tc.get("function", {})
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    on_log(f"[TOOL] Executing {name}({args})", "llama")
+                    result = _execute_tool(env, name, args, mcp_running, mcp_server_url)
+                    on_log(f"[TOOL RESULT] {str(result)[:300]}", "llama")
+                    telemetry["tool_calls"].append({
+                        "tool": name,
+                        "args": args,
+                        "result": result,
+                        "exit_code": result.get("exit_code", 0),
+                    })
+                return res
 
-            delay = float(step.get("delay_seconds", 0))
-            if delay > 0:
-                on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s", "shell")
-                time.sleep(delay)
+        helper_context = []
 
-            for cmd_obj in step.get("commands", []):
+        def _run_step_list(steps: list, label: str = "RUN") -> bool:
+            for step_idx, step in enumerate(steps):
                 if cancel_ref[0]:
                     on_log("[CANCEL] Cancelled by user", "shell")
                     telemetry["run_aborted"] = True
                     return False
-                if not cmd_obj.get("enabled", True):
-                    continue
-                
-                cmd_type = cmd_obj.get("type", "command")
-                if cmd_type == "prompt":
-                    if not config.get("llm_helper_enabled", False):
-                        on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.", "shell")
-                        continue
-                    res = execute_helper_prompt(cmd_obj, config, helper_context, lambda m, src="shell": on_log(m, src))
-                    if res.get("exit_code", -1) != 0:
-                        telemetry["prompt_call_failed"] = True
-                        on_log(f"[ERROR] Prompt step failed — marking execution as failed ({res.get('stderr', 'unknown error')})", "shell")
-                    telemetry["tool_calls"].append({
-                        "tool":      "llm_helper",
-                        "args":      {"prompt": cmd_obj},
-                        "result":    res,
-                        "exit_code": res.get("exit_code", -1),
-                    })
-                else:
-                    cmd_text = cmd_obj.get("command", "").strip()
+
+                if isinstance(step, str):
+                    cmd_text = step.strip()
                     if not cmd_text:
                         continue
-                    t = (3600 if cmd_obj.get("long_running") else int(cmd_obj.get("timeout_seconds", timeout)))
-                    res = _exec_cmd(cmd_text, label=label, timeout_override=t)
+                    res = _exec_cmd(cmd_text, label=label)
                     telemetry["tool_calls"].append({
                         "tool":      "bash",
                         "args":      {"command": cmd_text},
                         "result":    res,
                         "exit_code": res.get("exit_code", -1),
                     })
-        return True
+                    continue
 
-    if _use_sudo:
-        mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
-        on_log(f"[LLAMA-CLI] sudo access enabled — commands will run as root {mode}", "shell")
+                delay = float(step.get("delay_seconds", 0))
+                if delay > 0:
+                    on_log(f"[DELAY] Step {step_idx + 1}: waiting {delay:.1f}s", "shell")
+                    time.sleep(delay)
+
+                for cmd_obj in step.get("commands", []):
+                    if cancel_ref[0]:
+                        on_log("[CANCEL] Cancelled by user", "shell")
+                        telemetry["run_aborted"] = True
+                        return False
+                    if not cmd_obj.get("enabled", True):
+                        continue
+                
+                    cmd_type = cmd_obj.get("type", "command")
+                    if cmd_type == "prompt":
+                        if not config.get("llm_helper_enabled", False):
+                            on_log("[SKIP] Prompt step skipped because LLM Judge is disabled.", "shell")
+                            continue
+                        res = execute_helper_prompt(cmd_obj, config, helper_context, lambda m, src="shell": on_log(m, src))
+                        if res.get("exit_code", -1) != 0:
+                            telemetry["prompt_call_failed"] = True
+                            on_log(f"[ERROR] Prompt step failed — marking execution as failed ({res.get('stderr', 'unknown error')})", "shell")
+                        telemetry["tool_calls"].append({
+                            "tool":      "llm_helper",
+                            "args":      {"prompt": cmd_obj},
+                            "result":    res,
+                            "exit_code": res.get("exit_code", -1),
+                        })
+                    else:
+                        cmd_text = cmd_obj.get("command", "").strip()
+                        if not cmd_text:
+                            continue
+                        t = (3600 if cmd_obj.get("long_running") else int(cmd_obj.get("timeout_seconds", timeout)))
+                        res = _exec_cmd(cmd_text, label=label, timeout_override=t)
+                        telemetry["tool_calls"].append({
+                            "tool":      "bash",
+                            "args":      {"command": cmd_text},
+                            "result":    res,
+                            "exit_code": res.get("exit_code", -1),
+                        })
+            return True
+
+        if _use_sudo:
+            mode = "via sudo bash -c (password provided)" if _sudo_pw else "via sudo (no password — ensure NOPASSWD)"
+            on_log(f"[LLAMA-CLI] sudo access enabled — commands will run as root {mode}", "shell")
         
-        # Preflight check for sudo auth
-        _sudo_check_cmd = f"sudo -k; echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -k; sudo -n -v"
-        _check_res = env.execute(_sudo_check_cmd, timeout=10)
-        if _check_res.get("exit_code", -1) != 0:
-            err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")
-            err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
-            on_log(f"[ERROR] Sudo authentication failed: {err_clean}", "shell")
-            telemetry["run_aborted"] = True
-            telemetry["error"] = f"Sudo authentication failed: {err_clean}"
-            return telemetry
+            # Preflight check for sudo auth
+            _sudo_check_cmd = f"sudo -k; echo {shlex.quote(_sudo_pw)} | sudo -S -v" if _sudo_pw else "sudo -k; sudo -n -v"
+            _check_res = env.execute(_sudo_check_cmd, timeout=10)
+            if _check_res.get("exit_code", -1) != 0:
+                err_msg = _check_res.get("stderr", "") or _check_res.get("stdout", "Unknown error")
+                err_clean = err_msg.replace("sudo: ", "").strip().capitalize()
+                on_log(f"[ERROR] Sudo authentication failed: {err_clean}", "shell")
+                telemetry["run_aborted"] = True
+                telemetry["error"] = f"Sudo authentication failed: {err_clean}"
+                return telemetry
 
-    # If binary_path is a directory, assume the relevant llama.cpp binary lives inside it
-    if binary and os.path.isdir(binary):
-        binary_name = "llama-server" if managed_llama_server else "llama-cli"
-        binary = os.path.join(binary, binary_name)
+        # If binary_path is a directory, assume the relevant llama.cpp binary lives inside it
+        if binary and os.path.isdir(binary):
+            binary_name = "llama-server" if managed_llama_server else "llama-cli"
+            binary = os.path.join(binary, binary_name)
 
-    if managed_llama_server:
-        if not binary:
-            on_log("[ERROR] No llama-server binary path configured.", "llama")
-            telemetry["run_aborted"] = True
-            telemetry["error"] = "No binary path configured."
-            return telemetry
+        if managed_llama_server:
+            if not binary:
+                on_log("[ERROR] No llama-server binary path configured.", "llama")
+                telemetry["run_aborted"] = True
+                telemetry["error"] = "No binary path configured."
+                return telemetry
 
-        if os.path.basename(binary) in ("llama-cli", "llama-cli.exe"):
-            corrected = os.path.join(os.path.dirname(binary), "llama-server")
-            on_log(f"[WARN] Auto-correcting llama-cli to llama-server: {corrected}", "llama")
-            binary = corrected
+            if os.path.basename(binary) in ("llama-cli", "llama-cli.exe"):
+                corrected = os.path.join(os.path.dirname(binary), "llama-server")
+                on_log(f"[WARN] Auto-correcting llama-cli to llama-server: {corrected}", "llama")
+                binary = corrected
 
-        model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
-        exec_target = config.get("execution_target", "local")
-        # SSHEnvironment is the only target this launches the server ON — a
-        # PCTEnvironment's remote host has its own network namespace, so a
-        # port-forward to "the host" wouldn't actually reach the container.
-        use_remote_server = exec_target == "ssh" and isinstance(env, SSHEnvironment)
-        if exec_target == "local":
-            model_path = os.path.abspath(os.path.expanduser(model_path))
-        if not model_path:
-            on_log("[ERROR] No model selected.", "llama")
-            telemetry["run_aborted"] = True
-            telemetry["error"] = "No model selected."
-            return telemetry
+            model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
+            exec_target = config.get("execution_target", "local")
+            # SSHEnvironment is the only target this launches the server ON — a
+            # PCTEnvironment's remote host has its own network namespace, so a
+            # port-forward to "the host" wouldn't actually reach the container.
+            use_remote_server = exec_target == "ssh" and isinstance(env, SSHEnvironment)
+            if exec_target == "local":
+                model_path = os.path.abspath(os.path.expanduser(model_path))
+            if not model_path:
+                on_log("[ERROR] No model selected.", "llama")
+                telemetry["run_aborted"] = True
+                telemetry["error"] = "No model selected."
+                return telemetry
 
-        server_host = (config.get("server_host") or "127.0.0.1").strip()
-        server_port = int(config.get("server_port") or 8080)
-        if not use_remote_server:
-            config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
-            config["llm_url"] = config["openai_base_url"]
-            if exec_target == "pct":
-                on_log(
-                    "[WARN] Managed llama-server does not support launching inside a PCT "
-                    "container; it starts on the ModelScope host instead. Shell commands "
-                    "still use the configured target.",
-                    "llama",
-                )
-        try:
-            if use_remote_server:
-                from core.remote_server import start_remote_managed_llama_server
-                managed_server_proc = start_remote_managed_llama_server(
-                    env,
-                    binary,
-                    model_path,
-                    int(tokens),
-                    server_port,
-                    server_host,
-                    lambda msg: on_log(msg, "llama"),
-                    custom_flags=custom_flags,
-                    advanced_flags=_managed_llama_server_advanced_flags(config),
-                    ready_timeout=float(config.get("server_ready_timeout") or 300),
-                )
-                config["openai_base_url"] = f"http://127.0.0.1:{managed_server_proc.local_port}"
+            server_host = (config.get("server_host") or "127.0.0.1").strip()
+            server_port = int(config.get("server_port") or 8080)
+            if not use_remote_server:
+                config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
                 config["llm_url"] = config["openai_base_url"]
-            else:
-                managed_server_proc = _start_managed_llama_server(
-                    binary,
-                    model_path,
-                    int(tokens),
-                    server_port,
-                    server_host,
-                    lambda msg: on_log(msg, "llama"),
-                    custom_flags=custom_flags,
-                    advanced_flags=_managed_llama_server_advanced_flags(config),
-                    ready_timeout=float(config.get("server_ready_timeout") or 300),
-                )
-        except Exception as exc:
-            on_log(f"[ERROR] Failed to start managed llama-server: {exc}", "llama")
-            telemetry["run_aborted"] = True
-            telemetry["error"] = str(exc)
-            return telemetry
-
-        server_metrics_before = fetch_llama_server_metrics(
-            config["openai_base_url"],
-            verify_ssl=effective_verify_ssl(
-                config["openai_base_url"], config.get("openai_verify_ssl", True)
-            ),
-        )
-        if server_metrics_before.get("available"):
-            on_log("[METRICS] llama-server Prometheus endpoint connected", "llama")
-        else:
-            on_log(
-                f"[METRICS] llama-server metrics unavailable: {server_metrics_before.get('error', 'unknown error')}",
-                "llama",
-            )
-
-    mcp_servers    = config.get("mcp_servers", [])
-    selected_mcp_tools = enabled_builtin_tool_names(mcp_servers)
-    mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
-    tools          = []
-    mcp_running    = False
-
-    # The agent loop remains on the ModelScope host, but the MCP process and
-    # its tool handlers must run alongside an SSH target.  A loopback-only
-    # remote broker plus SSH tunnel gives the loop a local URL without exposing
-    # the tool service on the lab network.
-    mcp_requested = bool(mcp_servers) and config.get("mcp_enabled", bool(mcp_servers))
-    if mcp_requested and config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
-        try:
-            from core.remote_server import start_remote_managed_mcp_server
-            managed_mcp_proc = start_remote_managed_mcp_server(
-                env, lambda msg: on_log(msg, "shell"), tool_names=selected_mcp_tools,
-                manifest_path=config.get("mcp_config_path"),
-            )
-            mcp_server_url = f"http://127.0.0.1:{managed_mcp_proc.local_port}"
-            config["mcp_server_url"] = mcp_server_url
-        except Exception as exc:
-            on_log(f"[ERROR] Failed to start remote MCP server: {exc}", "shell")
-            telemetry["run_aborted"] = True
-            telemetry["error"] = str(exc)
-            if managed_server_proc is not None:
-                managed_server_proc.terminate()
-                try:
-                    managed_server_proc.wait(timeout=5)
-                except Exception:
-                    managed_server_proc.kill()
-            return telemetry
-    elif mcp_requested and config.get("execution_target") == "pct":
-        on_log(
-            "[WARN] Remote MCP deployment currently supports direct SSH targets; "
-            "PCT runs will use the configured local MCP endpoint or built-in fallback tools.",
-            "shell",
-        )
-
-    judge_selected_tools = [
-        item for item in config.get("llm_helper_mcp_tools", [])
-        if isinstance(item, dict) and item.get("enabled") and item.get("tool_name")
-    ]
-    if config.get("llm_helper_mcp_enabled") and judge_selected_tools:
-        config["_judge_env"] = env
-        if config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
+                if exec_target == "pct":
+                    on_log(
+                        "[WARN] Managed llama-server does not support launching inside a PCT "
+                        "container; it starts on the ModelScope host instead. Shell commands "
+                        "still use the configured target.",
+                        "llama",
+                    )
             try:
-                from core.remote_server import start_remote_managed_mcp_server
-                managed_judge_mcp_proc = start_remote_managed_mcp_server(
-                    env, lambda msg: on_log(f"[JUDGE] {msg}", "shell"),
-                    tool_names=[item["tool_name"] for item in judge_selected_tools],
-                    manifest_path=config.get("llm_helper_mcp_config_path"),
-                )
-                config["_judge_mcp_url"] = f"http://127.0.0.1:{managed_judge_mcp_proc.local_port}"
+                if use_remote_server:
+                    from core.remote_server import start_remote_managed_llama_server
+                    managed_server_proc = start_remote_managed_llama_server(
+                        env,
+                        binary,
+                        model_path,
+                        int(tokens),
+                        server_port,
+                        server_host,
+                        lambda msg: on_log(msg, "llama"),
+                        custom_flags=custom_flags,
+                        advanced_flags=_managed_llama_server_advanced_flags(config),
+                        ready_timeout=float(config.get("server_ready_timeout") or 300),
+                    )
+                    config["openai_base_url"] = f"http://127.0.0.1:{managed_server_proc.local_port}"
+                    config["llm_url"] = config["openai_base_url"]
+                else:
+                    managed_server_proc = _start_managed_llama_server(
+                        binary,
+                        model_path,
+                        int(tokens),
+                        server_port,
+                        server_host,
+                        lambda msg: on_log(msg, "llama"),
+                        custom_flags=custom_flags,
+                        advanced_flags=_managed_llama_server_advanced_flags(config),
+                        ready_timeout=float(config.get("server_ready_timeout") or 300),
+                    )
             except Exception as exc:
-                on_log(f"[ERROR] Failed to start judge MCP server: {exc}", "shell")
+                on_log(f"[ERROR] Failed to start managed llama-server: {exc}", "llama")
                 telemetry["run_aborted"] = True
                 telemetry["error"] = str(exc)
                 return telemetry
 
-    # Load tool schemas for all backends
-    if mcp_servers:
-        try:
-            # Manifest-backed records carry the schema discovered from either
-            # our bundled broker or a Claude Desktop-compatible stdio server.
-            # Legacy server-only records retain the tools.json fallback.
-            manifest_tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": server["tool_name"],
-                        "description": server.get("description", ""),
-                        "parameters": server.get("inputSchema", {"type": "object", "properties": {}}),
-                    },
-                }
-                for server in mcp_servers
-                if isinstance(server, dict) and server.get("tool_name")
-            ]
-            tools = manifest_tools or _load_tool_schemas(
-                "./mcp-server/index.js", on_log=lambda m: on_log(m, "shell"),
+            server_metrics_before = fetch_llama_server_metrics(
+                config["openai_base_url"],
+                verify_ssl=effective_verify_ssl(
+                    config["openai_base_url"], config.get("openai_verify_ssl", True)
+                ),
             )
-            allowed_tool_names = bundled_tool_names(selected_mcp_tools)
-            if allowed_tool_names is not None and not manifest_tools:
-                tools = [tool for tool in tools if tool.get("function", {}).get("name") in allowed_tool_names]
-            if tools:
-                names = [t["function"]["name"] for t in tools]
-                on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}", "shell")
-        except Exception as exc:
-            on_log(f"[WARN] Could not load tool schemas: {exc}", "shell")
+            if server_metrics_before.get("available"):
+                on_log("[METRICS] llama-server Prometheus endpoint connected", "llama")
+            else:
+                on_log(
+                    f"[METRICS] llama-server metrics unavailable: {server_metrics_before.get('error', 'unknown error')}",
+                    "llama",
+                )
 
-    # Probe for MCP broker using the session handshake — not a dummy tool call.
-    # call_mcp_tool("dummy", {}) always returns {"error": ...} (unknown tool),
-    # so the old probe could never set mcp_running = True. probe_mcp_server()
-    # only checks whether the JSON-RPC initialize exchange succeeds.
-    # Ensure MCP servers are running before executing steps that might contain prompts
-    if tools:
-        if probe_mcp_server(mcp_server_url):
-            mcp_running = True
-            on_log(f"[MCP] Broker detected at {mcp_server_url}", "shell")
-        else:
-            on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
+        mcp_servers    = config.get("mcp_servers", [])
+        selected_mcp_tools = enabled_builtin_tool_names(mcp_servers)
+        mcp_server_url = config.get("mcp_server_url", "http://127.0.0.1:9191")
+        tools          = []
+        mcp_running    = False
 
-    if not cancel_ref[0]:
-        _run_step_list(startup, label="STARTUP")
-
-    # Validation — runs even if the run was cancelled/timed-out
-    if val_sets:
-        if telemetry["run_aborted"]:
-            on_log("[WARN] Run was cancelled or timed out — validation still proceeding")
-        config["execute_prompt_callback"] = _exec_llama_prompt
-        all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref, config, [])
-        telemetry["validation_passed"] = all_passed
-        telemetry["validation_sets_results"] = set_results
-        telemetry["validation_stdout"] = "\n".join(
-            cmd_res.get("stdout", "") for vset in set_results for cmd_res in vset.get("steps", [])
-        )
-        telemetry["validation_stderr"] = "\n".join(
-            cmd_res.get("stderr", "") for vset in set_results for cmd_res in vset.get("steps", [])
-        )
-        if set_results:
-            last_set = set_results[-1]
-            if last_set.get("steps"):
-                telemetry["validation_exit_code"] = last_set["steps"][-1].get("exit_code")
-
-    if not cancel_ref[0]:
-        _run_step_list(completion, label="CLEANUP")
-
-    # A failed/unreachable LLM Judge prompt call in Startup or Completion is not
-    # itself a validation command, so _run_validation_sets never sees it — but it
-    # still means the run didn't do what it was supposed to, so it must fail the
-    # run rather than being silently swallowed into a tool_call log entry.
-    if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
-        telemetry["validation_passed"] = False
-
-    if managed_judge_mcp_proc is not None:
-        on_log("[JUDGE] Stopping remote judge MCP broker", "shell")
-        managed_judge_mcp_proc.terminate()
-        try:
-            managed_judge_mcp_proc.wait(timeout=5)
-        except Exception:
-            managed_judge_mcp_proc.kill()
-
-    if managed_mcp_proc is not None:
-        on_log("[MCP] Stopping remote MCP broker", "shell")
-        managed_mcp_proc.terminate()
-        try:
-            managed_mcp_proc.wait(timeout=5)
-        except Exception:
-            managed_mcp_proc.kill()
-
-    if managed_server_proc is not None:
-        server_metrics_after = fetch_llama_server_metrics(
-            config["openai_base_url"],
-            verify_ssl=effective_verify_ssl(
-                config["openai_base_url"], config.get("openai_verify_ssl", True)
-            ),
-        )
-        telemetry["llama_server_metrics"] = llama_server_metrics_delta(
-            server_metrics_before, server_metrics_after,
-        )
-        telemetry["llama_server_metric_snapshots"] = {
-            "before": server_metrics_before,
-            "after": server_metrics_after,
-        }
-        if telemetry["llama_server_metrics"].get("available"):
-            metrics = telemetry["llama_server_metrics"]
+        # The agent loop remains on the ModelScope host, but the MCP process and
+        # its tool handlers must run alongside an SSH target.  A loopback-only
+        # remote broker plus SSH tunnel gives the loop a local URL without exposing
+        # the tool service on the lab network.
+        mcp_requested = bool(mcp_servers) and config.get("mcp_enabled", bool(mcp_servers))
+        if mcp_requested and config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
+            try:
+                from core.remote_server import start_remote_managed_mcp_server
+                managed_mcp_proc = start_remote_managed_mcp_server(
+                    env, lambda msg: on_log(msg, "shell"), tool_names=selected_mcp_tools,
+                    manifest_path=config.get("mcp_config_path"),
+                )
+                mcp_server_url = f"http://127.0.0.1:{managed_mcp_proc.local_port}"
+                config["mcp_server_url"] = mcp_server_url
+            except Exception as exc:
+                on_log(f"[ERROR] Failed to start remote MCP server: {exc}", "shell")
+                telemetry["run_aborted"] = True
+                telemetry["error"] = str(exc)
+                if managed_server_proc is not None:
+                    managed_server_proc.terminate()
+                    try:
+                        managed_server_proc.wait(timeout=5)
+                    except Exception:
+                        managed_server_proc.kill()
+                return telemetry
+        elif mcp_requested and config.get("execution_target") == "pct":
             on_log(
-                "[METRICS] server run delta: "
-                f"{metrics.get('prompt_tokens', 0):g} prompt + "
-                f"{metrics.get('completion_tokens', 0):g} generated tokens",
-                "llama",
+                "[WARN] Remote MCP deployment currently supports direct SSH targets; "
+                "PCT runs will use the configured local MCP endpoint or built-in fallback tools.",
+                "shell",
             )
-        on_log("[SERVER] Stopping managed llama-server", "llama")
-        managed_server_proc.terminate()
-        try:
-            managed_server_proc.wait(timeout=5)
-        except Exception:
-            managed_server_proc.kill()
+
+        judge_selected_tools = [
+            item for item in config.get("llm_helper_mcp_tools", [])
+            if isinstance(item, dict) and item.get("enabled") and item.get("tool_name")
+        ]
+        if config.get("llm_helper_mcp_enabled") and judge_selected_tools:
+            config["_judge_env"] = env
+            if config.get("execution_target") == "ssh" and isinstance(env, SSHEnvironment):
+                try:
+                    from core.remote_server import start_remote_managed_mcp_server
+                    managed_judge_mcp_proc = start_remote_managed_mcp_server(
+                        env, lambda msg: on_log(f"[JUDGE] {msg}", "shell"),
+                        tool_names=[item["tool_name"] for item in judge_selected_tools],
+                        manifest_path=config.get("llm_helper_mcp_config_path"),
+                    )
+                    config["_judge_mcp_url"] = f"http://127.0.0.1:{managed_judge_mcp_proc.local_port}"
+                except Exception as exc:
+                    on_log(f"[ERROR] Failed to start judge MCP server: {exc}", "shell")
+                    telemetry["run_aborted"] = True
+                    telemetry["error"] = str(exc)
+                    return telemetry
+
+        # Load tool schemas for all backends
+        if mcp_servers:
+            try:
+                # Manifest-backed records carry the schema discovered from either
+                # our bundled broker or a Claude Desktop-compatible stdio server.
+                # Legacy server-only records retain the tools.json fallback.
+                manifest_tools = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": server["tool_name"],
+                            "description": server.get("description", ""),
+                            "parameters": server.get("inputSchema", {"type": "object", "properties": {}}),
+                        },
+                    }
+                    for server in mcp_servers
+                    if isinstance(server, dict) and server.get("tool_name")
+                ]
+                tools = manifest_tools or _load_tool_schemas(
+                    "./mcp-server/index.js", on_log=lambda m: on_log(m, "shell"),
+                )
+                allowed_tool_names = bundled_tool_names(selected_mcp_tools)
+                if allowed_tool_names is not None and not manifest_tools:
+                    tools = [tool for tool in tools if tool.get("function", {}).get("name") in allowed_tool_names]
+                if tools:
+                    names = [t["function"]["name"] for t in tools]
+                    on_log(f"[TOOLS] Loaded {len(tools)}: {', '.join(names[:5])}", "shell")
+            except Exception as exc:
+                on_log(f"[WARN] Could not load tool schemas: {exc}", "shell")
+
+        # Probe for MCP broker using the session handshake — not a dummy tool call.
+        # call_mcp_tool("dummy", {}) always returns {"error": ...} (unknown tool),
+        # so the old probe could never set mcp_running = True. probe_mcp_server()
+        # only checks whether the JSON-RPC initialize exchange succeeds.
+        # Ensure MCP servers are running before executing steps that might contain prompts
+        if tools:
+            if probe_mcp_server(mcp_server_url):
+                mcp_running = True
+                on_log(f"[MCP] Broker detected at {mcp_server_url}", "shell")
+            else:
+                on_log(f"[WARN] MCP broker not responding at {mcp_server_url} — tool calls will use local fallbacks", "shell")
+
+        if not cancel_ref[0]:
+            _run_step_list(startup, label="STARTUP")
+
+        # Validation — runs even if the run was cancelled/timed-out
+        if val_sets:
+            if telemetry["run_aborted"]:
+                on_log("[WARN] Run was cancelled or timed out — validation still proceeding")
+            config["execute_prompt_callback"] = _exec_llama_prompt
+            all_passed, set_results = _run_validation_sets(env, val_sets, on_log, cancel_ref, config, [])
+            telemetry["validation_passed"] = all_passed
+            telemetry["validation_sets_results"] = set_results
+            telemetry["validation_stdout"] = "\n".join(
+                cmd_res.get("stdout", "") for vset in set_results for cmd_res in vset.get("steps", [])
+            )
+            telemetry["validation_stderr"] = "\n".join(
+                cmd_res.get("stderr", "") for vset in set_results for cmd_res in vset.get("steps", [])
+            )
+            if set_results:
+                last_set = set_results[-1]
+                if last_set.get("steps"):
+                    telemetry["validation_exit_code"] = last_set["steps"][-1].get("exit_code")
+
+        if not cancel_ref[0]:
+            _run_step_list(completion, label="CLEANUP")
+
+        # A failed/unreachable LLM Judge prompt call in Startup or Completion is not
+        # itself a validation command, so _run_validation_sets never sees it — but it
+        # still means the run didn't do what it was supposed to, so it must fail the
+        # run rather than being silently swallowed into a tool_call log entry.
+        if telemetry["prompt_call_failed"] and telemetry["validation_passed"] is not False:
+            telemetry["validation_passed"] = False
+
+    finally:
+        if managed_judge_mcp_proc is not None:
+            on_log("[JUDGE] Stopping remote judge MCP broker", "shell")
+            managed_judge_mcp_proc.terminate()
+            try:
+                managed_judge_mcp_proc.wait(timeout=5)
+            except Exception:
+                managed_judge_mcp_proc.kill()
+
+        if managed_mcp_proc is not None:
+            on_log("[MCP] Stopping remote MCP broker", "shell")
+            managed_mcp_proc.terminate()
+            try:
+                managed_mcp_proc.wait(timeout=5)
+            except Exception:
+                managed_mcp_proc.kill()
+
+        if managed_server_proc is not None:
+            server_metrics_after = fetch_llama_server_metrics(
+                config["openai_base_url"],
+                verify_ssl=effective_verify_ssl(
+                    config["openai_base_url"], config.get("openai_verify_ssl", True)
+                ),
+            )
+            telemetry["llama_server_metrics"] = llama_server_metrics_delta(
+                server_metrics_before, server_metrics_after,
+            )
+            telemetry["llama_server_metric_snapshots"] = {
+                "before": server_metrics_before,
+                "after": server_metrics_after,
+            }
+            if telemetry["llama_server_metrics"].get("available"):
+                metrics = telemetry["llama_server_metrics"]
+                on_log(
+                    "[METRICS] server run delta: "
+                    f"{metrics.get('prompt_tokens', 0):g} prompt + "
+                    f"{metrics.get('completion_tokens', 0):g} generated tokens",
+                    "llama",
+                )
+            on_log("[SERVER] Stopping managed llama-server", "llama")
+            managed_server_proc.terminate()
+            try:
+                managed_server_proc.wait(timeout=5)
+            except Exception:
+                managed_server_proc.kill()
 
     telemetry["total_latency"] = round(time.time() - start_t, 3)
     on_log(f"[COMPLETE] {telemetry['total_latency']}s elapsed")

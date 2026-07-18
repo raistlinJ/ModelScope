@@ -53,7 +53,7 @@ _DEFAULTS: dict = {
     "target_ssh_user":     "root",
     "target_ssh_password": "",
     "target_ssh_key_path": "",
-    "target_ssh_caf_dir":  "~/cyber-agent-flow",
+    "target_ssh_caf_dir":  "~/modelscope",
 
     # llama-server management
     "llama_server_bin":      LLAMA_SERVER_BIN,

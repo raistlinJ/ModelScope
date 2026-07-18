@@ -232,7 +232,7 @@ class TestBuildConfig:
 
 class TestMakeEnv:
     def _args(self, ssh_host=None, ssh_port=22, ssh_user="root",
-               ssh_password=None, ssh_key_path=None, ssh_caf_dir="~/cyber-agent-flow"):
+               ssh_password=None, ssh_key_path=None, ssh_caf_dir="~/modelscope"):
         return argparse.Namespace(
             ssh_host=ssh_host,
             ssh_port=ssh_port,

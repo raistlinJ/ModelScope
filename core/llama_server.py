@@ -11,6 +11,7 @@ import tempfile
 import time
 import requests
 import streamlit as st
+import json
 from urllib.parse import urlsplit
 from config.defaults import LLAMA_SERVER_BIN, LLAMA_CPP_DEFAULT_URL
 from core.utils import ensure_http_scheme, effective_verify_ssl
@@ -43,7 +44,7 @@ def port_open(url: str, timeout: float = 1.5) -> bool:
         return False
 
 
-def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, env=None) -> dict | None:
+def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, env=None, return_logs: bool = False) -> dict | None | tuple[dict | None, list[str]]:
     """
     Return {n_ctx, model_path} from a running OpenAI-compatible server, or None.
 
@@ -51,7 +52,8 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, e
     only the OpenAI-compatible /v1/models endpoint, so fall back to that before
     reporting the server as unreachable.
     """
-    base = ensure_http_scheme(url).rstrip("/")
+    from core.models import normalize_openai_base_url
+    base = normalize_openai_base_url(url)
     if not base:
         return None
     verify = effective_verify_ssl(base, verify_ssl)
@@ -62,51 +64,81 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, e
         except (TypeError, ValueError):
             return None
 
+    logs = []
+    
     if env and getattr(env, "is_remote_caf", False) or (env and env.__class__.__name__ in ("SSHEnvironment", "PCTEnvironment")):
         k_flag = "" if verify_ssl else "-k "
-        res = env.execute(f"curl -s {k_flag}--max-time 2 {base}/props")
+        cmd1 = f"curl -s {k_flag}--max-time 8 {base}/props"
+        logs.append(f"Running command: {cmd1}")
+        res = env.execute(cmd1)
+        logs.append(f"Exit code: {res['exit_code']}")
+        logs.append(f"Stdout: {res['stdout'][:200]}...")
+        if res['stderr']:
+            logs.append(f"Stderr: {res['stderr']}")
+            
         if res["exit_code"] == 0:
             try:
                 data = json.loads(res["stdout"])
                 dp = data.get("default_generation_settings", {})
-                return {
-                    "n_ctx":      _coerce_int(dp.get("n_ctx")),
-                    "model_path": data.get("system_info", {}).get("model_path", ""),
+                result = {
+                    "n_ctx":      _coerce_int(dp.get("n_ctx")) or _coerce_int(data.get("total_vram")),
+                    "model_path": data.get("system_info", {}).get("model_path", "") or data.get("model_path", ""),
                 }
-            except Exception:
-                pass
+                if result["model_path"]:
+                    return (result, logs) if return_logs else result
+            except Exception as e:
+                logs.append(f"JSON Parse Error for /props: {e}")
         
         # Fall back to /v1/models via curl
-        res = env.execute(f"curl -s {k_flag}--max-time 2 {base}/v1/models")
+        cmd2 = f"curl -s {k_flag}--max-time 8 {base}/v1/models"
+        logs.append(f"Running command: {cmd2}")
+        res = env.execute(cmd2)
+        logs.append(f"Exit code: {res['exit_code']}")
+        logs.append(f"Stdout: {res['stdout'][:200]}...")
+        if res['stderr']:
+            logs.append(f"Stderr: {res['stderr']}")
+            
         if res["exit_code"] == 0:
             try:
                 data = json.loads(res["stdout"])
                 raw_list = data.get("data") or data.get("models") or []
                 if raw_list and isinstance(raw_list[0], dict):
                     m = raw_list[0]
-                    name = m.get("id") or m.get("name") or ""
-                    n_ctx = m.get("meta", {}).get("n_ctx") or 0
-                    return {"n_ctx": _coerce_int(n_ctx), "model_path": name}
-            except Exception:
-                pass
-        return None
+                    name = m.get("id") or m.get("name") or m.get("model") or ""
+                    n_ctx = m.get("meta", {}).get("n_ctx") or m.get("meta", {}).get("context_length") or m.get("n_ctx") or m.get("context_length") or m.get("max_model_len") or 0
+                    if "result" in locals() and isinstance(locals().get("result"), dict):
+                        result["model_path"] = result.get("model_path") or name
+                        result["n_ctx"] = result.get("n_ctx") or _coerce_int(n_ctx)
+                    else:
+                        result = {"n_ctx": _coerce_int(n_ctx), "model_path": name}
+                    return (result, logs) if return_logs else result
+            except Exception as e:
+                logs.append(f"JSON Parse Error for /v1/models: {e}")
+                
+        return (None, logs) if return_logs else None
 
     try:
-        r = requests.get(base + "/props", timeout=3, verify=verify)
+        logs.append(f"GET {base}/props")
+        r = requests.get(base + "/props", timeout=8, verify=verify)
+        logs.append(f"Response status: {r.status_code}")
         if r.ok:
             d = r.json()
-            return {
-                "n_ctx":      _coerce_int(d.get("default_generation_settings", {}).get("n_ctx")),
-                "model_path": d.get("model_path", ""),
+            result = {
+                "n_ctx":      _coerce_int(d.get("default_generation_settings", {}).get("n_ctx")) or _coerce_int(d.get("total_vram")),
+                "model_path": d.get("system_info", {}).get("model_path", "") or d.get("model_path", ""),
                 "source":     "props",
             }
-    except Exception:
-        pass
+            if result["model_path"]:
+                return (result, logs) if return_logs else result
+    except Exception as e:
+        logs.append(f"Error fetching /props: {e}")
 
     try:
-        r = requests.get(base + "/v1/models", timeout=3, verify=verify)
+        logs.append(f"GET {base}/v1/models")
+        r = requests.get(base + "/v1/models", timeout=8, verify=verify)
+        logs.append(f"Response status: {r.status_code}")
         if not r.ok:
-            return None
+            return (None, logs) if return_logs else None
         d = r.json()
         raw_models = d.get("data") or d.get("models") or []
         model_path = ""
@@ -114,9 +146,9 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, e
         for model in raw_models:
             if not isinstance(model, dict):
                 continue
-            model_path = model.get("id") or model.get("name") or ""
+            model_path = model.get("id") or model.get("name") or model.get("model") or ""
             meta = model.get("meta") or {}
-            n_ctx = (
+            n_ctx_val = (
                 _coerce_int(meta.get("n_ctx"))
                 or _coerce_int(meta.get("context_length"))
                 or _coerce_int(model.get("n_ctx"))
@@ -124,14 +156,22 @@ def get_server_info(url: str = LLAMA_CPP_DEFAULT_URL, verify_ssl: bool = True, e
                 or _coerce_int(model.get("max_model_len"))
             )
             if model_path:
+                n_ctx = n_ctx_val
                 break
-        return {
-            "n_ctx":      n_ctx,
-            "model_path": model_path,
-            "source":     "v1/models",
-        }
-    except Exception:
-        return None
+        
+        if "result" in locals() and isinstance(locals().get("result"), dict):
+            result["model_path"] = result.get("model_path") or model_path
+            result["n_ctx"] = result.get("n_ctx") or n_ctx
+        else:
+            result = {
+                "n_ctx":      n_ctx,
+                "model_path": model_path,
+                "source":     "v1/models",
+            }
+        return (result, logs) if return_logs else result
+    except Exception as e:
+        logs.append(f"Error fetching /v1/models: {e}")
+        return (None, logs) if return_logs else None
 
 
 def get_n_ctx(url: str = LLAMA_CPP_DEFAULT_URL) -> int | None:

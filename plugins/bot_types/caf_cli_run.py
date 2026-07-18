@@ -64,7 +64,7 @@ CAF_CLI_RUN_SESSION_DEFAULTS = {
     "caf_cli_ssh_port": 22,
     "caf_cli_ssh_user": "root",
     "caf_cli_ssh_password": "",
-    "caf_cli_directory": "~/cyber-agent-flow",
+    "caf_cli_directory": "~/modelscope",
     "caf_cli_command": "./start_cli.sh",
     "caf_cli_provider": "ollama_direct",
     "caf_cli_url": "http://localhost:11434",
@@ -157,7 +157,9 @@ def _run_command(config: dict[str, Any]) -> str:
     # the Execute log can receive progress before the one-shot run exits.
     command = f"PYTHONUNBUFFERED=1 {launcher} run{continue_flag} {_caf_flags(config)} -- {shlex.quote(objective)}"
     if config.get("execution_target") == "local":
-        directory = os.path.expanduser(str(config.get("caf_cli_directory") or "~/cyber-agent-flow"))
+        _proj_id = config.get("id")
+        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
+        directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
         command = f"cd {shlex.quote(directory)} && {command}"
     return command
 
@@ -190,7 +192,8 @@ def _environment_for_config(config: dict[str, Any]):
         port=int(config.get("ssh_port") or 22),
         username=config.get("ssh_user", "root"),
         password=config.get("ssh_password") or None,
-        remote_cwd=config.get("caf_cli_directory", "~/cyber-agent-flow"),
+        remote_cwd=config.get("caf_cli_directory") or None,
+        project_id=config.get("id"),
     )
 
 
@@ -247,7 +250,9 @@ def test_caf_cli(config: dict[str, Any]) -> tuple[bool, str]:
         launcher = shlex.join(shlex.split(str(config.get("caf_cli_command") or "./start_cli.sh")))
     except ValueError as exc:
         return False, f"Invalid CAF CLI command: {exc}"
-    directory = os.path.expanduser(str(config.get("caf_cli_directory") or "~/cyber-agent-flow"))
+    _proj_id = config.get("id")
+    _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
+    directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
     is_ssh = config.get("execution_target") == "ssh"
     if not is_ssh and not os.path.isdir(directory):
         return False, f"CAF directory not found on this machine: {directory}"
@@ -286,7 +291,9 @@ def _tools_config_path(config: dict[str, Any]) -> str:
 def _read_tools_command(config: dict[str, Any]) -> str:
     path = _tools_config_path(config)
     if config.get("execution_target") == "local":
-        directory = os.path.expanduser(str(config.get("caf_cli_directory") or "~/cyber-agent-flow"))
+        _proj_id = config.get("id")
+        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
+        directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
         return f"cd {shlex.quote(directory)} && cat {shlex.quote(path)}"
     if path.startswith("~/"):
         return f'cat "$HOME/{path[2:]}"'
@@ -332,7 +339,9 @@ def _prepare_selected_tools(env: Any, config: dict[str, Any]) -> dict[str, Any]:
 def _transcript(env: Any, config: dict[str, Any], run_id: str, on_log: Callable[[str], None]) -> tuple[str, dict]:
     root = pathlib.Path("runs")
     if config.get("execution_target") == "local":
-        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or "~/cyber-agent-flow"))) / "runs"
+        _proj_id = config.get("id")
+        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
+        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))) / "runs"
     try:
         transcript = env.read_file(str(root / run_id / "transcript.md"))
         metadata = json.loads(env.read_file(str(root / run_id / "metadata.json")))
@@ -364,64 +373,72 @@ def _execute_caf_run_live(
             command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,
         )
-
-        def read_stream(name: str, stream: Any) -> None:
-            try:
-                # Bypass BufferedReader.read(), which waits to fill its buffer
-                # and would otherwise hold small CLI updates until the run exits.
-                while data := os.read(stream.fileno(), 4096):
-                    chunks.put((name, data))
-            finally:
-                chunks.put((name, None))
-
-        readers = [
-            threading.Thread(target=read_stream, args=("stdout", process.stdout), daemon=True),
-            threading.Thread(target=read_stream, args=("stderr", process.stderr), daemon=True),
-        ]
-        for reader in readers:
-            reader.start()
-
-        stdout, stderr, closed_streams = [], [], 0
-        deadline = time.monotonic() + timeout
-        cancelled = False
-        timed_out = False
-        while closed_streams < 2:
-            if cancel_ref and cancel_ref[0] and process.poll() is None:
-                cancelled = True
-                try:
-                    os.killpg(process.pid, 15)
-                except OSError:
-                    process.terminate()
-            if time.monotonic() >= deadline and process.poll() is None:
-                cancelled = True
-                timed_out = True
-                try:
-                    os.killpg(process.pid, 15)
-                except OSError:
-                    process.terminate()
-            try:
-                name, data = chunks.get(timeout=0.1)
-            except queue.Empty:
-                if process.poll() is not None and not any(reader.is_alive() for reader in readers):
-                    break
-                continue
-            if data is None:
-                closed_streams += 1
-                continue
-            text = data.decode("utf-8", errors="replace")
-            (stdout if name == "stdout" else stderr).append(text)
-            on_chunk(text)
-
         try:
-            exit_code = process.wait(timeout=2) if process.poll() is None else process.returncode
-        except subprocess.TimeoutExpired:
-            process.kill()
-            exit_code = -1
-        if cancelled and exit_code == 0:
-            exit_code = -1
-        if timed_out:
-            stderr.append("Timed out")
-        return {"stdout": "".join(stdout), "stderr": "".join(stderr), "exit_code": exit_code}
+
+            def read_stream(name: str, stream: Any) -> None:
+                try:
+                    # Bypass BufferedReader.read(), which waits to fill its buffer
+                    # and would otherwise hold small CLI updates until the run exits.
+                    while data := os.read(stream.fileno(), 4096):
+                        chunks.put((name, data))
+                finally:
+                    chunks.put((name, None))
+
+            readers = [
+                threading.Thread(target=read_stream, args=("stdout", process.stdout), daemon=True),
+                threading.Thread(target=read_stream, args=("stderr", process.stderr), daemon=True),
+            ]
+            for reader in readers:
+                reader.start()
+
+            stdout, stderr, closed_streams = [], [], 0
+            deadline = time.monotonic() + timeout
+            cancelled = False
+            timed_out = False
+            while closed_streams < 2:
+                if cancel_ref and cancel_ref[0] and process.poll() is None:
+                    cancelled = True
+                    try:
+                        os.killpg(process.pid, 15)
+                    except OSError:
+                        process.terminate()
+                if time.monotonic() >= deadline and process.poll() is None:
+                    cancelled = True
+                    timed_out = True
+                    try:
+                        os.killpg(process.pid, 15)
+                    except OSError:
+                        process.terminate()
+                try:
+                    name, data = chunks.get(timeout=0.1)
+                except queue.Empty:
+                    if process.poll() is not None and not any(reader.is_alive() for reader in readers):
+                        break
+                    continue
+                if data is None:
+                    closed_streams += 1
+                    continue
+                text = data.decode("utf-8", errors="replace")
+                (stdout if name == "stdout" else stderr).append(text)
+                on_chunk(text)
+
+            try:
+                exit_code = process.wait(timeout=2) if process.poll() is None else process.returncode
+            except subprocess.TimeoutExpired:
+                process.kill()
+                exit_code = -1
+            if cancelled and exit_code == 0:
+                exit_code = -1
+            if timed_out:
+                stderr.append("Timed out")
+            return {"stdout": "".join(stdout), "stderr": "".join(stderr), "exit_code": exit_code}
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except Exception:
+                    process.kill()
 
     if isinstance(env, SSHEnvironment):
         try:
@@ -774,7 +791,7 @@ class CafCliRunPlugin(BotTypePlugin):
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {
             "execution_target": "local", "ssh_host": "", "ssh_port": 22, "ssh_user": "root", "ssh_password": "",
-            "caf_cli_directory": "~/cyber-agent-flow", "caf_cli_command": "./start_cli.sh",
+            "caf_cli_directory": "~/modelscope", "caf_cli_command": "./start_cli.sh",
             "caf_cli_provider": "ollama_direct", "caf_cli_url": "http://localhost:11434", "selected_model": "",
             "caf_cli_api_key": "", "caf_cli_verify_ssl": True,
             "caf_cli_tool_catalog": [], "caf_cli_enabled_tools": [],

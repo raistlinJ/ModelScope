@@ -81,6 +81,7 @@ class LLMJudge:
         ollama_url: str = "",
         temperature: float = 0.0,
         max_tokens: int = 4096,
+        context_length: int = 8192,
     ):
         if backend not in self.SUPPORTED_BACKENDS:
             raise ValueError(
@@ -94,6 +95,7 @@ class LLMJudge:
         self.ollama_url = (ollama_url or "").rstrip("/")
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.context_length = context_length
         if backend == "OpenAI-Compatible" and not self.openai_url:
             raise ValueError("No URL configured for the LLM Judge.")
         if backend == "Ollama" and not self.ollama_url:
@@ -109,6 +111,7 @@ class LLMJudge:
             api_key=config.get("llm_helper_openai_apikey") or "",
             verify_ssl=config.get("llm_helper_openai_verify_ssl", True),
             ollama_url=config.get("llm_helper_ollama_url") or "http://localhost:11434",
+            context_length=int(config.get("llm_helper_context_length", 8192) or 8192),
         )
 
     # ── Transport ──────────────────────────────────────────────────────────────
@@ -143,7 +146,10 @@ class LLMJudge:
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": self.temperature},
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": self.context_length,
+            },
         }
         resp = requests.post(f"{self.ollama_url}/api/chat", json=payload, timeout=120)
         resp.raise_for_status()

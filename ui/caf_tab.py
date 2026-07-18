@@ -138,7 +138,7 @@ def _ssh_status_display() -> None:
     with st.expander("SSH Target (Kali machine)", expanded=True):
         host    = (st.session_state.get("target_ssh_host") or "").strip()
         user    = st.session_state.get("target_ssh_user", "root")
-        caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
+        caf_dir = st.session_state.get("target_ssh_caf_dir") or "~/modelscope"
         if host:
             st.success(f"SSH Target: `{user}@{host}` | CAF dir: `{caf_dir}`")
             st.caption("Change SSH settings in the **Target** tab.")
@@ -474,7 +474,7 @@ def _start_caf_runs() -> None:
     username = st.session_state.get("target_ssh_user", "root")
     password = st.session_state.get("target_ssh_password") or None
     key_path = st.session_state.get("target_ssh_key_path") or None
-    caf_dir  = st.session_state.get("target_ssh_caf_dir") or "~/cyber-agent-flow"
+    caf_dir  = st.session_state.get("target_ssh_caf_dir") or "~/modelscope"
     model    = st.session_state.get("selected_model", "")
 
     output_q:  queue.Queue = queue.Queue()

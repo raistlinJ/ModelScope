@@ -44,8 +44,8 @@ def metric_spec(metric: str) -> Mapping[str, str] | None:
 THRESHOLD_LEVELS: tuple[tuple[str, str, str], ...] = (
     ("hard_fail", "Hard Fail", ">="),
     ("soft_fail", "Soft Fail", ">"),
-    ("soft_pass", "Soft Pass", ">"),
-    ("hard_pass", "Hard Pass", ">"),
+    ("soft_pass", "Soft Pass", "<="),
+    ("hard_pass", "Hard Pass", "<="),
 )
 
 
@@ -62,8 +62,8 @@ def threshold_levels(direction: str = "lower") -> tuple[tuple[str, str, str], ..
         return (
             ("hard_fail", "Hard Fail", "<="),
             ("soft_fail", "Soft Fail", "<"),
-            ("soft_pass", "Soft Pass", "<"),
-            ("hard_pass", "Hard Pass", "<"),
+            ("soft_pass", "Soft Pass", ">="),
+            ("hard_pass", "Hard Pass", ">="),
         )
     return THRESHOLD_LEVELS
 
@@ -159,7 +159,9 @@ def assess_metric_thresholds(telemetry: dict[str, Any], raw_thresholds: Any) -> 
     thresholds = configured_thresholds(raw_thresholds)
     measurements = observed_dashboard_metrics(telemetry)
     results: list[dict[str, Any]] = []
-    for metric, metric_thresholds in thresholds.items():
+    all_metrics = set(thresholds.keys()) | set(measurements.keys())
+    for metric in all_metrics:
+        metric_thresholds = thresholds.get(metric, {})
         direction = threshold_direction(raw_thresholds.get(metric) if isinstance(raw_thresholds, dict) else None)
         measurement = measurements.get(metric)
         spec = metric_spec(metric)
@@ -178,7 +180,10 @@ def assess_metric_thresholds(telemetry: dict[str, Any], raw_thresholds: Any) -> 
             "direction": direction,
         }
         if measurement is not None:
-            for level, _, operator in threshold_levels(direction):
+            levels_map = {lvl: (lvl, name, op) for lvl, name, op in threshold_levels(direction)}
+            for level in ("hard_fail", "hard_pass", "soft_fail", "soft_pass"):
+                if level not in levels_map: continue
+                _, _, operator = levels_map[level]
                 threshold = metric_thresholds.get(level)
                 if threshold is None:
                     continue

@@ -501,6 +501,7 @@ def _make_env(args: argparse.Namespace, on_log):
             password=args.ssh_password,
             key_path=args.ssh_key_path,
             remote_cwd=None,
+            project_id=getattr(args, "project", {}).get("id") if hasattr(args, "project") else None,
         )
         on_log(f"[INIT] Target: SSH ({args.ssh_user}@{args.ssh_host})")
         return env
@@ -732,8 +733,9 @@ def _cmd_project(args: argparse.Namespace) -> int:
             username=config.get("ssh_user", "root"),
             password=config.get("ssh_password"),
             key_path=config.get("ssh_key_path"),
-            remote_cwd="",
+            remote_cwd=None,
             pct_vmid=config.get("pct_vmid") if is_pct else None,
+            project_id=project.get("id"),
         )
         if is_pct:
             on_log(f"[INIT] Target: PCT (VMID: {config.get('pct_vmid', '?')}) via SSH/Local")
