@@ -12,26 +12,13 @@ except ImportError:
     _COMPONENTS_AVAILABLE = False
 
 
-# JavaScript injected after each terminal render to scroll the terminal to the
-# bottom. Uses window.parent to escape the Streamlit iframe boundary and targets
-# the .terminal-window element directly.
-_SCROLL_JS = """
-<script>
-(function() {
-    window.parent.document.querySelectorAll('.terminal-window').forEach(function(el) {
-        el.scrollTop = el.scrollHeight;
-    });
-})();
-</script>
-"""
-
-
 def render_terminal(
     placeholder,
     logs: list[dict],
     classify,
     empty_msg: str = "Awaiting run…",
     height: int = 500,
+    follow_newest: bool = False,
 ) -> None:
     """Render log entries as a styled HTML terminal in a Streamlit placeholder.
 
@@ -61,17 +48,37 @@ def render_terminal(
             lines_html.append(f"<span{css}>{text}</span>")
 
     inner = "<br>".join(lines_html)
+    if follow_newest and _COMPONENTS_AVAILABLE:
+        # A component owns its iframe DOM, so it can reliably scroll itself on
+        # every Streamlit fragment refresh.  Trying to manipulate the parent
+        # document from injected scripts is blocked in some Streamlit builds.
+        terminal_html = f"""
+        <style>
+          html, body {{ margin: 0; height: 100%; background: #0d1117; }}
+          .terminal-window {{ box-sizing: border-box; height: {height}px; overflow-y: auto;
+            padding: 12px; border: 1px solid #30363d; border-radius: 6px;
+            color: #c9d1d9; font: 12px/1.45 ui-monospace, SFMono-Regular,
+            Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; }}
+          .log-error {{ color: #ff7b72; }} .log-success {{ color: #7ee787; }}
+          .log-warning {{ color: #d29922; }}
+        </style>
+        <div class="terminal-window" id="terminal">{inner}</div>
+        <script>
+          const terminal = document.getElementById('terminal');
+          terminal.scrollTop = terminal.scrollHeight;
+          requestAnimationFrame(() => {{ terminal.scrollTop = terminal.scrollHeight; }});
+        </script>
+        """
+        try:
+            with placeholder.container():
+                _st_components.html(terminal_html, height=height, scrolling=False)
+            return
+        except Exception:
+            # Preserve the standard terminal if a deployment disables custom
+            # components.
+            pass
     placeholder.markdown(
         f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
         f'style="height: {height}px">{inner}</div>',
         unsafe_allow_html=True,
     )
-
-    # Bug 8: scroll the terminal to the bottom after each render
-    if hasattr(st, "html"):
-        st.html(_SCROLL_JS)
-    elif _COMPONENTS_AVAILABLE:
-        try:
-            _st_components.html(_SCROLL_JS, height=0)
-        except Exception:
-            pass
