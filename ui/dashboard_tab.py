@@ -26,6 +26,41 @@ def _render_scrollable_output(
     st.text_area(label, value=str(value or ""), height=height, key=key)
 
 
+def _caf_transcript_sections(events: object) -> tuple[str, str, int]:
+    """Format durable CAF events for the dashboard's two transcript panes."""
+    if not isinstance(events, list):
+        return "", "", 0
+    responses: list[str] = []
+    tool_output: list[str] = []
+    seen_results: set[tuple[str, str]] = set()
+    turn = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "")
+        if event_type == "response":
+            text = str(event.get("text") or event.get("content") or "").strip()
+            if text:
+                turn += 1
+                responses.append(f"Assistant — turn {turn}\n{text}")
+        elif event_type == "error":
+            message = str(event.get("message") or "CAF reported an unknown error.").strip()
+            if message:
+                responses.append(f"CAF error\n{message}")
+        elif event_type == "tool_result":
+            tool = str(event.get("tool") or "tool")
+            result = str(event.get("result") or event.get("output") or "").strip()
+            fingerprint = (tool, result)
+            if not result or fingerprint in seen_results:
+                continue
+            seen_results.add(fingerprint)
+            exit_code = event.get("exit_code", "?")
+            duration = event.get("duration_ms")
+            suffix = f" · {duration} ms" if duration is not None else ""
+            tool_output.append(f"[{tool}] exit={exit_code}{suffix}\n{result}")
+    return "\n\n".join(responses), "\n\n".join(tool_output), turn
+
+
 def _highlight_validation_matches(output: object, checks: list[dict] | None = None) -> str:
     """Return escaped output with portions satisfying validation checks marked green."""
     text = str(output or "")
@@ -710,8 +745,27 @@ def _render_llama_cli_dashboard(
                 + (f": {server_metrics.get('error')}" if server_metrics.get("error") else ".")
             )
 
-    # Prompt responses
-    if prompt_responses:
+    # Durable CAF jobs preserve every assistant turn and final tool artifact,
+    # unlike the generic per-prompt summary which is intentionally aggregated.
+    caf_responses, caf_tool_output, caf_turns = _caf_transcript_sections(
+        tel.get("caf_transcript_events")
+    )
+    if bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output):
+        st.subheader(f"CAF Transcript  ({caf_turns} assistant turn{'s' if caf_turns != 1 else ''})")
+        response_col, tool_col = st.columns(2)
+        with response_col:
+            _render_scrollable_output(
+                "Assistant Responses", caf_responses,
+                key=f"caf_transcript_responses_{pid}_{_run_tok}", height=420,
+            )
+        with tool_col:
+            _render_scrollable_output(
+                "Tool Output", caf_tool_output,
+                key=f"caf_transcript_tools_{pid}_{_run_tok}", height=420,
+            )
+
+    # Fallback for historical CAF telemetry and all non-CAF runners.
+    if prompt_responses and not (bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output)):
         st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
         for i, pr in enumerate(prompt_responses):
             with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):

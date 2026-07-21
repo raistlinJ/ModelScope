@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import base64
+import ast
 import ipaddress
 import json
 import os
@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import copy
+import uuid
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
@@ -117,6 +118,289 @@ class CafActiveSessionError(RuntimeError):
 
 class CafAppRestartRequiredError(RuntimeError):
     """A legacy CAF app must be restarted before durable API mode can run."""
+
+
+class CafSessionStartTimeoutError(RuntimeError):
+    """CAF did not acknowledge a new session before the bounded API deadline."""
+
+
+_REMOTE_JOB_REGISTRY_PATH = pathlib.Path.home() / ".modelscope" / "caf_remote_jobs.json"
+_REMOTE_JOB_REGISTRY_LOCK = threading.Lock()
+
+
+def _remote_job_key(config: Mapping[str, Any]) -> str:
+    return str(config.get("active_project_id") or config.get("id") or "").strip()
+
+
+def _caf_execution_status(shared: Mapping[str, Any]) -> tuple[str, str]:
+    """Return a human-readable execution state and a Streamlit severity."""
+    if shared.get("completed"):
+        telemetry = shared.get("telemetry") or {}
+        if telemetry.get("run_aborted"):
+            return "Stopped", "warning"
+        if telemetry.get("validation_passed") is False:
+            return "Completed — validation failed", "error"
+        return "Completed — succeeded", "success"
+    terminal = str(shared.get("caf_remote_job_terminal_status") or "")
+    if terminal:
+        return f"Remote CAF job ended ({terminal}); final evaluation is settling", "warning"
+    if shared.get("cancel_requested"):
+        return "Stopping remote CAF job…", "warning"
+    if shared.get("caf_remote_job_id"):
+        return "Running", "info"
+    return "Idle", "info"
+
+
+def _load_remote_job_registry() -> dict[str, Any]:
+    try:
+        data = json.loads(_REMOTE_JOB_REGISTRY_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_remote_job_registry(data: dict[str, Any]) -> None:
+    _REMOTE_JOB_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _REMOTE_JOB_REGISTRY_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    os.replace(temporary, _REMOTE_JOB_REGISTRY_PATH)
+
+
+def _remember_remote_job(config: Mapping[str, Any], job_id: str) -> None:
+    key = _remote_job_key(config)
+    if not key:
+        return
+    with _REMOTE_JOB_REGISTRY_LOCK:
+        registry = _load_remote_job_registry()
+        registry[key] = {
+            "job_id": job_id, "host": str(config.get("ssh_host") or ""),
+            "port": int(config.get("ssh_port") or 22), "directory": str(config.get("caf_cli_directory") or ""),
+            "started_at": time.time(),
+        }
+        _save_remote_job_registry(registry)
+
+
+def _tracked_remote_job(config: Mapping[str, Any]) -> dict[str, Any] | None:
+    key = _remote_job_key(config)
+    if not key:
+        return None
+    with _REMOTE_JOB_REGISTRY_LOCK:
+        entry = _load_remote_job_registry().get(key)
+    if not isinstance(entry, dict) or not str(entry.get("job_id") or "").strip():
+        return None
+    if entry.get("host") != str(config.get("ssh_host") or "") or entry.get("directory") != str(config.get("caf_cli_directory") or ""):
+        return None
+    return entry
+
+
+def _forget_remote_job(config: Mapping[str, Any], job_id: str | None = None) -> None:
+    key = _remote_job_key(config)
+    if not key:
+        return
+    with _REMOTE_JOB_REGISTRY_LOCK:
+        registry = _load_remote_job_registry()
+        entry = registry.get(key)
+        if not isinstance(entry, dict) or (job_id and entry.get("job_id") != job_id):
+            return
+        registry.pop(key, None)
+        _save_remote_job_registry(registry)
+
+
+def _list_remote_caf_jobs(config: dict[str, Any], limit: int = 20) -> tuple[list[dict[str, Any]], str]:
+    """Read durable remote job states over SFTP without using the SSH shell."""
+    env = _environment_for_config(config)
+    try:
+        if hasattr(env, "connect"):
+            env.connect()
+        sftp = getattr(env, "_sftp", None)
+        if sftp is None:
+            return [], "Remote job listing requires an SSH execution target."
+        entries = sorted(
+            sftp.listdir_attr(".modelscope_jobs"),
+            key=lambda item: float(getattr(item, "st_mtime", 0) or 0),
+            reverse=True,
+        )
+        jobs: list[dict[str, Any]] = []
+        # State reads are relatively expensive over a high-latency SFTP
+        # session.  Inspect only the most recent candidates needed to fill the
+        # list, rather than every historical job directory on each poll.
+        for entry in entries[:max(1, limit * 2)]:
+            job_id = str(getattr(entry, "filename", ""))
+            if not job_id.startswith("modelscope-"):
+                continue
+            try:
+                state = json.loads(env.read_file(f".modelscope_jobs/{job_id}/state.json"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+            jobs.append({
+                "job_id": job_id,
+                "status": str(state.get("status") or "unknown"),
+                "prompt_id": str(state.get("prompt_id") or ""),
+                "updated_at": float(state.get("updated_at") or getattr(entry, "st_mtime", 0) or 0),
+            })
+        jobs.sort(key=lambda job: job["updated_at"], reverse=True)
+        return jobs[:max(1, limit)], ""
+    except Exception as exc:
+        return [], f"Could not list remote CAF jobs: {exc}"
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+
+
+def _request_remote_caf_job_refresh(config: dict[str, Any], cache: dict[str, Any], limit: int = 20) -> None:
+    """Refresh one shared job-list cache without blocking Streamlit rendering."""
+    if cache.get("refreshing"):
+        return
+    cache["refreshing"] = True
+
+    def worker() -> None:
+        try:
+            jobs, error = _list_remote_caf_jobs(config, limit=limit)
+            signature = json.dumps({"jobs": jobs, "error": error}, sort_keys=True, default=str)
+            changed = signature != cache.get("signature")
+            cache["jobs"] = jobs
+            cache["error"] = error
+            cache["updated_at"] = time.time()
+            cache["signature"] = signature
+            if changed:
+                cache["generation"] = int(cache.get("generation") or 0) + 1
+        finally:
+            cache["refreshing"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _purge_finished_remote_caf_jobs(config: dict[str, Any], job_ids: list[str]) -> tuple[int, str]:
+    """Remove only explicitly selected, already-terminal durable job directories."""
+    terminal_ids = [job_id for job_id in job_ids if re.fullmatch(r"modelscope-[A-Za-z0-9_-]+", job_id)]
+    if not terminal_ids:
+        return 0, ""
+    env = _environment_for_config(config)
+    removed = 0
+    errors: list[str] = []
+    try:
+        for job_id in terminal_ids:
+            result = env.execute(
+                f"venv/bin/python remote_job.py purge --job-dir {shlex.quote('.modelscope_jobs/' + job_id)}",
+                timeout=20,
+            )
+            if result.get("exit_code") == 0:
+                removed += 1
+            else:
+                errors.append(f"{job_id}: {result.get('stderr') or result.get('stdout') or 'purge failed'}")
+    except Exception as exc:
+        errors.append(str(exc))
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+    return removed, "\n".join(errors)
+
+
+def _request_finished_remote_caf_job_purge(config: dict[str, Any], cache: dict[str, Any]) -> None:
+    """Purge terminal jobs in a worker so the Execute page stays responsive."""
+    if cache.get("purging"):
+        return
+    job_ids = [
+        str(job.get("job_id") or "")
+        for job in cache.get("jobs") or []
+        if str(job.get("status") or "") in {"completed", "failed", "cancelled"}
+    ]
+    cache["purging"] = True
+
+    def worker() -> None:
+        try:
+            removed, error = _purge_finished_remote_caf_jobs(config, job_ids)
+            cache["message"] = f"Removed {removed} finished remote CAF job(s)." + (f" {error}" if error else "")
+            cache["jobs"] = [
+                job for job in cache.get("jobs") or []
+                if str(job.get("job_id") or "") not in set(job_ids)
+            ]
+            cache["updated_at"] = time.time()
+            cache["generation"] = int(cache.get("generation") or 0) + 1
+        finally:
+            cache["purging"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _render_remote_caf_jobs_panel(st: Any, project_id: str, remote_job_config: dict[str, Any]) -> None:
+    """Render the durable remote CAF job panel exactly once per app render."""
+    jobs_cache_key = f"caf_cli_remote_jobs_{project_id}"
+    cached_jobs = st.session_state.setdefault(
+        jobs_cache_key,
+        {
+            "jobs": [], "error": "", "updated_at": 0.0, "refreshing": False,
+            "purging": False, "generation": 0, "rendered_generation": 0,
+        },
+    )
+    with st.expander("Remote CAF Jobs", expanded=False):
+        refresh_col, clear_col, status_col = st.columns([1, 2, 3])
+        with refresh_col:
+            if st.button("Refresh", key="btn_caf_cli_refresh_remote_jobs", use_container_width=True):
+                _request_remote_caf_job_refresh(remote_job_config, cached_jobs)
+        with clear_col:
+            if st.button(
+                "Clear finished", key="btn_caf_cli_clear_finished_jobs", use_container_width=True,
+                disabled=bool(cached_jobs.get("purging")),
+            ):
+                _request_finished_remote_caf_job_purge(remote_job_config, cached_jobs)
+        with status_col:
+            if cached_jobs.get("refreshing"):
+                st.caption("Updating…")
+            elif cached_jobs.get("purging"):
+                st.caption("Clearing finished jobs…")
+            elif cached_jobs.get("updated_at"):
+                st.caption("Auto-updates every 4 seconds")
+        if cached_jobs.get("message"):
+            st.caption(str(cached_jobs.pop("message")))
+        if cached_jobs.get("error"):
+            st.caption(str(cached_jobs["error"]))
+        jobs = list(cached_jobs.get("jobs") or [])
+        if not jobs and not cached_jobs.get("refreshing"):
+            st.caption("No durable CAF jobs found on this SSH target.")
+        with st.container(height=340, border=True):
+            for job in jobs:
+                job_id = str(job.get("job_id") or "")
+                status = str(job.get("status") or "unknown")
+                active = status in {"queued", "starting", "ready", "running"}
+                updated_at = float(job.get("updated_at") or 0)
+                updated = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(updated_at)) if updated_at else "unknown time"
+                row, attach_col, kill_col = st.columns([5, 1, 1])
+                with row:
+                    prompt_note = " — prompt active" if job.get("prompt_id") else ""
+                    st.caption(f"`{job_id}` · **{status}** · {updated}{prompt_note}")
+                with attach_col:
+                    if st.button("Attach", key=f"btn_caf_cli_attach_{job_id}", disabled=not active, use_container_width=True):
+                        shared = {
+                            "cancel_requested": False, "logs": [], "tool_output": [],
+                            "completed": False, "telemetry": {}, "caf_remote_job_id": job_id,
+                            "caf_remote_job_recovery_pending": True,
+                        }
+                        _remember_remote_job(remote_job_config, job_id)
+                        st.session_state["caf_cli_exec_shared"] = shared
+                        st.session_state["caf_cli_exec_logs"] = []
+                        st.session_state["_run_in_progress"] = False
+                        st.rerun(scope="app")
+                with kill_col:
+                    if st.button("Kill", key=f"btn_caf_cli_kill_{job_id}", disabled=not active, use_container_width=True):
+                        shared = {
+                            "cancel_requested": True,
+                            "logs": [f"[CAF JOB] Sending immediate cancel request to remote job {job_id} …"],
+                            "tool_output": [], "completed": False, "telemetry": {},
+                            "caf_remote_job_id": job_id, "caf_job_stop_requested": True,
+                        }
+                        _remember_remote_job(remote_job_config, job_id)
+                        st.session_state["caf_cli_exec_shared"] = shared
+                        st.session_state["caf_cli_exec_logs"] = shared["logs"]
+                        st.session_state["_run_in_progress"] = False
+                        threading.Thread(
+                            target=_stop_caf_remote_job_background,
+                            args=(dict(remote_job_config), shared), kwargs={"force": True}, daemon=True,
+                        ).start()
+                        _request_remote_caf_job_refresh(remote_job_config, cached_jobs)
+                        st.rerun(scope="app")
 
 
 def _caf_flags(config: dict[str, Any]) -> str:
@@ -228,6 +512,18 @@ def _caf_run_id(output: str) -> str | None:
 def _clean_execution_log_text(value: Any) -> str:
     """Keep readable log text while dropping terminal control characters."""
     text = strip_ansi(str(value or "")).replace("\r\n", "\n").replace("\r", "\n")
+    # Older remote MCP workers could serialize a timeout buffer with ``str``
+    # and leave a whole Python bytes literal (``b'…'``) in the journal.  Keep
+    # replay readable while those already-recorded events drain; current CAF
+    # workers decode their buffers before publishing them.
+    candidate = text.strip()
+    if len(candidate) >= 3 and candidate.startswith(("b'", 'b"')):
+        try:
+            decoded = ast.literal_eval(candidate)
+        except (SyntaxError, ValueError):
+            decoded = None
+        if isinstance(decoded, bytes):
+            text = decoded.decode("utf-8", errors="replace")
     return "".join(char for char in text if char in ("\n", "\t") or ord(char) >= 32)
 
 
@@ -807,7 +1103,6 @@ class _CafAppSession:
         self.on_log = on_log
         self.http = requests.Session()
         self.run_id: str | None = None
-        self._tunnel: Any = None
         self._events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._stopped = False
         self._last_event_sequence = 0
@@ -815,6 +1110,7 @@ class _CafAppSession:
         self._durable_event_long_poll_available = False
         self._prompt_id: str | None = None
         self._active_tool_progress: dict[str, str] = {}
+        self._last_tool_output_preview: dict[str, str] = {}
         self._tool_progress_stop: threading.Event | None = None
         self._tool_progress_thread: threading.Thread | None = None
         # ModelScope owns only the CAF app instance it launched itself.  An
@@ -830,94 +1126,26 @@ class _CafAppSession:
         parsed = urlsplit(raw_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise RuntimeError("CAF app URL must be an absolute HTTP(S) URL.")
-        if self.config.get("execution_target") != "ssh":
-            return raw_url
-
-        from core.environment import SSHEnvironment
-
-        if not isinstance(self.env, SSHEnvironment):
-            raise RuntimeError("CAF API mode requires an SSH environment for this project.")
-        # Do not proxy HTTP over a hand-rolled local TCP listener here.  CAF
-        # can return a durable replay response, yet the paramiko forwarder can
-        # drop that response while closing a direct-tcpip channel.  Running
-        # curl on the already-authenticated remote host uses the SSH command
-        # channel instead and reaches CAF's loopback listener directly.
-        self.on_log("[CAF API] Using CAF App API through the SSH command channel.")
         return raw_url
-
-    def _ssh_api_request(
-        self,
-        method: str,
-        path: str,
-        *,
-        timeout: tuple[float, float] | float,
-        headers: dict[str, str],
-        json_body: Any = None,
-    ) -> requests.Response:
-        """Execute one CAF API call on the SSH host without TCP forwarding."""
-        if isinstance(timeout, tuple):
-            connect_timeout, read_timeout = timeout
-        else:
-            connect_timeout = read_timeout = timeout
-        url = f"{self.base_url}{path}"
-        body = "" if json_body is None else json.dumps(json_body, separators=(",", ":"), default=str)
-        encoded_body = base64.b64encode(body.encode("utf-8")).decode("ascii")
-        header_args = " ".join(
-            f"--header {shlex.quote(f'{key}: {value}')}" for key, value in headers.items()
-        )
-        if json_body is not None and not any(key.lower() == "content-type" for key in headers):
-            header_args += " --header 'Content-Type: application/json'"
-        # Base64 keeps arbitrary JSON out of shell syntax.  The response is
-        # encoded for the same reason and framed by the first status line.
-        command = (
-            "body_file=$(mktemp); response_file=$(mktemp); "
-            f"printf %s {shlex.quote(encoded_body)} | base64 -d > \"$body_file\"; "
-            f"http_status=$(curl --silent --show-error --request {shlex.quote(method.upper())} "
-            f"--connect-timeout {max(1, int(connect_timeout))} "
-            f"--max-time {max(1, int(connect_timeout + read_timeout))} "
-            f"{header_args} --data-binary @\"$body_file\" --output \"$response_file\" "
-            f"--write-out '%{{http_code}}' {shlex.quote(url)}); curl_status=$?; "
-            "printf '__CAF_HTTP_STATUS__%s\\n' \"$http_status\"; base64 -w0 \"$response_file\"; printf '\\n'; "
-            "rm -f \"$body_file\" \"$response_file\"; exit $curl_status"
-        )
-        result = self.env.execute(command, timeout=max(10, int(connect_timeout + read_timeout + 5)))
-        stdout = str(result.get("stdout") or "")
-        status_line, separator, encoded_response = stdout.partition("\n")
-        if result.get("exit_code") != 0 or not status_line.startswith("__CAF_HTTP_STATUS__"):
-            detail = str(result.get("stderr") or result.get("stdout") or "remote curl failed").strip()
-            raise requests.ConnectionError(detail)
-        try:
-            status_code = int(status_line.removeprefix("__CAF_HTTP_STATUS__"))
-            content = base64.b64decode(encoded_response.strip() or "", validate=True)
-        except (ValueError, TypeError) as exc:
-            raise requests.ConnectionError("CAF SSH API call returned an invalid response frame") from exc
-        response = requests.Response()
-        response.status_code = status_code
-        response.url = url
-        response._content = content
-        response.headers["Content-Type"] = "application/json"
-        return response
 
     def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         timeout = kwargs.pop("timeout", (10, 45))
         headers = {"Connection": "close", **dict(kwargs.pop("headers", {}) or {})}
-        # A direct-tcpip channel is a poor place to retain an HTTP keep-alive
-        # connection across a long model/tool phase: Flask or the SSH peer can
-        # close that idle socket, then the next replay read fails with a peer
-        # reset even though CAF itself is still healthy.  Close each response
-        # and retry idempotent reads once on a fresh channel.
-        attempts = 3 if method.upper() == "GET" and getattr(self, "config", {}).get("execution_target") == "ssh" else 2 if method.upper() == "GET" else 1
+        attempts = 2 if method.upper() == "GET" else 1
         last_error: requests.RequestException | None = None
         for attempt in range(attempts):
             try:
-                if getattr(self, "config", {}).get("execution_target") == "ssh":
-                    response = self._ssh_api_request(
-                        method, path, timeout=timeout, headers=headers, json_body=kwargs.pop("json", None),
-                    )
-                else:
-                    response = self.http.request(
-                        method, f"{self.base_url}{path}", timeout=timeout, headers=headers, **kwargs,
-                    )
+                response = self.http.request(
+                    method, f"{self.base_url}{path}", timeout=timeout, headers=headers, **kwargs,
+                )
+                if isinstance(getattr(response, "status_code", None), int) and response.status_code >= 400:
+                    # Preserve CAF's JSON error in the local App API log.
+                    try:
+                        detail = str(response.json().get("error") or "").strip()
+                    except (ValueError, AttributeError):
+                        detail = ""
+                    if detail:
+                        response.reason = detail
                 response.raise_for_status()
                 return response
             except requests.RequestException as exc:
@@ -1027,6 +1255,13 @@ class _CafAppSession:
         if status is not None:
             capabilities = self._app_capabilities() or {}
             if capabilities.get("durable_event_replay") is True:
+                if (
+                    getattr(self, "config", {}).get("caf_cli_dangerous_no_prompt")
+                    and capabilities.get("auto_continue_tool_timeouts") is not True
+                ):
+                    raise CafAppRestartRequiredError(
+                        "The running CAF app does not support auto-continuing tool timeouts; restarting it is required."
+                    )
                 self._durable_event_long_poll_available = bool(
                     capabilities.get("durable_event_long_poll") is True
                 )
@@ -1043,10 +1278,6 @@ class _CafAppSession:
         while time.monotonic() < deadline:
             status = self._app_status()
             if status is not None:
-                # This process was just launched from CAF's current project
-                # launcher.  Newer servers support ``wait``; an older server
-                # safely ignores the optional query parameter and still
-                # returns cursor results, so prefer the low-churn protocol.
                 self._durable_event_long_poll_available = True
                 self.on_log(f"[CAF APP] Ready (managed PID {self._managed_app_pid}).")
                 return status
@@ -1054,7 +1285,7 @@ class _CafAppSession:
                 tail = self._managed_app_log_tail()
                 self._managed_app_pid = None
                 raise RuntimeError("CAF app exited while starting." + (f" Log: {tail}" if tail else ""))
-            time.sleep(0.5)
+            time.sleep(0.25)
         tail = self._managed_app_log_tail()
         self._stop_managed_app()
         raise RuntimeError("CAF app did not become ready within 45 seconds." + (f" Log: {tail}" if tail else ""))
@@ -1107,11 +1338,30 @@ class _CafAppSession:
             stopped = self._request("POST", "/api/session/stop", json={}).json()
             if not stopped.get("success"):
                 raise RuntimeError(stopped.get("error") or "CAF app could not stop the active session.")
-            # CAF resets its API state immediately, while its agent thread
-            # tears down asynchronously.  Give that cleanup a brief head
-            # start before allocating a fresh session.
-            time.sleep(1)
-        data = self._request("POST", "/api/session/start", json=self._payload()).json()
+            # CAF tears down its worker asynchronously.  Wait for it to
+            # finish before allocating a replacement session; otherwise the
+            # old cleanup can invalidate the new session's loop.
+            stop_deadline = time.monotonic() + 20.0
+            while time.monotonic() < stop_deadline:
+                stopped_status = self._app_status()
+                if stopped_status and stopped_status.get("status") in {"idle", "stopped"}:
+                    break
+                time.sleep(0.25)
+            else:
+                raise CafSessionStartTimeoutError(
+                    "CAF is still stopping the previous session. Wait briefly and retry."
+                )
+        payload = self._payload()
+        try:
+            # A start request normally returns once MCP discovery is complete.
+            # Do not let an impaired SSH command channel hold the UI forever:
+            # after this bound the UI offers an explicit retry instead.
+            data = self._request("POST", "/api/session/start", json=payload, timeout=(5, 20)).json()
+        except RuntimeError as start_error:
+            raise CafSessionStartTimeoutError(
+                "CAF did not acknowledge session start within 20 seconds. "
+                "It may have started remotely; retry to check again."
+            ) from start_error
         if not data.get("success") or not data.get("run_id"):
             raise RuntimeError(data.get("error") or "CAF app did not start a session.")
         self.run_id = str(data["run_id"])
@@ -1141,7 +1391,10 @@ class _CafAppSession:
         if not self.run_id:
             return
         try:
-            long_poll_available = wait and bool(getattr(self, "_durable_event_long_poll_available", False))
+            long_poll_available = (
+                wait
+                and bool(getattr(self, "_durable_event_long_poll_available", False))
+            )
             long_poll = "&wait=10" if long_poll_available else ""
             response = self._request(
                 "GET",
@@ -1200,10 +1453,12 @@ class _CafAppSession:
                     target, count = cidr
                     label = f"{tool} {target} — {count:,} targets"
             getattr(self, "_active_tool_progress", {}).update({tool: label})
+            getattr(self, "_last_tool_output_preview", {}).pop(tool, None)
             self._start_tool_progress(tool, label)
         elif kind == "tool_result":
             tool = str(event.get("tool") or "tool")
             getattr(self, "_active_tool_progress", {}).pop(tool, None)
+            getattr(self, "_last_tool_output_preview", {}).pop(tool, None)
             self._stop_tool_progress(tool)
             self.on_log(
                 f"[VALIDATE CAF] [result] {tool} "
@@ -1217,6 +1472,14 @@ class _CafAppSession:
             stderr_len = max(0, int(event.get("stderr_len") or 0))
             output_detail = f", {stdout_len + stderr_len:,} bytes received" if stdout_len or stderr_len else ""
             self.on_log(f"[CAF TOOL PROGRESS] {base} — running {elapsed}s{output_detail}")
+            output_preview = str(event.get("output_preview") or "").strip()
+            previews = getattr(self, "_last_tool_output_preview", None)
+            if previews is None:
+                previews = {}
+                self._last_tool_output_preview = previews
+            if output_preview and previews.get(tool) != output_preview:
+                previews[tool] = output_preview
+                self.on_log(f"[VALIDATE CAF] [output] {output_preview}")
         elif kind == "tool_timeout_decision":
             tool = str(event.get("tool") or "tool")
             elapsed = max(0, int(event.get("elapsed_seconds") or 0))
@@ -1307,7 +1570,18 @@ class _CafAppSession:
         error = ""
         next_replay_at = time.monotonic()
         next_prompt_status_at = next_replay_at
-        while time.monotonic() < deadline:
+        while True:
+            if time.monotonic() >= deadline:
+                active_tools = getattr(self, "_active_tool_progress", {})
+                if self.config.get("caf_cli_dangerous_no_prompt") and active_tools:
+                    extension = max(60, int(self.config.get("caf_cli_tool_timeout") or 300))
+                    deadline = time.monotonic() + extension
+                    self.on_log(
+                        "[CAF API] Run deadline reached while an auto-approved tool is still running; "
+                        f"continuing monitoring for {extension} seconds."
+                    )
+                    continue
+                break
             if cancel_ref and cancel_ref[0]:
                 try:
                     self._request("POST", "/api/session/cancel_prompt", json={})
@@ -1397,8 +1671,267 @@ class _CafAppSession:
                 pass
             self._session_started_by_modelscope = False
         self._stop_managed_app()
-        if self._tunnel is not None:
-            self._tunnel.close()
+
+
+class _CafRemoteJobSession(_CafAppSession):
+    """One durable CAF worker, controlled only through SSH files/commands."""
+
+    def __init__(self, env: Any, config: dict[str, Any], on_log: Callable[[str], None]) -> None:
+        self.env = env
+        self.config = config
+        self.on_log = on_log
+        self.run_id: str | None = None
+        self.job_id: str | None = None
+        self.job_dir: str | None = None
+        self._last_event_sequence = 0
+        self._active_tool_progress: dict[str, str] = {}
+        self._last_tool_output_preview: dict[str, str] = {}
+        self._tool_progress_stop: threading.Event | None = None
+        self._tool_progress_thread: threading.Thread | None = None
+        self._stopped = False
+
+    def _runner(self, action: str, *args: str, timeout: int = 15) -> dict[str, Any]:
+        if not self.job_dir:
+            raise RuntimeError("Remote CAF job has not been created.")
+        command = " ".join([
+            "venv/bin/python", "remote_job.py", shlex.quote(action),
+            "--job-dir", shlex.quote(self.job_dir), *[shlex.quote(arg) for arg in args],
+        ])
+        result = self.env.execute(command, timeout=timeout)
+        if result.get("exit_code") != 0:
+            raise RuntimeError(str(result.get("stderr") or result.get("stdout") or "remote CAF job command failed").strip())
+        return result
+
+    @staticmethod
+    def _json_result(result: dict[str, Any]) -> dict[str, Any]:
+        try:
+            data = json.loads(str(result.get("stdout") or "").strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Remote CAF job returned invalid JSON.") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("Remote CAF job returned an invalid response.")
+        return data
+
+    def start(self) -> None:
+        if hasattr(self.env, "connect"):
+            self.env.connect()
+        remote_root = str(getattr(self.env, "remote_cwd", "") or "").rstrip("/")
+        if not remote_root:
+            raise RuntimeError("Remote CAF job transport requires an SSH execution environment.")
+        self.job_id = f"modelscope-{uuid.uuid4().hex}"
+        self.run_id = self.job_id
+        self.job_dir = f".modelscope_jobs/{self.job_id}"
+        tools_path = f"{remote_root}/{self.job_dir}/kali_tools.json"
+        server_command = f"{shlex.quote(remote_root + '/venv/bin/python')} {shlex.quote(remote_root + '/mcp_kali.py')}"
+        spec = {
+            "job_id": self.job_id, "run_id": self.run_id,
+            "url": self.config.get("caf_cli_url"), "provider": self.config.get("caf_cli_provider"),
+            "api_key": self.config.get("caf_cli_api_key") or "", "ssl_verify": bool(self.config.get("caf_cli_verify_ssl", True)),
+            "model": self.config.get("selected_model"), "server_command": server_command,
+            "tools_config_path": tools_path, "context_window": int(self.config.get("caf_cli_context_window") or 8192),
+            "max_turns": int(self.config.get("caf_cli_max_turns") or 20),
+            "tool_timeout": int(self.config.get("caf_cli_tool_timeout") or 120),
+            "network_policy": _caf_network_policy(self.config),
+            "auto_approve_dangerous": bool(self.config.get("caf_cli_dangerous_no_prompt")),
+        }
+        for path, contents in (
+            (f"{self.job_dir}/spec.json", json.dumps(spec)),
+            (f"{self.job_dir}/kali_tools.json", json.dumps(_caf_selected_tools_config(self.config))),
+        ):
+            written = self.env.write_file(path, contents)
+            if written.get("error"):
+                raise RuntimeError(f"Could not prepare remote CAF job: {written['error']}")
+        self.env.execute(f"chmod 700 {shlex.quote(self.job_dir)} && chmod 600 {shlex.quote(self.job_dir)}/spec.json {shlex.quote(self.job_dir)}/kali_tools.json", timeout=15)
+        started = self._json_result(self._runner("start"))
+        if not started.get("success"):
+            raise RuntimeError("Remote CAF job could not be started.")
+        # Record the ID before the worker becomes ready: a browser refresh or
+        # Streamlit source reload during startup must still be able to reattach
+        # and stop this exact remote process.
+        _remember_remote_job(self.config, self.job_id)
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            state = self._json_result(self._runner("status"))
+            if state.get("status") == "ready":
+                self.on_log(f"[CAF JOB] Started durable remote job {self.job_id} with {len(state.get('tools') or [])} tool(s).")
+                return
+            if state.get("status") == "failed":
+                _forget_remote_job(self.config, self.job_id)
+                raise RuntimeError(str(state.get("error") or "Remote CAF job failed while starting."))
+            time.sleep(0.25)
+        raise CafSessionStartTimeoutError("Remote CAF job did not become ready within 45 seconds. Retry the request.")
+
+    def _events(self) -> list[dict[str, Any]]:
+        data = self._json_result(self._runner("events", "--after", str(self._last_event_sequence), "--limit", "10"))
+        events = [event for event in data.get("events") or [] if isinstance(event, dict)]
+        for event in events:
+            sequence = event.get("sequence")
+            if isinstance(sequence, int):
+                self._last_event_sequence = max(self._last_event_sequence, sequence)
+        return events
+
+    def _cancel(self) -> None:
+        if self.job_dir:
+            try:
+                self._runner("cancel")
+            except RuntimeError as exc:
+                self.on_log(f"[CAF JOB] Cancel request delayed: {exc}")
+
+    def prompt_transcript(self, prompt_id: str) -> list[dict[str, Any]]:
+        """Read the complete durable transcript for one remote prompt.
+
+        SSH command replay deliberately bounds individual event pages.  The
+        journal itself is the authoritative artifact, so use SFTP here to
+        retain full assistant replies and completed tool output for analytics.
+        """
+        if not self.job_dir or not prompt_id:
+            return []
+        try:
+            raw = self.env.read_file(f"{self.job_dir}/events.jsonl")
+        except Exception as exc:
+            self.on_log(f"[CAF JOB] Full transcript read delayed: {exc}")
+            return []
+        events: list[dict[str, Any]] = []
+        for line in str(raw).splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(event, dict)
+                and str(event.get("prompt_id") or "") == prompt_id
+                and event.get("type") in {"response", "tool_call", "tool_result", "error"}
+            ):
+                events.append(event)
+        return events
+
+    def run_prompt(self, prompt: str, *, preserve_context: bool, cancel_ref: list[bool]) -> dict[str, Any]:
+        if self.job_id is None:
+            self.start()
+        prompt_id = uuid.uuid4().hex
+        request = {
+            "prompt_id": prompt_id, "prompt": prompt,
+            "scope": str(self.config.get("caf_scope") or "narrow").lower() if self.config.get("caf_cli_scope_enabled", True) else None,
+            "urgency": str(self.config.get("caf_urgency") or "balanced").lower() if self.config.get("caf_cli_urgency_enabled", True) else None,
+        }
+        request_path = f"{self.job_dir}/requests/{self._last_event_sequence + 1:08d}_{prompt_id}.json"
+        written = self.env.write_file(request_path, json.dumps(request))
+        if written.get("error"):
+            return {"stdout": "", "stderr": str(written["error"]), "exit_code": -1}
+        deadline = time.monotonic() + int(self.config.get("caf_cli_timeout") or 600)
+        responses: list[str] = []
+        error = ""
+        while True:
+            if cancel_ref and cancel_ref[0]:
+                self._cancel()
+                return {"stdout": "\n".join(responses), "stderr": "Cancelled", "exit_code": -1}
+            try:
+                events = self._events()
+            except RuntimeError as exc:
+                # Event replay is an optimization for transcript fidelity, not
+                # the sole source of truth for completion.  Still poll the
+                # durable job state below when this SSH command channel stalls.
+                self.on_log(f"[CAF JOB] Event read delayed; retrying: {exc}")
+                events = []
+            for event in events:
+                event_prompt_id = str(event.get("prompt_id") or "")
+                if event_prompt_id and event_prompt_id != prompt_id:
+                    continue
+                recorded_error = self._record_event(event, responses)
+                if recorded_error:
+                    error = recorded_error
+                if event.get("type") == "prompt_done" and event_prompt_id == prompt_id:
+                    return {
+                        "stdout": "\n".join(responses), "stderr": error,
+                        "exit_code": 0 if not error else -1, "caf_run_id": self.run_id,
+                        "caf_prompt_id": prompt_id,
+                    }
+            try:
+                state = self._json_result(self._runner("status"))
+                status = str(state.get("status") or "")
+                # The remote worker persists this exact prompt ID before it
+                # writes `prompt_done` to the journal.  If an SSH command
+                # channel resets at that instant, the durable state remains a
+                # reliable completion acknowledgement and avoids converting a
+                # completed, output-ignored prompt into exit code -1.
+                if str(state.get("completed_prompt_id") or "") == prompt_id:
+                    completed_error = str(state.get("completed_prompt_error") or error or "")
+                    self.on_log("[CAF JOB] Durable prompt state confirms completion; recovered the terminal acknowledgement.")
+                    return {
+                        "stdout": "\n".join(responses), "stderr": completed_error,
+                        "exit_code": 0 if not completed_error else -1, "caf_run_id": self.run_id,
+                        "caf_prompt_id": prompt_id,
+                    }
+                if status == "failed":
+                    return {"stdout": "\n".join(responses), "stderr": str(state.get("error") or error), "exit_code": -1}
+                if status == "cancelled":
+                    return {"stdout": "\n".join(responses), "stderr": "Cancelled", "exit_code": -1}
+                if status == "completed":
+                    return {
+                        "stdout": "\n".join(responses),
+                        "stderr": error or "Remote CAF job completed before this prompt returned a result.",
+                        "exit_code": -1,
+                    }
+            except RuntimeError as exc:
+                self.on_log(f"[CAF JOB] Prompt-state read delayed; retrying: {exc}")
+            if time.monotonic() >= deadline:
+                if self.config.get("caf_cli_dangerous_no_prompt") and self._active_tool_progress:
+                    extension = max(60, int(self.config.get("caf_cli_tool_timeout") or 300))
+                    deadline = time.monotonic() + extension
+                    self.on_log(f"[CAF JOB] Run deadline reached while an auto-approved tool is active; continuing for {extension} seconds.")
+                else:
+                    return {"stdout": "\n".join(responses), "stderr": error or "Remote CAF job prompt timed out.", "exit_code": -1}
+            time.sleep(0.5)
+
+    def stop(self) -> None:
+        self._stop_tool_progress()
+        if self._stopped:
+            return
+        self._stopped = True
+        if self.job_dir:
+            try:
+                self._runner("close")
+            except RuntimeError:
+                pass
+
+
+def run_caf_remote_job(env: Any, config: dict[str, Any], on_log: Callable[[str], None]) -> dict[str, Any]:
+    """Run validation through CAF's remote job journal, not its web API."""
+    from core.evaluator import _init_telemetry, _run_validation_sets
+
+    started = time.time()
+    cancel_ref = config.get("cancel_requested_ref", [False])
+    tool_calls = _run_caf_command_steps(env, config.get("startup_commands", []), label="STARTUP", default_timeout=int(config.get("caf_cli_timeout") or 600), on_log=on_log, config=config, helper_context=[])
+    job_ref: list[_CafRemoteJobSession | None] = [None]
+    responses: list[dict[str, str]] = []
+    caf_transcript_events: list[dict[str, Any]] = []
+
+    def execute_prompt(prompt: str, _label: str, preserve_context: bool) -> dict[str, Any]:
+        if job_ref[0] is not None and not preserve_context:
+            job_ref[0].stop()
+            job_ref[0] = None
+        if job_ref[0] is None:
+            job_ref[0] = _CafRemoteJobSession(env, config, on_log)
+        result = job_ref[0].run_prompt(prompt, preserve_context=preserve_context, cancel_ref=cancel_ref)
+        if result.get("stdout"):
+            responses.append({"prompt": prompt, "response": str(result["stdout"])})
+        prompt_id = str(result.get("caf_prompt_id") or "")
+        if prompt_id:
+            caf_transcript_events.extend(job_ref[0].prompt_transcript(prompt_id))
+        return result
+
+    validation_config = {**config, "type": "llama_cli_bot", "execute_prompt_callback": execute_prompt}
+    try:
+        passed, validation_results = _run_validation_sets(env, _caf_validation_sets_without_system_prompts(config.get("validation_sets", [])), on_log, cancel_ref=cancel_ref, config=validation_config)
+    finally:
+        if job_ref[0] is not None:
+            job_ref[0].stop()
+    telemetry = _init_telemetry(config)
+    telemetry.update({"run_bot_type": "caf_cli_run_bot", "run_backend": "CyberAgentFlow remote job", "run_model": config.get("selected_model") or "(not configured)", "total_latency": round(time.time() - started, 3), "validation_passed": passed, "validation_sets_results": validation_results, "tool_calls": tool_calls, "prompt_responses": responses, "caf_transcript_events": caf_transcript_events, "run_aborted": bool(cancel_ref and cancel_ref[0])})
+    if job_ref[0] is not None:
+        telemetry["caf_run_id"] = job_ref[0].run_id
+    on_log(f"[COMPLETE] {telemetry['total_latency']}s | validation={'PASS' if passed else 'FAIL'}")
+    return telemetry
 
 
 def run_caf_api_run(env: Any, config: dict[str, Any], on_log: Callable[[str], None]) -> dict[str, Any]:
@@ -1720,6 +2253,17 @@ def _run_caf_cli_background(
             if clean_message.startswith("[CAF TOOL PROGRESS]") and logs and str(logs[-1]).startswith("[CAF TOOL PROGRESS]"):
                 logs[-1] = clean_message
                 return
+            output_prefix = "[VALIDATE CAF] [output] "
+            if clean_message.startswith(output_prefix):
+                output = clean_message[len(output_prefix):]
+                tool_output = shared.setdefault("tool_output", [])
+                seen_output = shared.setdefault("tool_output_seen", set())
+                if output not in seen_output:
+                    seen_output.add(output)
+                    tool_output.append(output)
+            job_match = re.match(r"\[CAF JOB\] Started durable remote job ([A-Za-z0-9_-]+)", clean_message)
+            if job_match:
+                shared["caf_remote_job_id"] = job_match.group(1)
             logs.append(clean_message)
             session_log.log(clean_message)
 
@@ -1740,6 +2284,13 @@ def _run_caf_cli_background(
             "error": str(exc),
             "caf_app_restart_required": True,
         }
+    except CafSessionStartTimeoutError as exc:
+        on_log("[CAF APP] Session start was not acknowledged in time. Awaiting your retry decision.")
+        telemetry = {
+            "run_aborted": True,
+            "error": str(exc),
+            "caf_session_start_timeout": True,
+        }
     except Exception as exc:
         on_log(f"[ERROR] CAF CLI evaluation failed: {exc}")
         telemetry = {"run_aborted": True, "error": str(exc)}
@@ -1749,6 +2300,15 @@ def _run_caf_cli_background(
 
     if cancel_ref[0]:
         telemetry["run_aborted"] = True
+    if telemetry.get("run_aborted"):
+        shared["execution_status"] = "Stopped"
+        on_log("[EXECUTION COMPLETE] Stopped.")
+    elif telemetry.get("validation_passed") is False:
+        shared["execution_status"] = "Completed — validation failed"
+        on_log("[EXECUTION COMPLETE] Completed — validation failed.")
+    else:
+        shared["execution_status"] = "Completed — succeeded"
+        on_log("[EXECUTION COMPLETE] Completed — succeeded.")
     persisted_config = {key: value for key, value in run_config.items() if key != "cancel_requested_ref"}
     session_log.save_telemetry(telemetry)
     session_log.save_config(persisted_config)
@@ -1776,6 +2336,264 @@ def _stop_caf_api_session_background(config: dict[str, Any], shared: dict[str, A
         if hasattr(env, "close"):
             env.close()
         shared["caf_api_stop_requested"] = False
+
+
+def _stop_caf_remote_job_background(config: dict[str, Any], shared: dict[str, Any], *, force: bool = False) -> None:
+    """Cancel a durable remote job even if its foreground event read stalled."""
+    job_id = str(shared.get("caf_remote_job_id") or "").strip()
+    if not job_id:
+        shared.setdefault("logs", []).append("[CAF JOB] No remote job ID is available to cancel.")
+        shared["caf_job_stop_requested"] = False
+        return
+    env = _environment_for_config(config)
+    job_dir = shlex.quote(".modelscope_jobs/" + job_id)
+    try:
+        result = env.execute(
+            f"venv/bin/python remote_job.py cancel {'--force ' if force else ''}--job-dir {job_dir}",
+            timeout=15,
+        )
+        if result.get("exit_code") != 0:
+            raise RuntimeError(str(result.get("stderr") or result.get("stdout") or "remote cancel command failed"))
+        if force:
+            shared.setdefault("logs", []).append("[CAF JOB] Remote job force-killed.")
+            shared["caf_remote_job_output_finished"] = True
+            shared["caf_remote_job_terminal_status"] = "cancelled"
+            _forget_remote_job(config, job_id)
+            return
+        shared.setdefault("logs", []).append("[CAF JOB] Cancel request sent; waiting briefly for CAF to stop …")
+        for _ in range(16):
+            time.sleep(0.5)
+            status_result = env.execute(
+                f"venv/bin/python remote_job.py status --job-dir {job_dir}", timeout=15,
+            )
+            try:
+                status = json.loads(str(status_result.get("stdout") or "{}")).get("status")
+            except json.JSONDecodeError:
+                status = None
+            if status in {"completed", "failed", "cancelled"}:
+                shared.setdefault("logs", []).append(f"[CAF JOB] Remote job stopped ({status}).")
+                shared["caf_remote_job_output_finished"] = True
+                shared["caf_remote_job_terminal_status"] = str(status)
+                _forget_remote_job(config, job_id)
+                return
+        result = env.execute(
+            f"venv/bin/python remote_job.py cancel --force --job-dir {job_dir}", timeout=15,
+        )
+        if result.get("exit_code") == 0:
+            shared.setdefault("logs", []).append("[CAF JOB] Remote job was force-stopped after graceful cancellation timed out.")
+            shared["caf_remote_job_output_finished"] = True
+            shared["caf_remote_job_terminal_status"] = "cancelled"
+            _forget_remote_job(config, job_id)
+        else:
+            shared.setdefault("logs", []).append(f"[CAF JOB] Force-stop failed: {result.get('stderr') or result.get('stdout')}")
+    except Exception as exc:
+        shared.setdefault("logs", []).append(f"[CAF JOB] Cancel request failed: {exc}")
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+        shared["caf_job_stop_requested"] = False
+
+
+def _collect_remote_job_output(config: dict[str, Any], shared: dict[str, Any], job_id: str) -> None:
+    """Mirror durable tool previews into the UI through SFTP journal reads."""
+    env = _environment_for_config(config)
+    after = 0
+    byte_offset = 0
+    pending = b""
+    transport_state: dict[str, Any] = {
+        "error": "", "last_notice": 0.0, "failures": 0, "retry_after": 0.0,
+    }
+    seen = shared.setdefault("tool_output_seen", set())
+    replayed_log_lines = {str(line) for line in shared.setdefault("logs", [])}
+
+    def reconnect_after_failure(exc: Exception) -> None:
+        """Discard a dead SSH/SFTP client and bound reconnect churn."""
+        nonlocal env
+        transport_state["error"] = str(exc)
+        transport_state["failures"] = int(transport_state.get("failures") or 0) + 1
+        delay = min(5.0, 0.25 * (2 ** min(4, int(transport_state["failures"]) - 1)))
+        transport_state["retry_after"] = time.monotonic() + delay
+        try:
+            if hasattr(env, "close"):
+                env.close()
+        finally:
+            # A disconnected SFTP channel can remain attached to an otherwise
+            # active Paramiko transport.  Use a new environment on retry.
+            env = _environment_for_config(config)
+
+    def mark_connection_healthy() -> None:
+        transport_state["error"] = ""
+        transport_state["failures"] = 0
+        transport_state["retry_after"] = 0.0
+
+    def state() -> str | None:
+        if time.monotonic() < float(transport_state.get("retry_after") or 0.0):
+            return None
+        try:
+            value = str(json.loads(env.read_file(f".modelscope_jobs/{job_id}/state.json")).get("status") or "")
+            mark_connection_healthy()
+            return value
+        except Exception as exc:
+            reconnect_after_failure(exc)
+            return None
+
+    def journal_chunk() -> bytes:
+        nonlocal byte_offset
+        if time.monotonic() < float(transport_state.get("retry_after") or 0.0):
+            return b""
+        try:
+            if hasattr(env, "connect"):
+                env.connect()
+            sftp = getattr(env, "_sftp", None)
+            if sftp is None:
+                return b""
+            path = f".modelscope_jobs/{job_id}/events.jsonl"
+            with sftp.open(path, "rb") as handle:
+                handle.seek(byte_offset)
+                chunk = handle.read(64 * 1024)
+            byte_offset += len(chunk)
+            mark_connection_healthy()
+            return chunk
+        except Exception as exc:
+            reconnect_after_failure(exc)
+            return b""
+
+    def replay_log(event: dict[str, Any]) -> None:
+        """Keep the Execute Log current when its foreground SSH read stalls."""
+        kind = str(event.get("type") or "")
+        line = ""
+        if kind == "status":
+            message = str(event.get("message") or "").strip()
+            if message:
+                line = f"[VALIDATE CAF] [status] {message}"
+        elif kind == "response":
+            text = str(event.get("text") or event.get("content") or "").strip()
+            if text:
+                line = f"[VALIDATE CAF] Assistant: {text}"
+        elif kind == "tool_call":
+            tool = str(event.get("tool") or "tool")
+            line = f"[VALIDATE CAF] [tool] {tool} {json.dumps(event.get('args') or {}, default=str)}"
+        elif kind == "tool_result":
+            line = (
+                f"[VALIDATE CAF] [result] {event.get('tool') or 'tool'} "
+                f"exit={event.get('exit_code', '?')} duration_ms={event.get('duration_ms', '?')}"
+            )
+        elif kind == "tool_status":
+            tool = str(event.get("tool") or "tool")
+            elapsed = max(0, int(event.get("elapsed_seconds") or 0))
+            total = max(0, int(event.get("stdout_len") or 0)) + max(0, int(event.get("stderr_len") or 0))
+            line = f"[CAF TOOL PROGRESS] {tool} — running {elapsed}s"
+            if total:
+                line += f", {total:,} bytes received"
+            prefix = f"[CAF TOOL PROGRESS] {tool} —"
+            logs = shared.setdefault("logs", [])
+            for index in range(len(logs) - 1, -1, -1):
+                if str(logs[index]).startswith(prefix):
+                    logs[index] = line
+                    return
+        elif kind == "error":
+            message = str(event.get("message") or "").strip()
+            if message:
+                line = f"[VALIDATE CAF] [error] {message}"
+                shared["caf_remote_prompt_error"] = message
+        elif kind == "prompt_done":
+            line = "[VALIDATE CAF] [prompt] CAF prompt completed."
+            shared["caf_remote_prompt_completed"] = True
+        if line and line not in replayed_log_lines:
+            replayed_log_lines.add(line)
+            shared.setdefault("logs", []).append(line)
+
+    try:
+        while not shared.get("caf_remote_job_output_finished"):
+            job_status = state()
+            if job_status is None and transport_state["error"]:
+                now = time.monotonic()
+                if now - float(transport_state["last_notice"]) >= 15:
+                    detail = str(transport_state["error"]).strip() or "SSH/SFTP connection is unavailable"
+                    shared.setdefault("logs", []).append(f"[CAF JOB] SFTP journal read delayed: {detail}")
+                    transport_state["last_notice"] = now
+            terminal_status = job_status if job_status in {"completed", "failed", "cancelled"} else None
+            # A persisted ID can outlive a browser/session while the remote
+            # worker finishes.  Check it before replaying its old journal so a
+            # refresh never claims to have reattached to an already-cancelled
+            # job (or replays a large completed transcript first).
+            if shared.get("caf_remote_job_recovery_pending"):
+                if terminal_status:
+                    # Do not claim an attachment to an already-finished job,
+                    # but still drain every event left in its journal below.
+                    shared["caf_remote_job_recovery_pending"] = False
+                elif job_status not in {"queued", "starting", "ready", "running"}:
+                    time.sleep(0.5)
+                    continue
+                else:
+                    shared["caf_remote_job_recovery_pending"] = False
+                    shared.setdefault("logs", []).append(f"[CAF JOB] Reattached to durable remote job {job_id} after refresh.")
+            chunk = journal_chunk()
+            if chunk:
+                data = pending + chunk
+                lines = data.splitlines(keepends=True)
+                pending = b""
+                if lines and not lines[-1].endswith((b"\n", b"\r")):
+                    pending = lines.pop()
+                for line in lines:
+                    try:
+                        event = json.loads(line.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    sequence = event.get("sequence")
+                    if isinstance(sequence, int):
+                        if sequence <= after:
+                            continue
+                        after = sequence
+                    replay_log(event)
+                    if (
+                        event.get("type") == "prompt_done"
+                        and shared.get("caf_remote_prompt_error")
+                        and not shared.get("caf_job_stop_requested")
+                    ):
+                        # CAF has made a terminal prompt error explicit.  Do
+                        # not leave the Execute controls disabled while a
+                        # separate foreground SSH read waits to time out.
+                        shared["cancel_requested"] = True
+                        shared["caf_job_stop_requested"] = True
+                        shared.setdefault("logs", []).append(
+                            "[CAF JOB] CAF ended the prompt with an error; stopping the stranded remote job …"
+                        )
+                        threading.Thread(
+                            target=_stop_caf_remote_job_background,
+                            args=(dict(config), shared),
+                            daemon=True,
+                        ).start()
+                    event_type = str(event.get("type") or "")
+                    if event_type == "tool_result":
+                        tool = str(event.get("tool") or "tool")
+                        output = str(event.get("result") or event.get("output") or "").strip()
+                        if output:
+                            rendered_output = f"[{tool}]\n{output}"
+                            if rendered_output not in seen:
+                                seen.add(rendered_output)
+                                shared.setdefault("tool_output", []).append(rendered_output)
+                        continue
+                    if event_type != "tool_status":
+                        continue
+                    output = str(event.get("output_preview") or "").strip()
+                    if output and output not in seen:
+                        seen.add(output)
+                        shared.setdefault("tool_output", []).append(output)
+            if terminal_status and not chunk and not pending:
+                shared["caf_remote_job_output_finished"] = True
+                shared["caf_remote_job_terminal_status"] = str(terminal_status)
+                _forget_remote_job(config, job_id)
+                shared.setdefault("logs", []).append(f"[CAF JOB] Remote job finished ({terminal_status}).")
+                return
+            # Drain an already-existing journal quickly after a page reload;
+            # once caught up, return to a low-churn polling cadence.
+            time.sleep(0.1 if chunk else 0.5)
+    finally:
+        if hasattr(env, "close"):
+            env.close()
 
 
 class CafCliRunPlugin(BotTypePlugin):
@@ -1821,13 +2639,15 @@ class CafCliRunPlugin(BotTypePlugin):
             config["caf_cli_verify_ssl"] = not bool(config.get("caf_cli_no_ssl_verify", False))
         for key, value in self.default_config().items():
             config.setdefault(key, value)
-        # These fields are required by API/SSE mode; keeping visible defaults
-        # in persisted projects is clearer than relying on runtime fallbacks.
+        # Retained for local CAF web-app use; remote jobs do not depend on
+        # either an app URL or an app-managed MCP command.
         for key in ("caf_cli_app_url", "caf_cli_app_server_command"):
             if not str(config.get(key) or "").strip():
                 config[key] = self.default_config()[key]
-        if config.get("caf_cli_transport") not in {"cli", "api"}:
-            config["caf_cli_transport"] = "api"
+        if config.get("execution_target") == "ssh":
+            config["caf_cli_transport"] = "job"
+        elif config.get("caf_cli_transport") not in {"cli", "api"}:
+            config["caf_cli_transport"] = "cli"
         return config
 
     def flush_config(self, project: dict[str, Any]) -> None:
@@ -1870,21 +2690,17 @@ class CafCliRunPlugin(BotTypePlugin):
             st.checkbox(
                 "Run commands with sudo",
                 key="caf_cli_sudo",
-                help="Start/stop the managed CAF app and run direct command steps as root via the configured SSH user's password.",
+                help="Run remote command steps and CAF job workers as root via the configured SSH user's password.",
             )
             st.text_input("CAF directory", key="caf_cli_directory")
             st.text_input("CLI command", key="caf_cli_command", help="Normally ./start_cli.sh; validation prompts invoke one-shot run.")
-            transport = st.selectbox(
-                "CAF transport",
-                ["cli", "api"],
-                key="caf_cli_transport",
-                format_func=lambda value: "CLI over SSH" if value == "cli" else "CAF App API (SSE)",
-                help="API mode uses CyberAgentFlow's structured event stream and transcript API instead of CLI stdout.",
-            )
-            if transport == "api":
-                st.caption(
-                    "ModelScope starts CAF on the selected target when needed, "
-                    "tunnels to its local API, and stops only the app instance it started."
+            if target == "ssh":
+                st.session_state["caf_cli_transport"] = "job"
+                st.caption("Remote transport: durable CAF job runner (SSH/SFTP event journal; no CAF web server required).")
+            else:
+                st.selectbox(
+                    "CAF transport", ["cli", "api"], key="caf_cli_transport",
+                    format_func=lambda value: "CLI" if value == "cli" else "CAF App API (local)",
                 )
             _, test_col, _ = st.columns([1, 2, 1])
             with test_col:
@@ -2134,26 +2950,97 @@ class CafCliRunPlugin(BotTypePlugin):
 
         self.flush_config(project)
         run_in_progress = st.session_state.get("_run_in_progress", False)
+        remote_job_config = {**config, "active_project_id": project["id"]}
+        tracked_remote_job = (
+            _tracked_remote_job(remote_job_config)
+            if config.get("execution_target") == "ssh" else None
+        )
+        if tracked_remote_job:
+            shared = st.session_state.get("caf_cli_exec_shared")
+            if not isinstance(shared, dict) or not shared.get("caf_remote_job_id"):
+                job_id = str(tracked_remote_job["job_id"])
+                shared = {
+                    "cancel_requested": False,
+                    "logs": [],
+                    "tool_output": [],
+                    "completed": False,
+                    "telemetry": {},
+                    "caf_remote_job_id": job_id,
+                    "caf_remote_job_recovery_pending": True,
+                }
+                st.session_state["caf_cli_exec_shared"] = shared
+                st.session_state["caf_cli_exec_logs"] = shared["logs"]
+            elif not shared.get("caf_remote_job_id"):
+                shared["caf_remote_job_id"] = str(tracked_remote_job["job_id"])
+        current_shared = st.session_state.get("caf_cli_exec_shared", {})
+        active_remote_job = bool(
+            tracked_remote_job
+            and not current_shared.get("completed")
+            and not current_shared.get("caf_remote_job_output_finished")
+        )
         active_session_conflict = bool(st.session_state.get("caf_cli_active_session_conflict"))
         app_restart_required = bool(st.session_state.get("caf_cli_app_restart_required"))
+        session_start_timeout = bool(st.session_state.get("caf_cli_session_start_timeout"))
         stop_active_and_retry = False
         restart_app_and_retry = False
+        retry_start = False
+
+        if target == "ssh":
+            jobs_cache_key = f"caf_cli_remote_jobs_{project['id']}"
+            cached_jobs = st.session_state.setdefault(
+                jobs_cache_key,
+                {
+                    "jobs": [], "error": "", "updated_at": 0.0, "refreshing": False,
+                    "purging": False, "generation": 0, "rendered_generation": 0,
+                },
+            )
+            if not cached_jobs.get("updated_at") and not cached_jobs.get("refreshing"):
+                _request_remote_caf_job_refresh(remote_job_config, cached_jobs)
+            _render_remote_caf_jobs_panel(st, project["id"], remote_job_config)
+
+            @st.fragment(run_every="4s")
+            def refresh_remote_jobs_timer() -> None:
+                """Refresh data invisibly; only full reruns replace the visible panel."""
+                cache = st.session_state.get(jobs_cache_key, cached_jobs)
+                now = time.time()
+                if not cache.get("refreshing") and now - float(cache.get("updated_at") or 0) >= 4:
+                    _request_remote_caf_job_refresh(remote_job_config, cache)
+                if int(cache.get("generation") or 0) != int(cache.get("rendered_generation") or 0):
+                    cache["rendered_generation"] = int(cache.get("generation") or 0)
+                    st.rerun(scope="app")
+
+            refresh_remote_jobs_timer()
         col_run, col_cancel, col_clear = st.columns([3, 1, 1])
         with col_run:
             run = st.button(
                 "▶  Execute", key="btn_caf_cli_exec_run", type="primary", use_container_width=True,
-                disabled=not ready or run_in_progress or active_session_conflict or app_restart_required,
+                disabled=not ready or run_in_progress or active_remote_job or active_session_conflict or app_restart_required or session_start_timeout,
             )
         with col_cancel:
             if st.button("⏹  Stop", key="btn_caf_cli_exec_cancel", use_container_width=True,
-                         disabled=not run_in_progress):
+                         disabled=not (run_in_progress or active_remote_job)
+                         or bool(st.session_state.get("caf_cli_exec_shared", {}).get("caf_job_stop_requested"))):
                 st.session_state["cancel_requested"] = True
                 shared = st.session_state.get("caf_cli_exec_shared", {})
+                if active_remote_job and not shared.get("caf_remote_job_id") and tracked_remote_job:
+                    shared["caf_remote_job_id"] = str(tracked_remote_job["job_id"])
                 shared["cancel_requested"] = True
                 cancel_ref = shared.get("cancel_ref")
                 if isinstance(cancel_ref, list) and cancel_ref:
                     cancel_ref[0] = True
                 if (
+                    config.get("execution_target") == "ssh"
+                    and shared.get("caf_remote_job_id")
+                    and not shared.get("caf_job_stop_requested")
+                ):
+                    shared["caf_job_stop_requested"] = True
+                    shared.setdefault("logs", []).append("[CAF JOB] Sending immediate cancel request to the remote job …")
+                    threading.Thread(
+                        target=_stop_caf_remote_job_background,
+                        args=(dict(remote_job_config), shared),
+                        daemon=True,
+                    ).start()
+                elif (
                     config.get("caf_cli_transport") == "api"
                     and not shared.get("caf_api_stop_requested")
                 ):
@@ -2172,6 +3059,7 @@ class CafCliRunPlugin(BotTypePlugin):
                 st.session_state["telemetry"] = {}
                 st.session_state.pop("caf_cli_active_session_conflict", None)
                 st.session_state.pop("caf_cli_app_restart_required", None)
+                st.session_state.pop("caf_cli_session_start_timeout", None)
                 st.rerun()
 
         if active_session_conflict and not run_in_progress:
@@ -2207,17 +3095,83 @@ class CafCliRunPlugin(BotTypePlugin):
                     st.session_state.pop("caf_cli_app_restart_required", None)
                     st.rerun()
 
-        st.markdown("**Execution Log**")
-        log_box = st.empty()
+        if session_start_timeout and not run_in_progress:
+            st.warning(
+                "CAF did not acknowledge starting the session in time. It may have started remotely; "
+                "retrying checks CAF first and will not stop an active session automatically."
+            )
+            retry_col, keep_col, _ = st.columns([2, 2, 1])
+            with retry_col:
+                retry_start = st.button(
+                    "Retry CAF request", key="btn_caf_cli_retry_start", type="primary", use_container_width=True,
+                )
+            with keep_col:
+                if st.button("Keep current CAF session", key="btn_caf_cli_keep_start_timeout", use_container_width=True):
+                    st.session_state.pop("caf_cli_session_start_timeout", None)
+                    st.rerun()
 
         def render_logs() -> None:
+            shared = st.session_state.get("caf_cli_exec_shared", {})
+            execution_status, status_style = _caf_execution_status(shared)
+            status_text = f"**Execution Status:** {execution_status}"
+            if status_style == "success":
+                st.success(status_text)
+            elif status_style == "error":
+                st.error(status_text)
+            elif status_style == "warning":
+                st.warning(status_text)
+            else:
+                st.info(status_text)
+            log_col, output_col = st.columns(2)
+            log_col.markdown("**Execution Log**")
+            output_col.markdown("**Tool Output**")
+            log_box = log_col.empty()
+            tool_output_box = output_col.empty()
+            if not shared.get("caf_remote_job_id"):
+                for entry in shared.get("logs", []):
+                    match = re.match(r"\[CAF JOB\] Started durable remote job ([A-Za-z0-9_-]+)", str(entry))
+                    if match:
+                        shared["caf_remote_job_id"] = match.group(1)
+                        break
+            if (
+                config.get("execution_target") == "ssh"
+                and shared.get("caf_remote_job_id")
+                and shared.get("caf_remote_job_output_monitor_version") != 4
+                and not shared.get("caf_remote_job_output_finished")
+            ):
+                shared["caf_remote_job_output_monitor_started"] = True
+                shared["caf_remote_job_output_monitor_version"] = 4
+                threading.Thread(
+                    target=_collect_remote_job_output,
+                    args=(dict(remote_job_config), shared, str(shared["caf_remote_job_id"])),
+                    daemon=True,
+                ).start()
             entries = [
                 {"text": _clean_execution_log_text(entry)}
-                for entry in st.session_state.get("caf_cli_exec_logs", [])[-200:]
+                for entry in shared.get("logs", [])[-200:]
             ]
             render_terminal(log_box, entries, lambda _line: "", height=360, follow_newest=True)
+            output_entries = [
+                {"text": _clean_execution_log_text(entry)}
+                for entry in shared.get("tool_output", [])
+            ]
+            execution_active = bool(
+                not shared.get("completed")
+                and (
+                    run_in_progress
+                    or active_remote_job
+                    or (
+                        shared.get("caf_remote_job_id")
+                        and not shared.get("caf_remote_job_output_finished")
+                    )
+                )
+            )
+            render_terminal(
+                tool_output_box, output_entries, lambda _line: "", empty_msg="Awaiting tool output…",
+                height=360, follow_newest=execution_active,
+            )
 
-        if (run or stop_active_and_retry or restart_app_and_retry) and not run_in_progress:
+        if (run or stop_active_and_retry or restart_app_and_retry or retry_start) and not (run_in_progress or active_remote_job):
             selected_sets = []
             for set_index, validation_set in enumerate(config.get("validation_sets", [])):
                 if not st.session_state.get(f"caf_cli_exec_vset_{set_index}_selected", True):
@@ -2244,6 +3198,7 @@ class CafCliRunPlugin(BotTypePlugin):
             st.session_state["cancel_requested"] = False
             st.session_state.pop("caf_cli_active_session_conflict", None)
             st.session_state.pop("caf_cli_app_restart_required", None)
+            st.session_state.pop("caf_cli_session_start_timeout", None)
             st.session_state["_run_in_progress"] = True
             shared = {
                 "cancel_requested": False,
@@ -2265,8 +3220,14 @@ class CafCliRunPlugin(BotTypePlugin):
         def _poll_caf_execution() -> None:
             shared = st.session_state.get("caf_cli_exec_shared", {})
             st.session_state["caf_cli_exec_logs"] = shared.get("logs", [])
-            render_logs()
             thread = st.session_state.get("caf_cli_exec_thread")
+            # A remote Stop is authoritative once its job journal reports a
+            # terminal state.  Do not keep the controls disabled while an old
+            # foreground event read finishes timing out in the background.
+            if shared.get("cancel_requested") and shared.get("caf_remote_job_output_finished"):
+                st.session_state["_run_in_progress"] = False
+                st.session_state.pop("caf_cli_exec_thread", None)
+                st.rerun()
             if thread and thread.is_alive():
                 if st.session_state.get("cancel_requested"):
                     shared["cancel_requested"] = True
@@ -2275,6 +3236,11 @@ class CafCliRunPlugin(BotTypePlugin):
                         cancel_ref[0] = True
                 if shared.get("cancel_requested"):
                     st.caption("Stop requested — waiting for the active CAF command to return.")
+                return
+
+            if active_remote_job and not shared.get("caf_remote_job_output_finished"):
+                if shared.get("cancel_requested"):
+                    st.caption("Stop requested — waiting for the remote CAF job to stop.")
                 return
 
             st.session_state["_run_in_progress"] = False
@@ -2287,29 +3253,42 @@ class CafCliRunPlugin(BotTypePlugin):
                     st.session_state["caf_cli_active_session_conflict"] = True
                 if telemetry.get("caf_app_restart_required"):
                     st.session_state["caf_cli_app_restart_required"] = True
+                if telemetry.get("caf_session_start_timeout"):
+                    st.session_state["caf_cli_session_start_timeout"] = True
                 from config.defaults import MAX_RUN_HISTORY
                 history_key = f"run_history_{project['id']}"
                 history = [*st.session_state.get(history_key, []), telemetry]
                 st.session_state[history_key] = history[-MAX_RUN_HISTORY:]
             st.rerun()
 
-        if run_in_progress:
-            _poll_caf_execution()
-        else:
+        # Only the live execution area reruns while CAF is active.  A full
+        # app rerun on every incoming journal event makes unrelated Execute
+        # controls and expanders visibly flash.
+        shared_for_output = st.session_state.get("caf_cli_exec_shared", {})
+        output_refresh = "1s" if (
+            run_in_progress
+            or active_remote_job
+            or (
+                shared_for_output.get("caf_remote_job_id")
+                and not shared_for_output.get("caf_remote_job_output_finished")
+            )
+        ) else None
+
+        @st.fragment(run_every=output_refresh)
+        def _render_live_caf_execution() -> None:
             render_logs()
 
-        if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
-            telemetry = st.session_state["telemetry"]
-            if telemetry.get("run_aborted"):
-                st.warning("CAF CLI evaluation did not complete.")
-            elif telemetry.get("validation_passed") is False:
-                st.error("CAF CLI evaluation completed, but validation failed.")
-            else:
-                st.success("CAF CLI evaluation completed.")
+        _render_live_caf_execution()
+
+        if run_in_progress or active_remote_job:
+            _poll_caf_execution()
+
 
     def run_evaluation(self, env: Any, config: dict[str, Any], on_log: Callable[[str], None]) -> dict[str, Any]:
         run_env = _environment_for_config(config)
         try:
+            if config.get("execution_target") == "ssh":
+                return run_caf_remote_job(run_env, config, on_log)
             if config.get("caf_cli_transport") == "api":
                 return run_caf_api_run(run_env, config, on_log)
             return run_caf_cli_run(run_env, config, on_log)

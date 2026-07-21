@@ -141,6 +141,24 @@ class TestValidationOutputHighlighting:
 
         assert rendered == '<mark class="validation-output-match">all clear\n</mark>'
 
+
+class TestCafTranscriptSections:
+    def test_keeps_every_assistant_turn_and_deduplicates_tool_result(self):
+        from ui.dashboard_tab import _caf_transcript_sections
+
+        responses, tool_output, turns = _caf_transcript_sections([
+            {"type": "response", "text": "I will inspect the target."},
+            {"type": "tool_call", "tool": "nmap", "args": {"args": "-F 11.0.0.1"}},
+            {"type": "tool_result", "tool": "nmap", "result": "Nmap done", "exit_code": 0},
+            {"type": "tool_result", "tool": "nmap", "result": "Nmap done", "exit_code": 0},
+            {"type": "response", "text": "The scan is complete."},
+        ])
+
+        assert turns == 2
+        assert "turn 1" in responses and "turn 2" in responses
+        assert responses.index("inspect") < responses.index("complete")
+        assert tool_output.count("Nmap done") == 1
+
 class TestActiveProjectIdIsPersisted:
     """Regression: the Execute tab must save ``active_project_id`` in config.json
     so the dashboard can correlate sessions with projects.  We assert against

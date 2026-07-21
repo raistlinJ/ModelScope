@@ -104,6 +104,35 @@ class TestExecuteCommandConstruction:
         result = env.execute("ls")
         assert result == {"stdout": "ok", "stderr": "", "exit_code": 0}
 
+    def test_drains_output_before_waiting_for_exit_status(self, monkeypatch):
+        calls: list[str] = []
+
+        class Channel:
+            def recv_exit_status(self):
+                calls.append("exit")
+                return 0
+
+        class Stream:
+            def __init__(self, label, data):
+                self.label = label
+                self.data = data
+                self.channel = Channel()
+
+            def read(self):
+                calls.append(self.label)
+                return self.data
+
+        class Client:
+            def exec_command(self, command, timeout=None):
+                return None, Stream("stdout", b"output"), Stream("stderr", b"warning")
+
+        env = SSHEnvironment(host="x", remote_cwd="/tmp")
+        env._client = Client()
+        monkeypatch.setattr(env, "connect", lambda: None)
+
+        assert env.execute("command") == {"stdout": "output", "stderr": "warning", "exit_code": 0}
+        assert calls == ["stdout", "stderr", "exit"]
+
     def test_exception_returns_error_dict(self, monkeypatch):
         env = SSHEnvironment(host="x", remote_cwd="/tmp")
         monkeypatch.setattr(env, "connect",

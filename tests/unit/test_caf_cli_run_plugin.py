@@ -17,7 +17,7 @@ def test_caf_cli_run_plugin_runs_chat_in_configured_environment(monkeypatch):
     create_environment = MagicMock(return_value=environment)
     runner = MagicMock(return_value=expected)
     monkeypatch.setattr("core.environment.create_environment", create_environment)
-    monkeypatch.setitem(plugin.run_evaluation.__func__.__globals__, "run_caf_cli_run", runner)
+    monkeypatch.setitem(plugin.run_evaluation.__func__.__globals__, "run_caf_remote_job", runner)
 
     config = {
         "execution_target": "ssh",
@@ -362,10 +362,12 @@ def test_caf_background_updates_a_single_wait_row(monkeypatch):
     assert shared["logs"] == [
         "[CAF WAIT] Waiting for CAF… 1s",
         "[CAF WAIT DONE] CAF resumed after 1s",
+        "[EXECUTION COMPLETE] Completed — succeeded.",
     ]
     assert session_logs == [
         "[CAF WAIT] Waiting for CAF… 0s",
         "[CAF WAIT DONE] CAF resumed after 1s",
+        "[EXECUTION COMPLETE] Completed — succeeded.",
     ]
 
 
@@ -498,6 +500,28 @@ def test_caf_api_replays_durable_events_after_its_cursor():
     assert session._events.get_nowait()["type"] == "tool_result"
 
 
+def test_local_caf_api_replay_uses_long_poll_when_supported():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.run_id = "api-run-1"
+    session.config = {"execution_target": "local"}
+    session._last_event_sequence = 3
+    session._durable_event_long_poll_available = True
+    session._durable_events_available = None
+    session._events = globals_["queue"].Queue()
+    session._request = MagicMock()
+    session._request.return_value.json.return_value = {"events": []}
+
+    session._replay_durable_events()
+
+    session._request.assert_called_once_with(
+        "GET", "/api/sessions/api-run-1/events?after=3&wait=10", timeout=(5, 20),
+    )
+
+
 def test_caf_api_logs_cidr_nmap_progress_with_a_target_count():
     refresh_bot_plugins()
     plugin = get_bot_plugin("caf_cli_run_bot")
@@ -512,6 +536,65 @@ def test_caf_api_logs_cidr_nmap_progress_with_a_target_count():
     assert "256 targets" in session.on_log.call_args.args[0]
     assert "running 2s" in session.on_log.call_args.args[0]
     session._log_event({"type": "tool_result", "tool": "nmap", "exit_code": 0, "duration_ms": 1})
+
+
+def test_caf_api_logs_incremental_tool_output_preview():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.on_log = MagicMock()
+    session._active_tool_progress = {"nmap": "nmap 11.0.0.0/24 — 256 targets"}
+
+    session._log_event({
+        "type": "tool_status", "tool": "nmap", "elapsed_seconds": 2,
+        "stdout_len": 42, "stderr_len": 0, "output_preview": "Nmap scan report for 11.0.0.12",
+    })
+
+    assert session.on_log.call_args.args[0] == "[VALIDATE CAF] [output] Nmap scan report for 11.0.0.12"
+    session._log_event({
+        "type": "tool_status", "tool": "nmap", "elapsed_seconds": 4,
+        "stdout_len": 42, "stderr_len": 0, "output_preview": "Nmap scan report for 11.0.0.12",
+    })
+    assert session.on_log.call_count == 3  # progress, output, then progress; no duplicate output
+
+
+def test_remote_caf_recovers_prompt_completion_from_durable_state():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafRemoteJobSession"]
+    env = MagicMock()
+    env.write_file.return_value = {}
+    logs: list[str] = []
+    session = session_class.__new__(session_class)
+    session.env = env
+    session.config = {"caf_cli_timeout": 30}
+    session.on_log = logs.append
+    session.job_id = "modelscope-test"
+    session.job_dir = ".modelscope_jobs/modelscope-test"
+    session.run_id = "modelscope-test"
+    session._last_event_sequence = 0
+    session._active_tool_progress = {}
+    session._last_tool_output_preview = {}
+    def _events_unavailable():
+        raise RuntimeError("SSH event channel reset")
+
+    session._events = _events_unavailable
+    session._runner = lambda action, *args, **kwargs: {
+        "stdout": '{"status":"ready","completed_prompt_id":"prompt-complete"}',
+    }
+
+    original_uuid4 = globals_["uuid"].uuid4
+    globals_["uuid"].uuid4 = lambda: type("PromptId", (), {"hex": "prompt-complete"})()
+    try:
+        result = session.run_prompt("scan target", preserve_context=True, cancel_ref=[False])
+    finally:
+        globals_["uuid"].uuid4 = original_uuid4
+
+    assert result["exit_code"] == 0
+    assert any("Event read delayed" in line for line in logs)
+    assert any("Durable prompt state confirms completion" in line for line in logs)
 
 
 def test_caf_api_retries_a_reset_get_on_a_fresh_closed_connection(monkeypatch):
@@ -563,6 +646,25 @@ def test_caf_api_uses_durable_polling_when_supported():
     assert session._durable_events_available is True
     assert session._request.call_args_list[-1].args == ("GET", "/api/sessions/api-run-1/events?after=0&limit=1")
     assert session._request.call_args_list[-1].kwargs == {"timeout": (5, 5)}
+
+
+def test_caf_api_times_out_and_requires_an_explicit_retry_when_start_acknowledgement_is_lost():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {}
+    session.on_log = MagicMock()
+    session._ensure_app_running = MagicMock(return_value={"status": "idle"})
+    session._payload = MagicMock(return_value={"model": "test"})
+    session._request = MagicMock(side_effect=RuntimeError("remote curl failed"))
+    session._session_started_by_modelscope = False
+    with pytest.raises(globals_["CafSessionStartTimeoutError"], match="retry to check again"):
+        session.start()
+
+    assert session._request.call_args.args == ("POST", "/api/session/start")
+    assert session._request.call_args.kwargs["timeout"] == (5, 20)
 
 
 def test_caf_api_legacy_app_requires_restart_confirmation():
@@ -642,7 +744,7 @@ def test_caf_api_manages_only_the_app_it_starts():
     globals_ = plugin.run_evaluation.__func__.__globals__
     session_class = globals_["_CafAppSession"]
     session = session_class.__new__(session_class)
-    session.config = {"execution_target": "ssh"}
+    session.config = {"execution_target": "local"}
     session.env = MagicMock(host="caf.example")
     session.on_log = MagicMock()
     session._managed_app_pid = None
@@ -783,3 +885,4 @@ def test_caf_execution_log_text_strips_terminal_controls():
     clean_log = plugin.run_evaluation.__func__.__globals__["_clean_execution_log_text"]
 
     assert clean_log("\x1b[31merror\x1b[0m\r\nready\x00") == "error\nready"
+    assert clean_log("b'Starting Nmap\\n'") == "Starting Nmap\n"

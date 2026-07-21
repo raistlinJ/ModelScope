@@ -130,12 +130,26 @@ class SSHEnvironment(BaseEnvironment):
     def connect(self) -> None:
         """Open SSH connection (idempotent)."""
         import paramiko
+        sftp_usable = False
+        if self._sftp is not None:
+            try:
+                # Paramiko can retain an active SSH transport after its SFTP
+                # channel has been closed by the server.  Treat that as a
+                # disconnected environment so the next file read reconnects
+                # instead of repeatedly reusing a dead channel.
+                channel = self._sftp.get_channel()
+                sftp_usable = getattr(channel, "closed", False) is not True
+            except (AttributeError, OSError, EOFError):
+                sftp_usable = False
         if (
             self._client is not None
             and self._client.get_transport() is not None
             and self._client.get_transport().is_active()
+            and sftp_usable
         ):
             return
+        if self._client is not None or self._sftp is not None:
+            self.close()
         client = paramiko.SSHClient()
         # SECURITY: AutoAddPolicy trusts unknown host keys on first contact,
         # so this connection is NOT protected against MITM. It is acceptable
@@ -222,10 +236,16 @@ class SSHEnvironment(BaseEnvironment):
             )
             full_cmd = self._command_in_cwd(f"{exports + ' ' if exports else ''}{command}")
             _, stdout, stderr = self._client.exec_command(full_cmd, timeout=timeout)
+            # Drain both streams before waiting for the exit status.  Paramiko
+            # warns that recv_exit_status() can hang forever when the remote
+            # command has filled its channel window (notably an event-journal
+            # replay with a large tool result) and the client has not read it.
+            stdout_data = stdout.read()
+            stderr_data = stderr.read()
             exit_code = stdout.channel.recv_exit_status()
             return {
-                "stdout":    stdout.read().decode("utf-8", errors="replace"),
-                "stderr":    stderr.read().decode("utf-8", errors="replace"),
+                "stdout":    stdout_data.decode("utf-8", errors="replace"),
+                "stderr":    stderr_data.decode("utf-8", errors="replace"),
                 "exit_code": exit_code,
             }
         except Exception as e:

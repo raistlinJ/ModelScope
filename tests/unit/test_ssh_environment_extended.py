@@ -58,6 +58,28 @@ class TestSSHEnvironmentConnect:
             env.connect()
         mock_ssh_cls.assert_not_called()
 
+    def test_connect_recreates_dead_sftp_channel(self):
+        env = SSHEnvironment(host="h", port=22, username="u", password="p", remote_cwd="/tmp")
+        old_client = MagicMock()
+        old_transport = MagicMock()
+        old_transport.is_active.return_value = True
+        old_client.get_transport.return_value = old_transport
+        old_sftp = MagicMock()
+        old_sftp.get_channel.return_value.closed = True
+        env._client = old_client
+        env._sftp = old_sftp
+
+        new_sftp = MagicMock()
+        new_sftp.getcwd.return_value = "/tmp"
+        with patch("paramiko.SSHClient") as mock_ssh_cls:
+            new_client = mock_ssh_cls.return_value
+            new_client.open_sftp.return_value = new_sftp
+            env.connect()
+
+        old_sftp.close.assert_called_once()
+        old_client.close.assert_called_once()
+        new_client.open_sftp.assert_called_once()
+
     def test_connect_opens_sftp(self):
         env = SSHEnvironment(host="h", port=22, username="u",
                              password="p", remote_cwd="/tmp")

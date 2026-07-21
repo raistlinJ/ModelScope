@@ -28,10 +28,20 @@ def render_terminal(
     classify(line: str) -> str  maps a single line to a CSS tag suffix.
     Return "" for unstyled lines; the entry's own ``tag`` is used as fallback.
     """
+    # The standard markdown renderer can be shown after a component-backed
+    # live terminal has stopped.  Keep its frame fully inline so it does not
+    # depend on the page stylesheet surviving a Streamlit refresh.
+    terminal_style = (
+        f"box-sizing:border-box;height:{height}px;overflow-y:auto;padding:14px 18px;"
+        "border:1px solid rgba(48,54,61,0.8);border-left:3px solid #58a6ff;"
+        "border-radius:8px;background:#0d1117;color:#c9d1d9;"
+        "font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"
+        "white-space:pre-wrap;word-break:break-word;"
+    )
     if not logs:
         placeholder.markdown(
             f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
-            f'style="height: {height}px">{empty_msg}</div>',
+            f'style="{terminal_style}">{empty_msg}</div>',
             unsafe_allow_html=True,
         )
         return
@@ -79,6 +89,6 @@ def render_terminal(
             pass
     placeholder.markdown(
         f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
-        f'style="height: {height}px">{inner}</div>',
+        f'style="{terminal_style}">{inner}</div>',
         unsafe_allow_html=True,
     )
