@@ -17,6 +17,7 @@ def test_registry_exposes_builtin_bot_types_in_order():
         "llama_cli_bot",
         "llama_server_bot",
         "caf_cli_run_bot",
+        "caf_llama_bot",
     ]
 
 
