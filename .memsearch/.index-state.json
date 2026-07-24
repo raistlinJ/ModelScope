@@ -1,0 +1,18 @@
+{
+  "collection": "ms_modelscope_1452eb79",
+  "failed_files": [],
+  "indexed_chunks": 0,
+  "indexed_files": 13,
+  "last_completed_at": "2026-07-24T15:19:30.123489Z",
+  "last_started_at": "2026-07-24T15:19:27.520716Z",
+  "last_success_at": "2026-07-24T15:19:30.123489Z",
+  "milvus_uri": "~/.memsearch/milvus.db",
+  "operation": "index",
+  "paths": [
+    "/home/dsch/ModelScope/.memsearch/memory"
+  ],
+  "schema_version": 1,
+  "status": "ok",
+  "total_files": 13,
+  "updated_at": "2026-07-24T15:19:30.123489Z"
+}
