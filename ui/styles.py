@@ -10,31 +10,8 @@ _CSS = r"""
    No external font CDN — uses system stacks only (CSP safe)
    ══════════════════════════════════════════════════════════════════ */
 
-/* ─ CSS Tokens ── dark-first (cyber-cyan / blue-teal) ───────────── */
+/* ─ Non-colour tokens. All structural colours come from ui.theme. ─ */
 :root {
-    /* Page canvas */
-    --bg:        #0d1117;
-    --surface:   #161b22;
-    --surface2:  #21262d;
-    --border:    #30363d;
-
-    /* Typography */
-    --text:      #e6edf3;
-    --muted:     #8b949e;
-
-    /* Accent — cyan that reads "security / terminal" */
-    --accent:    #2dd4bf;
-    --accent-hi: #5eead4;
-    --accent-dim: rgba(45,212,191,0.15);
-    --accent-glow: rgba(45,212,191,0.08);
-
-    /* Status semantics */
-    --success:   #3fb950;
-    --warn:      #f0883e;
-    --error:     #f85149;
-    --cmd-color: #f0883e;
-    --prompt-color: #2dd4bf;
-
     /* Fonts — system stacks only (no CDN import) */
     --font-mono: "JetBrains Mono", Menlo, Monaco, Consolas, "Liberation Mono",
                  "Courier New", monospace;
@@ -50,11 +27,14 @@ _CSS = r"""
 [data-testid="stAppViewContainer"],
 [data-testid="stHeader"] {
     background-color: var(--bg) !important;
+    color: var(--input-text) !important;
+    caret-color: var(--accent) !important;
 }
 
 [data-testid="stSidebar"] {
     background-color: var(--surface) !important;
     border-right: 1px solid var(--border) !important;
+    color: var(--text) !important;
 }
 
 [data-testid="stMainBlockContainer"],
@@ -142,7 +122,7 @@ h2 {
     margin-top: 1.25rem !important;
     margin-bottom: 0.6rem !important;
     letter-spacing: 0.1px;
-    background: linear-gradient(to right, rgba(45,212,191,0.06), transparent 60%) !important;
+    background: linear-gradient(to right, var(--accent-glow), transparent 60%) !important;
     border-radius: 0 4px 4px 0 !important;
     padding-top: 4px !important;
     padding-bottom: 4px !important;
@@ -157,7 +137,7 @@ h3 {
 
 /* ─ Tabs — underline style ──────────────────────────────────────── */
 [data-testid="stTabs"] [role="tablist"] {
-    border-bottom: 1px solid rgba(48,54,61,0.8) !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
     padding-bottom: 0;
     gap: 0;
     background: transparent;
@@ -190,16 +170,16 @@ h3 {
 /* ─ Expanders ────────────────────────────────────────────────────── */
 [data-testid="stExpander"] {
     background: var(--surface) !important;
-    border: 1px solid rgba(48,54,61,0.7) !important;
+    border: 1px solid var(--border-subtle) !important;
     border-radius: 10px !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 1px 2px rgba(0,0,0,0.18) !important;
+    box-shadow: 0 2px 8px var(--shadow) !important;
     overflow: hidden;
     margin-bottom: 0.75rem;
     transition: border-color var(--transition), box-shadow var(--transition);
 }
 [data-testid="stExpander"]:focus-within {
-    border-color: rgba(45,212,191,0.35) !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 0 0 1px rgba(45,212,191,0.12) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 2px 8px var(--shadow), 0 0 0 1px var(--accent-dim) !important;
 }
 [data-testid="stExpander"] summary {
     background: var(--surface2) !important;
@@ -214,7 +194,7 @@ h3 {
 }
 [data-testid="stExpander"] details[open] summary {
     background: var(--surface) !important;
-    border-bottom: 1px solid rgba(48,54,61,0.5) !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
     border-radius: 10px 10px 0 0;
 }
 [data-testid="stExpander"] summary:hover {
@@ -225,15 +205,15 @@ h3 {
 /* ─ Metrics ──────────────────────────────────────────────────────── */
 [data-testid="stMetric"] {
     background: var(--surface) !important;
-    border: 1px solid rgba(48,54,61,0.7) !important;
+    border: 1px solid var(--border-subtle) !important;
     border-radius: 10px !important;
     padding: 12px 16px !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 1px 2px rgba(0,0,0,0.14) !important;
+    box-shadow: 0 2px 8px var(--shadow) !important;
     transition: border-color var(--transition), box-shadow var(--transition);
 }
 [data-testid="stMetric"]:hover {
-    border-color: rgba(45,212,191,0.55) !important;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.32), 0 0 0 1px rgba(45,212,191,0.2) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 4px 14px var(--shadow), 0 0 0 1px var(--accent-dim) !important;
 }
 [data-testid="stMetricLabel"] {
     color: var(--muted) !important;
@@ -262,7 +242,7 @@ h3 {
     line-height: 1.75;
     border: 1px solid var(--terminal-border);
     border-left: 3px solid var(--accent);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 16px var(--shadow);
     white-space: pre-wrap;
     word-break: break-word;
     letter-spacing: 0.02em;
@@ -294,7 +274,7 @@ h3 {
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea,
 [data-testid="stNumberInput"] input {
-    background: var(--surface2) !important;
+    background: var(--input-bg) !important;
     border: 1px solid var(--border) !important;
     border-radius: 6px !important;
     color: var(--text) !important;
@@ -314,8 +294,8 @@ h3 {
 }
 
 /* ─ Select ───────────────────────────────────────────────────────── */
-[data-testid="stSelectbox"] > div > div {
-    background: var(--surface2) !important;
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background: var(--input-bg) !important;
     border: 1px solid var(--border) !important;
     border-radius: 6px !important;
     color: var(--text) !important;
@@ -332,7 +312,7 @@ h3 {
 
 /* ─ Buttons ──────────────────────────────────────────────────────── */
 div.stButton > button {
-    background: var(--surface2) !important;
+    background: var(--button-bg) !important;
     border: 1px solid var(--border) !important;
     border-radius: 6px !important;
     color: var(--text) !important;
@@ -343,13 +323,15 @@ div.stButton > button {
     text-transform: uppercase;
     transition: background var(--transition), border-color var(--transition),
                 color var(--transition), box-shadow var(--transition);
+    min-height: 34px !important;
     padding: 6px 14px !important;
+    white-space: nowrap !important;
 }
 div.stButton > button:hover {
     background: var(--surface) !important;
     border-color: var(--accent) !important;
     color: var(--accent) !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+    box-shadow: 0 2px 8px var(--shadow) !important;
 }
 div.stButton > button:disabled {
     opacity: 0.3 !important;
@@ -358,20 +340,20 @@ div.stButton > button:active:not(:disabled) {
     transform: translateY(1px);
 }
 
-/* Primary — cyan fill */
+/* Primary — a restrained accent tint rather than a dense filled block. */
 div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
-    background: var(--accent) !important;
+    background: var(--accent-dim) !important;
     border-color: var(--accent) !important;
-    color: var(--on-accent) !important;
-    box-shadow: 0 2px 8px rgba(45,212,191,0.25) !important;
+    color: var(--accent-hi) !important;
+    box-shadow: none !important;
 }
 div.stButton > button[kind="primary"]:hover,
 div.stButton > button[data-testid="baseButton-primary"]:hover {
-    background: var(--accent-hi) !important;
+    background: var(--accent-glow) !important;
     border-color: var(--accent-hi) !important;
-    color: var(--on-accent) !important;
-    box-shadow: 0 4px 14px rgba(45,212,191,0.35) !important;
+    color: var(--accent-hi) !important;
+    box-shadow: 0 2px 8px var(--shadow) !important;
 }
 
 /* Secondary */
@@ -396,12 +378,19 @@ div.stButton > button[kind="secondary"]:hover {
 [data-testid="stRadio"] > div {
     gap: 4px !important;
 }
+/* Execution-target and step-type radios carry their context in the expander
+   or section heading. Streamlit still emits a widget-label shell even with
+   label_visibility="collapsed"; hide that redundant shell explicitly so it
+   cannot inherit the pill styling or flash on hover. */
+[data-testid="stRadio"] > label[data-testid="stWidgetLabel"] {
+    display: none !important;
+}
 [data-testid="stRadio"] > div[role="radiogroup"] {
     flex-direction: row !important;
     flex-wrap: wrap;
     gap: 6px !important;
 }
-[data-testid="stRadio"] label {
+[data-testid="stRadio"] label[data-baseweb="radio"] {
     display: flex !important;
     align-items: center !important;
     gap: 6px !important;
@@ -413,12 +402,12 @@ div.stButton > button[kind="secondary"]:hover {
     transition: border-color var(--transition), background var(--transition), color var(--transition);
     font-size: 0.78rem !important;
 }
-[data-testid="stRadio"] label:hover {
+[data-testid="stRadio"] label[data-baseweb="radio"]:hover {
     border-color: var(--accent) !important;
     background: var(--accent-glow) !important;
     color: var(--accent) !important;
 }
-[data-testid="stRadio"] label:has(input:checked) {
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
     border-color: var(--accent) !important;
     background: var(--accent-dim) !important;
     color: var(--accent) !important;
@@ -444,6 +433,8 @@ div.stButton > button[kind="secondary"]:hover {
 
 /* ─ Checkbox ─────────────────────────────────────────────────────── */
 [data-testid="stCheckbox"] label {
+    display: flex !important;
+    align-items: center !important;
     color: var(--text) !important;
     font-size: 0.83rem !important;
     transition: color var(--transition);
@@ -454,10 +445,38 @@ div.stButton > button[kind="secondary"]:hover {
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > span:first-child {
     background: var(--surface) !important;
     border-color: var(--border) !important;
+    box-sizing: border-box !important;
+    flex: 0 0 16px !important;
+    width: 16px !important;
+    height: 16px !important;
+    position: relative !important;
 }
+/* Checked box: an explicit ::after tick, since setting `background` above
+   (rather than `background-color`) clobbers baseweb's own checkmark image. */
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
-    background: var(--accent) !important;
+    background-color: var(--accent) !important;
     border-color: var(--accent) !important;
+}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > span:first-child::after {
+    content: "" !important;
+    position: absolute !important;
+    left: 4px !important;
+    top: 1px !important;
+    width: 5px !important;
+    height: 9px !important;
+    border: solid var(--on-accent) !important;
+    border-width: 0 2px 2px 0 !important;
+    transform: rotate(45deg) !important;
+}
+/* Disabled box stays visually distinct from both the unchecked and the
+   checked states, in either theme. */
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:disabled) > span:first-child {
+    background-color: var(--surface2) !important;
+    border-color: var(--border-subtle) !important;
+    opacity: 0.65 !important;
+}
+[data-testid="stCheckbox"] label:has(input:disabled) {
+    color: var(--muted) !important;
 }
 
 /* ─ Badges ───────────────────────────────────────────────────────── */
@@ -518,8 +537,8 @@ div.stButton > button[kind="secondary"]:hover {
     animation: pulse-service 2.5s ease-in-out infinite;
 }
 @keyframes pulse-service {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63,185,80,0); }
-    50%       { opacity: 0.75; box-shadow: 0 0 0 4px rgba(63,185,80,0.12); }
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 transparent; }
+    50%       { opacity: 0.75; box-shadow: 0 0 0 4px var(--success-dim); }
 }
 .status-pill-down {
     background: var(--surface2);
@@ -542,8 +561,8 @@ div.stButton > button[kind="secondary"]:hover {
     transition: border-color var(--transition), box-shadow var(--transition);
 }
 .step-card:hover {
-    border-color: rgba(48,54,61,1);
-    box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+    border-color: var(--accent);
+    box-shadow: 0 2px 10px var(--shadow);
 }
 .step-card-prompt {
     border-left: 3px solid var(--prompt-color) !important;
@@ -568,19 +587,19 @@ div.stButton > button[kind="secondary"]:hover {
 }
 .step-badge-prompt {
     color: var(--prompt-color);
-    background: rgba(45,212,191,0.1);
-    border-color: rgba(45,212,191,0.4);
+    background: var(--accent-dim);
+    border-color: var(--prompt-color);
 }
 .step-badge-command {
     color: var(--cmd-color);
-    background: rgba(240,136,62,0.1);
-    border-color: rgba(240,136,62,0.4);
+    background: var(--warn-dim);
+    border-color: var(--cmd-color);
 }
 
 /* ─ Service active display box ───────────────────────────────────── */
 .service-active-box {
     background: var(--surface);
-    border: 1px solid rgba(63,185,80,0.4);
+    border: 1px solid var(--success);
     border-left: 3px solid var(--success);
     border-radius: 8px;
     padding: 10px 14px;
@@ -589,7 +608,7 @@ div.stButton > button[kind="secondary"]:hover {
 }
 @keyframes service-glow {
     0%, 100% { border-left-color: var(--success); }
-    50%       { border-left-color: rgba(63,185,80,0.5); }
+    50%       { border-left-color: var(--border); }
 }
 .service-active-box .service-label {
     color: var(--success);
@@ -611,7 +630,7 @@ div.stButton > button[kind="secondary"]:hover {
 /* Starting / loading state */
 .service-loading-box {
     background: var(--surface);
-    border: 1px solid rgba(240,136,62,0.35);
+    border: 1px solid var(--warn);
     border-left: 3px solid var(--warn);
     border-radius: 8px;
     padding: 10px 14px;
@@ -620,7 +639,7 @@ div.stButton > button[kind="secondary"]:hover {
 }
 @keyframes service-loading-pulse {
     0%, 100% { border-left-color: var(--warn); opacity: 1; }
-    50%       { border-left-color: rgba(240,136,62,0.4); opacity: 0.75; }
+    50%       { border-left-color: var(--border); opacity: 0.75; }
 }
 .service-loading-box .service-label {
     color: var(--warn);
@@ -673,11 +692,11 @@ code {
 }
 [data-testid="stCode"] pre {
     background: var(--surface2) !important;
-    border: 1px solid rgba(48,54,61,0.7) !important;
+    border: 1px solid var(--border-subtle) !important;
     border-radius: 8px !important;
     font-size: 0.78rem !important;
     padding: 12px 16px !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.18) !important;
+    box-shadow: 0 1px 4px var(--shadow) !important;
 }
 [data-testid="stCode"] pre code {
     background: transparent !important;
@@ -690,7 +709,7 @@ code {
     border-radius: 8px !important;
     border-left-width: 3px !important;
     background: var(--surface2) !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.18) !important;
+    box-shadow: 0 1px 4px var(--shadow) !important;
 }
 [data-testid="stAlert"] p,
 [data-testid="stAlert"] span,
@@ -737,6 +756,9 @@ code {
     font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    min-height: 34px !important;
+    padding: 6px 14px !important;
+    white-space: nowrap !important;
     transition: background var(--transition), border-color var(--transition),
                 color var(--transition) !important;
 }
@@ -744,7 +766,7 @@ code {
     border-color: var(--accent) !important;
     color: var(--accent) !important;
     background: var(--surface2) !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+    box-shadow: 0 2px 8px var(--shadow) !important;
 }
 
 /* ─ Spinner ──────────────────────────────────────────────────────── */
@@ -763,7 +785,7 @@ code {
     border-radius: 8px;
     margin-bottom: 8px;
     flex-wrap: wrap;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+    box-shadow: 0 1px 4px var(--shadow);
 }
 .model-status-bar .status-label {
     font-family: var(--font-mono);
@@ -811,9 +833,373 @@ code {
     letter-spacing: 0.4px;
     color: var(--accent);
     background: var(--accent-dim);
-    border: 1px solid rgba(45,212,191,0.3);
+    border: 1px solid var(--accent);
     border-radius: 4px;
     padding: 1px 6px;
+}
+
+/* ─ Streamlit structural surfaces and portal content ────────────── */
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stHorizontalBlock"],
+[data-testid="stForm"] {
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+}
+
+[data-testid="stPopoverBody"],
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+[role="listbox"] {
+    background: var(--popover-bg) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+    box-shadow: 0 8px 24px var(--shadow) !important;
+}
+[role="option"],
+[data-baseweb="menu"] li {
+    background: var(--popover-bg) !important;
+    color: var(--text) !important;
+}
+[role="option"]:hover,
+[role="option"][aria-selected="true"],
+[data-baseweb="menu"] li:hover {
+    background: var(--surface-hover) !important;
+    color: var(--text) !important;
+}
+
+/* Dialogs are rendered in a portal, outside the normal app subtree. */
+[data-testid="stDialog"] {
+    background-color: var(--overlay) !important;
+    color: var(--text) !important;
+}
+[data-testid="stDialog"] [role="dialog"],
+[data-testid="stDialog"] [data-baseweb="modal"],
+[role="dialog"][aria-modal="true"] {
+    background: var(--dialog-bg) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    box-shadow: 0 16px 48px var(--shadow) !important;
+}
+[data-testid="stDialog"] h1,
+[data-testid="stDialog"] h2,
+[data-testid="stDialog"] h3,
+[data-testid="stDialog"] label,
+[data-testid="stDialog"] p,
+[data-testid="stDialog"] span,
+[role="dialog"][aria-modal="true"] h1,
+[role="dialog"][aria-modal="true"] h2,
+[role="dialog"][aria-modal="true"] h3,
+[role="dialog"][aria-modal="true"] label {
+    color: var(--text) !important;
+}
+[data-testid="stDialog"] button[aria-label="Close"],
+[role="dialog"][aria-modal="true"] button[aria-label="Close"] {
+    background: var(--button-bg) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+}
+[data-testid="stDialog"] button[aria-label="Close"] svg,
+[role="dialog"][aria-modal="true"] button[aria-label="Close"] svg {
+    color: var(--text) !important;
+    fill: currentColor !important;
+}
+
+/* Streamlit's reconnect/error overlay is a frontend-owned modal, outside the
+   stDialog test-id tree. Theme its generic dialog/modal roots and descendants
+   so a light card can never retain the dark-theme's near-white text. */
+[role="dialog"],
+[data-baseweb="modal"],
+[data-testid="stConnectionError"] {
+    background: var(--dialog-bg) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+[role="dialog"] h1,
+[role="dialog"] h2,
+[role="dialog"] h3,
+[role="dialog"] p,
+[role="dialog"] span,
+[data-baseweb="modal"] h1,
+[data-baseweb="modal"] h2,
+[data-baseweb="modal"] h3,
+[data-baseweb="modal"] p,
+[data-baseweb="modal"] span,
+[data-testid="stConnectionError"] h1,
+[data-testid="stConnectionError"] h2,
+[data-testid="stConnectionError"] h3,
+[data-testid="stConnectionError"] p,
+[data-testid="stConnectionError"] span {
+    color: var(--text) !important;
+    -webkit-text-fill-color: var(--text) !important;
+    opacity: 1 !important;
+}
+[data-testid="stConnectionError"] code,
+[data-testid="stConnectionError"] pre,
+[role="dialog"] code,
+[role="dialog"] pre {
+    background: var(--terminal-bg) !important;
+    color: var(--terminal-text) !important;
+    border-color: var(--terminal-border) !important;
+}
+
+/* Help ("?") tooltip icon next to widget labels — scoped separately from
+   the close-button rule above. A fixed dark badge in both themes (so it
+   reads as a deliberate control, not themed text) with an UNFILLED svg:
+   filling it would merge the circle outline and question-mark into a
+   solid dot. Dark mode adds a border so the dark badge stays visible
+   against the also-dark page background. */
+/* Streamlit uses the same tooltip wrapper for actual help icons and for
+   ordinary controls carrying a `help=` tooltip (such as project delete).
+   Restrict the circular badge to the former so tooltip-wrapped action buttons
+   retain their normal geometry. */
+[data-testid="stTooltipIcon"]:has(button[aria-label^="Help for"]) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: var(--tooltip-bg) !important;
+    border: 1px solid var(--tooltip-border) !important;
+    border-radius: 50% !important;
+    width: 1.15rem !important;
+    height: 1.15rem !important;
+    min-width: 1.15rem !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+}
+[data-testid="stTooltipIcon"] button[aria-label^="Help for"],
+[data-testid="stTooltipHoverTarget"] > button[aria-label^="Help for"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 1.15rem !important;
+    height: 1.15rem !important;
+    min-width: 1.15rem !important;
+    padding: 0 !important;
+    background: var(--tooltip-bg) !important;
+    border: 1px solid var(--tooltip-border) !important;
+    border-radius: 50% !important;
+    color: var(--tooltip-icon) !important;
+}
+[data-testid="stTooltipIcon"] button[aria-label^="Help for"] svg {
+    fill: none !important;
+    stroke: var(--tooltip-icon) !important;
+    color: var(--tooltip-icon) !important;
+}
+[data-testid="stTooltipHoverTarget"] > button[aria-label^="Help for"] svg {
+    fill: none !important;
+    stroke: var(--tooltip-icon) !important;
+    color: var(--tooltip-icon) !important;
+}
+
+/* Current Streamlit input shells, including controls rendered in portals. */
+[data-testid="stTextInput"] [data-baseweb="input"],
+[data-testid="stNumberInput"] [data-baseweb="input"],
+[data-testid="stTextArea"] [data-baseweb="textarea"],
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div,
+[role="dialog"] [data-baseweb="input"],
+[role="dialog"] [data-baseweb="textarea"],
+[role="dialog"] [data-baseweb="select"] > div {
+    background: var(--input-bg) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+}
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stSelectbox"] input,
+[data-testid="stMultiSelect"] input,
+[role="dialog"] input,
+[role="dialog"] textarea {
+    background: var(--input-bg) !important;
+    color: var(--input-text) !important;
+    -webkit-text-fill-color: var(--input-text) !important;
+    caret-color: var(--accent) !important;
+}
+input::placeholder,
+textarea::placeholder {
+    color: var(--muted) !important;
+    opacity: 0.68 !important;
+    font-style: italic !important;
+}
+
+/* Password reveal controls are BaseWeb buttons nested inside an input shell.
+   They otherwise follow the browser's system theme rather than the selected
+   in-app theme. */
+[data-testid="stTextInput"] [data-baseweb="input"] button {
+    background: var(--input-bg) !important;
+    border: 0 !important;
+    color: var(--muted) !important;
+}
+[data-testid="stTextInput"] [data-baseweb="input"] button:hover {
+    background: var(--surface2) !important;
+    color: var(--text) !important;
+}
+[data-testid="stTextInput"] [data-baseweb="input"] button svg {
+    fill: none !important;
+    stroke: currentColor !important;
+}
+
+/* Disabled input shells must never resolve to the same colours as an
+   enabled control — this rule must come after the generic input-shell
+   rules above so it wins regardless of import order elsewhere. */
+[data-testid="stNumberInput"]:has(input:disabled) [data-baseweb="input"],
+[data-testid="stTextInput"]:has(input:disabled) [data-baseweb="input"] {
+    background: var(--surface2) !important;
+    border-color: var(--border-subtle) !important;
+}
+[data-testid="stNumberInput"] input:disabled,
+[data-testid="stTextInput"] input:disabled {
+    color: var(--muted) !important;
+    -webkit-text-fill-color: var(--muted) !important;
+    opacity: 0.65 !important;
+}
+
+/* ─ Optional-parameter cards ─────────────────────────────────────────
+   Shared by Llama-Server-Bot and CAF + llama.cpp's advanced runtime
+   grid (ui.optional_param_card) — an enabled card (its checkbox
+   checked) gets an accent border and tinted surface; a disabled one
+   stays muted. The disabled input-shell rule above already dims the
+   actual control inside it. */
+[class*="st-key-advcard_"] {
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    background: var(--surface) !important;
+    transition: border-color var(--transition), background var(--transition);
+}
+[class*="st-key-advcard_"]:has(input[type="checkbox"]:checked) {
+    border-color: var(--accent) !important;
+    background: var(--accent-dim) !important;
+}
+[class*="st-key-advcard_"]:has(input[type="checkbox"]:not(:checked)) {
+    background: var(--surface2) !important;
+    border-color: var(--border-subtle) !important;
+}
+
+/* Ordinary, arrow, form, download, and number-stepper buttons. */
+[data-testid="stButton"] button,
+button[data-testid^="stBaseButton-"],
+[data-testid="stPopoverButton"],
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stDownloadButton"] button,
+[data-testid="stNumberInput"] button,
+button[data-testid="stNumberInputStepUp"],
+button[data-testid="stNumberInputStepDown"] {
+    background: var(--button-bg) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+}
+[data-testid="stButton"] button:hover:not(:disabled),
+button[data-testid^="stBaseButton-"]:hover:not(:disabled),
+[data-testid="stPopoverButton"]:hover:not(:disabled),
+[data-testid="stFormSubmitButton"] button:hover:not(:disabled),
+[data-testid="stDownloadButton"] button:hover:not(:disabled),
+[data-testid="stNumberInput"] button:hover:not(:disabled) {
+    background: var(--surface-hover) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+[data-testid="stButton"] button[kind="primary"],
+button[data-testid="stBaseButton-primary"],
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+    background: var(--accent-dim) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent-hi) !important;
+}
+[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled),
+button[data-testid="stBaseButton-primary"]:hover:not(:disabled),
+[data-testid="stFormSubmitButton"] button[kind="primary"]:hover:not(:disabled) {
+    background: var(--accent-glow) !important;
+    border-color: var(--accent-hi) !important;
+    color: var(--accent-hi) !important;
+}
+[data-testid="stButton"] button:disabled,
+button[data-testid^="stBaseButton-"]:disabled,
+[data-testid="stPopoverButton"]:disabled,
+[data-testid="stNumberInput"] button:disabled {
+    background: var(--surface2) !important;
+    border-color: var(--border-subtle) !important;
+    color: var(--muted) !important;
+}
+
+/* Toggle and checkbox tracks must not inherit the opposite native theme. */
+[data-testid="stToggle"] label,
+[data-testid="stCheckbox"] label {
+    color: var(--text) !important;
+}
+[data-testid="stToggle"] button[role="switch"] {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+}
+[data-testid="stToggle"] button[role="switch"][aria-checked="true"] {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+
+/* Preserve semantics while deriving the alert's structural surface. */
+[data-testid="stAlert"]:has([data-testid="stNotificationContentInfo"]) {
+    background: var(--accent-dim) !important;
+}
+[data-testid="stAlert"]:has([data-testid="stNotificationContentWarning"]) {
+    background: var(--warn-dim) !important;
+}
+[data-testid="stAlert"]:has([data-testid="stNotificationContentError"]) {
+    background: var(--error-dim) !important;
+}
+[data-testid="stAlert"]:has([data-testid="stNotificationContentSuccess"]) {
+    background: var(--success-dim) !important;
+}
+
+/* The destructive treatment belongs on the confirmation action, not the
+   compact trash affordance in the project action row. */
+[class*="st-key-btn_confirm_delete_project"] button {
+    background: var(--error-dim) !important;
+    border-color: var(--error) !important;
+    color: var(--error) !important;
+}
+[class*="st-key-btn_confirm_delete_project"] button:hover {
+    background: var(--error) !important;
+    border-color: var(--error) !important;
+    color: var(--on-error) !important;
+}
+
+/* Validation editor controls live inside a popover over a dialog. Keep their
+   nested cards compact and visibly distinct without Streamlit's oversized
+   default container frame. */
+[data-testid="stPopoverBody"] [data-testid="stVerticalBlockBorderWrapper"] {
+    border-width: 1px !important;
+    border-radius: 6px !important;
+    padding: 0.45rem 0.55rem !important;
+    background: var(--surface2) !important;
+}
+[data-testid="stPopoverBody"] [data-testid="stVerticalBlockBorderWrapper"] [data-baseweb="input"],
+[data-testid="stPopoverBody"] [data-testid="stVerticalBlockBorderWrapper"] [data-baseweb="select"] > div {
+    background: var(--input-bg) !important;
+}
+
+/* BaseWeb renders the popover in a portal. Its direct content wrapper can
+   carry an independent native-theme surface, so reset that wrapper and the
+   text hierarchy explicitly rather than relying on inherited page styles. */
+[data-testid="stPopoverBody"],
+[data-baseweb="popover"] {
+    background: var(--surface2) !important;
+    color: var(--text) !important;
+}
+[data-testid="stPopoverBody"] > div,
+[data-baseweb="popover"] > div {
+    background: transparent !important;
+    color: inherit !important;
+}
+[data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"] span,
+[data-testid="stPopoverBody"] [data-testid="stCaptionContainer"] p,
+[data-baseweb="popover"] [data-testid="stMarkdownContainer"] p,
+[data-baseweb="popover"] [data-testid="stMarkdownContainer"] span,
+[data-baseweb="popover"] [data-testid="stCaptionContainer"] p {
+    color: var(--text) !important;
+}
+[data-testid="stPopoverBody"] [data-testid="stCaptionContainer"] p,
+[data-baseweb="popover"] [data-testid="stCaptionContainer"] p {
+    color: var(--muted) !important;
 }
 
 /* ─ Hide deploy button and main menu ────────────────────────────── */

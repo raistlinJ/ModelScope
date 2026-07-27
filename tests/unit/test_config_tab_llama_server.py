@@ -245,6 +245,62 @@ class TestScanProxBatchModels:
         mock_create_env.assert_not_called()
 
 
+class TestScanLlamaServerModelsSharedScanner:
+    """Llama-Server-Bot's local and SSH scans now go through the same
+    core.models scan primitive CAF + llama.cpp uses — directory or direct
+    .gguf file, no -type f restriction, distinct error surfacing."""
+
+    @patch("ui.config_tab.st")
+    def test_local_direct_gguf_file_populates_selector(self, mock_st, tmp_path):
+        mock_st.session_state = st.session_state
+        model_file = tmp_path / "solo.gguf"
+        model_file.touch()
+        project = _project()
+        _set_session(llama_server_model_dir=str(model_file))
+
+        _scan_llama_server_models(project)
+
+        assert [m["name"] for m in st.session_state["llama_server_discovered_models"]] == ["solo.gguf"]
+        assert st.session_state["llama_server_model_name"] == "solo.gguf"
+        mock_st.error.assert_not_called()
+
+    @patch("ui.config_tab.st")
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_missing_path_reports_distinct_error(self, mock_ssh_env_cls, mock_st):
+        mock_st.session_state = st.session_state
+        ssh_env = MagicMock()
+        ssh_env.execute.return_value = {"stdout": "", "stderr": "", "exit_code": 1}
+        mock_ssh_env_cls.return_value = ssh_env
+        project = _project()
+        _set_ssh_session()
+
+        _scan_llama_server_models(project)
+
+        mock_st.error.assert_called_once()
+        assert "not found" in mock_st.error.call_args.args[0]
+        ssh_env.close.assert_called_once()
+
+    @patch("ui.config_tab.st")
+    @patch("core.environment.SSHEnvironment")
+    def test_ssh_scan_has_no_type_f_restriction(self, mock_ssh_env_cls, mock_st):
+        mock_st.session_state = st.session_state
+        ssh_env = MagicMock()
+        ssh_env.execute.side_effect = [
+            {"stdout": "", "stderr": "", "exit_code": 0},  # test -e
+            {"stdout": "/home/jaime/.cache/models/a.gguf\n", "stderr": "", "exit_code": 0},  # find
+            {"stdout": "/home/jaime\n", "stderr": "", "exit_code": 0},  # echo $HOME
+        ]
+        mock_ssh_env_cls.return_value = ssh_env
+        project = _project()
+        _set_ssh_session()  # default model_dir is the tilde path "~/.cache/models"
+
+        _scan_llama_server_models(project)
+
+        find_cmd = ssh_env.execute.call_args_list[1].args[0]
+        assert "-type f" not in find_cmd
+        assert [m["name"] for m in st.session_state["llama_server_discovered_models"]] == ["a.gguf"]
+
+
 # ── _test_llama_server_run ────────────────────────────────────────────────────
 
 class TestTestLlamaServerRun:

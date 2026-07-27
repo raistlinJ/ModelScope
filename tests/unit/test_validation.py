@@ -3,7 +3,7 @@ Unit tests for evaluator._run_validation and evaluator._check_inefficiencies.
 """
 import pytest
 from unittest.mock import MagicMock, patch
-from core.evaluator import _run_validation, _check_inefficiencies
+from core.evaluator import _run_validation, _check_inefficiencies, _run_validation_sets
 
 
 def _mock_env(stdout="", stderr="", exit_code=0):
@@ -83,6 +83,30 @@ class TestRunValidation:
         result = _run_validation(env, "cmd", [])
         assert result["stdout"] == "out"
         assert result["stderr"] == "err"
+
+    def test_cancelled_validation_is_aborted_not_failed(self):
+        cancel_ref = [False]
+        env = MagicMock()
+
+        def cancel_during_command(*_args, **_kwargs):
+            cancel_ref[0] = True
+            return {"stdout": "", "stderr": "interrupted", "exit_code": -1}
+
+        env.execute.side_effect = cancel_during_command
+        logs: list[str] = []
+        passed, results = _run_validation_sets(
+            env,
+            [{"name": "cancel case", "steps": [{"commands": [{"command": "sleep 30"}]}]}],
+            logs.append,
+            cancel_ref=cancel_ref,
+        )
+
+        assert passed is None
+        assert results[0]["passed"] is None
+        assert results[0]["aborted"] is True
+        assert results[0]["steps"][0]["passed"] is None
+        assert "ABORTED" in "\n".join(logs)
+        assert "FAIL ✗" not in "\n".join(logs)
 
 
 # ── _check_inefficiencies ─────────────────────────────────────────────────────

@@ -11,23 +11,27 @@ run's own telemetry.
 from __future__ import annotations
 
 import os
-import shlex
 from typing import Any, Callable
 
 from core.bot_types.base import StatusItem
 from core.bot_types.llama_server_bot import LlamaServerBotPlugin
 from core.llama_metrics import fetch_llama_server_metrics, llama_server_metrics_delta
-from core.models import scan_gguf_models
+from core.models import resolve_model_path, scan_gguf_models, scan_gguf_models_via_env
 from core.utils import effective_verify_ssl
 from plugins.bot_types.caf_cli_run import (
     CAF_CLI_RUN_SESSION_DEFAULTS,
     CAF_CLI_RUN_STATE_KEY_MAP,
+    CAF_DEFAULT_DIRECTORY,
+    CAF_DEFAULT_SSH_PORT,
     CafActiveSessionError,
     CafAppRestartRequiredError,
     CafCliRunPlugin,
     CafSessionStartTimeoutError,
     _environment_for_config,
 )
+
+
+CAF_LLAMA_DEFAULT_MODEL_DIRECTORY = "~/.cache/huggingface/hub"
 
 
 CAF_LLAMA_SRV_STATE_KEY_MAP: dict[str, str] = {
@@ -66,7 +70,7 @@ CAF_LLAMA_SRV_STATE_KEY_MAP: dict[str, str] = {
 
 _CAF_LLAMA_SRV_DEFAULT_CONFIG: dict[str, Any] = {
     "binary_path": "",
-    "model_dir": "",
+    "model_dir": CAF_LLAMA_DEFAULT_MODEL_DIRECTORY,
     "model_name": "",
     "tokens": 32768,
     "server_ready_timeout": 300,
@@ -132,20 +136,18 @@ def _resolve_binary_and_model(config: dict[str, Any]) -> tuple[str, str]:
 
     model_dir = str(config.get("model_dir") or "")
     model_name = str(config.get("model_name") or "")
-    model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
-    if is_local:
-        model_path = os.path.abspath(os.path.expanduser(model_path))
+    model_path = resolve_model_path(model_dir, model_name, local=is_local)
     return binary, model_path
 
 
 def scan_caf_llama_models(config: dict[str, Any]) -> tuple[list[dict], str]:
     """Recursively discover inference GGUF models under Model Directory.
 
+    Model Directory may be a directory (scanned recursively, no depth limit)
+    or a single direct .gguf file (including a HuggingFace snapshot symlink).
     Scans wherever Execution Target points (local/SSH), reusing the same
-    shared connection CAF itself runs on — mirrors ui.config_tab's
-    _scan_llama_server_models SSH quoting/relpath convention, but adds an
-    explicit directory-existence check first so a missing directory is
-    reported distinctly from a real scan/connection failure.
+    shared connection CAF itself runs on and the same scan primitive
+    Llama-Server-Bot uses — see core.models.scan_gguf_models_via_env.
     """
     model_dir = str(config.get("model_dir") or "").strip()
     if not model_dir:
@@ -153,41 +155,14 @@ def scan_caf_llama_models(config: dict[str, Any]) -> tuple[list[dict], str]:
 
     if config.get("execution_target", "local") != "ssh":
         expanded = os.path.expanduser(model_dir)
-        if not os.path.isdir(expanded):
-            return [], f"Model directory not found: {model_dir}"
-        return scan_gguf_models(expanded), ""
+        if not os.path.exists(expanded):
+            return [], f"Model directory or file not found: {model_dir}"
+        models = scan_gguf_models(expanded)
+        return [{**item, "path": item["name"]} for item in models], ""
 
     env = _environment_for_config(config)
     try:
-        if model_dir.startswith("~/"):
-            dir_sh = f'"$HOME/{model_dir[2:]}"'
-        else:
-            dir_sh = shlex.quote(model_dir)
-
-        check = env.execute(f"test -d {dir_sh}", timeout=15)
-        if check.get("exit_code") == -1:
-            return [], f"SSH connection failed: {check.get('stderr') or 'unknown error'}"
-        if check.get("exit_code") != 0:
-            return [], f"Model directory not found on the SSH target: {model_dir}"
-
-        result = env.execute(f'find {dir_sh} -type f -name "*.gguf" -not -name "ggml-vocab-*"', timeout=20)
-        if result.get("exit_code") != 0:
-            return [], result.get("stderr") or result.get("stdout") or "Remote model scan failed."
-
-        paths = [line.strip() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
-
-        base_dir = model_dir
-        if base_dir.startswith("~/"):
-            home_result = env.execute("echo $HOME", timeout=10)
-            home = str(home_result.get("stdout") or "").strip()
-            if home:
-                base_dir = home + "/" + base_dir[2:]
-
-        models = []
-        for path in sorted(paths):
-            rel = path[len(base_dir):].lstrip("/") if base_dir and path.startswith(base_dir) else ""
-            models.append({"name": rel or path.rsplit("/", 1)[-1], "path": path})
-        return models, ""
+        return scan_gguf_models_via_env(env, model_dir)
     except Exception as exc:
         return [], f"Model scan failed: {exc}"
     finally:
@@ -216,7 +191,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
         # its connection in default_config/normalize/flush/render instead.
         "caf_llama_bot_metric_thresholds": {},
         "caf_llama_srv_binary_path": "",
-        "caf_llama_srv_model_dir": "",
+        "caf_llama_srv_model_dir": CAF_LLAMA_DEFAULT_MODEL_DIRECTORY,
         "caf_llama_srv_model_name": "",
         "caf_llama_srv_tokens": 32768,
         "caf_llama_srv_server_ready_timeout": 300,
@@ -269,6 +244,12 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
 
     def normalize_project_config(self, config: dict[str, Any]) -> dict[str, Any]:
         config = super().normalize_project_config(config)
+        if config.get("ssh_port") in (None, ""):
+            config["ssh_port"] = CAF_DEFAULT_SSH_PORT
+        if not str(config.get("caf_cli_directory") or "").strip():
+            config["caf_cli_directory"] = CAF_DEFAULT_DIRECTORY
+        if not str(config.get("model_dir") or "").strip():
+            config["model_dir"] = CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
         config["model_name"] = str(config.get("model_name") or "").strip()
         config["selected_model"] = config["model_name"]
         config["caf_cli_provider"] = "openai"
@@ -301,6 +282,8 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
     def _render_connection_fields(self) -> None:
         import streamlit as st
 
+        if not str(st.session_state.get("caf_llama_srv_model_dir") or "").strip():
+            st.session_state["caf_llama_srv_model_dir"] = CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
         managed_model = st.session_state.get("caf_llama_srv_model_name", "")
         derived_live_url = _derive_local_url({
             "server_host": st.session_state.get("caf_llama_srv_server_host", "127.0.0.1"),
@@ -334,7 +317,10 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
                 "Model Directory",
                 key="caf_llama_srv_model_dir",
                 placeholder="/home/user/models",
-                help="Directory containing the model file, joined with Model (GGUF) below.",
+                help=(
+                    "A directory to scan recursively (joined with Model (GGUF) below), "
+                    "or a direct path to a single .gguf file to use as-is."
+                ),
             )
         with scan_col:
             st.write("")
@@ -393,48 +379,31 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
             )
 
             st.markdown("**Sampling & performance**")
-            def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False, value_key_suffix=None, default_value=None):
-                with col:
-                    st.session_state.setdefault(f"caf_llama_srv_en_{key_suffix}", False)
-                    value_key = f"caf_llama_srv_{value_key_suffix or key_suffix}"
-                    if default_value is not None:
-                        st.session_state.setdefault(value_key, default_value)
-                    c1, c2 = st.columns([0.2, 0.8], gap="small")
-                    with c1:
-                        st.write("")
-                        st.write("")
-                        _en = st.checkbox(f"en_{key_suffix}", key=f"caf_llama_srv_en_{key_suffix}", label_visibility="collapsed", help=f"Enable {label}")
-                    with c2:
-                        st.number_input(
-                            label,
-                            min_value=float(min_v) if is_float else int(min_v),
-                            max_value=float(max_v) if is_float else int(max_v),
-                            step=float(step) if is_float else int(step),
-                            key=value_key,
-                            disabled=not _en,
-                            help=help_text,
-                            format="%.2f" if is_float else None,
-                        )
+            from ui.optional_param_card import render_flag_card, render_optional_param_card
 
-            adv_cols = st.columns(4)
+            def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False, value_key_suffix=None, default_value=None):
+                render_optional_param_card(
+                    col, state_prefix="caf_llama_srv", label=label, key_suffix=key_suffix,
+                    min_v=min_v, max_v=max_v, step=step, help_text=help_text, is_float=is_float,
+                    value_key_suffix=value_key_suffix, default_value=default_value,
+                )
+
+            adv_cols = st.columns(3)
             _adv_opt(adv_cols[0], "Temperature", "temp", 0.0, 2.0, 0.1, "Higher values = more random (--temp).", True, value_key_suffix="temperature", default_value=0.8)
             _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).", default_value=99)
             _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).", default_value=4)
-            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
 
-            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
-            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
-            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
-            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
+            _adv_opt(adv_cols[0], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
+            _adv_opt(adv_cols[1], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
+            _adv_opt(adv_cols[2], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
 
-            _adv_opt(adv_cols[0], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
-            _adv_opt(adv_cols[1], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
-            _adv_opt(adv_cols[2], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
-            with adv_cols[3]:
-                st.session_state.setdefault("caf_llama_srv_flash_attn", False)
-                st.write("")
-                st.write("")
-                st.checkbox("Flash Attn", key="caf_llama_srv_flash_attn", help="Use Flash Attention (-fa).")
+            _adv_opt(adv_cols[0], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
+            _adv_opt(adv_cols[1], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
+            _adv_opt(adv_cols[2], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
+
+            _adv_opt(adv_cols[0], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
+            _adv_opt(adv_cols[1], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
+            render_flag_card(adv_cols[2], key="caf_llama_srv_flash_attn", label="Flash Attn", help_text="Use Flash Attention (-fa).")
 
     def _scan_llama_models(self) -> None:
         import streamlit as st
@@ -457,11 +426,16 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
     # ── Execute UI ───────────────────────────────────────────────────────────
 
     def status_items(self, session_state, project: dict | None) -> list[StatusItem]:
-        items = list(super().status_items(session_state, project))
+        target = str(session_state.get("caf_cli_execution_target") or "local").upper()
+        ready = target == "LOCAL" or bool(str(session_state.get("caf_cli_ssh_host") or "").strip())
         model = session_state.get("caf_llama_srv_model_name") or "not chosen"
         port = session_state.get("caf_llama_srv_server_port") or 8080
-        items.append(StatusItem(f"llama-server: {model} :{port}", "up" if model != "not chosen" else "wait"))
-        return items
+        return [
+            StatusItem(f"Target: {target}", "up" if ready else "wait"),
+            StatusItem("Backend: llama.cpp", "up"),
+            StatusItem(f"Model: {model}", "up" if model != "not chosen" else "wait"),
+            StatusItem(f"Port: {port}", "up"),
+        ]
 
     # ── Evaluation ───────────────────────────────────────────────────────────
 

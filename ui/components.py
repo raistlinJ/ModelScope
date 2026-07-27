@@ -5,6 +5,8 @@ Import from here instead of defining badge/pill functions per-tab.
 """
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from config.metrics import METRIC_TYPES
 
 
@@ -52,6 +54,20 @@ def type_badge(type_key: str) -> str:
 def status_pill(label: str, state: str) -> str:
     """Status pill using CSS classes. state: 'up' | 'down' | 'wait'."""
     return f'<span class="status-pill status-pill-{state}">{label}</span>'
+
+
+def bot_status_bar_pills(
+    plugin: Any,
+    session_state: Mapping[str, Any],
+    project: dict[str, Any] | None,
+) -> str:
+    """Build the status bar with the active bot identity as its first pill."""
+    pills = [status_pill(f"BOT: {plugin.label}", "up")]
+    pills.extend(
+        status_pill(item.label, item.state)
+        for item in plugin.status_items(session_state, project)
+    )
+    return "".join(pills)
 
 
 # ── Semantic result badges ─────────────────────────────────────────────────────

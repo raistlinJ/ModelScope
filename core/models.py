@@ -6,6 +6,7 @@ metadata; it does not start servers (that is core.llama_server) or run inference
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 import requests
@@ -47,6 +48,82 @@ def scan_gguf_models(root_path: str) -> list[dict]:
                     size_gb = 0.0
                 results.append({"name": rel, "path": full, "size_gb": size_gb})
     return results
+
+
+def scan_gguf_models_via_env(env, root_path: str) -> tuple[list[dict], str]:
+    """Environment-aware counterpart to scan_gguf_models: recursively find
+    inference GGUF models under root_path — a directory or a single direct
+    .gguf file (including a HuggingFace snapshot symlink) — on whatever
+    machine `env.execute()` reaches (SSH, PCT, ...).
+
+    Shared by Llama-Server-Bot and CAF + llama.cpp so a model that appears
+    after Scan resolves to the exact same path both bots would launch.
+    Returns (models, error); error is '' on success. Connection failures,
+    a missing path, and command failures (e.g. permission denied) are
+    surfaced as distinct messages rather than a silent empty result.
+    """
+    root_path = (root_path or "").strip()
+    if not root_path:
+        return [], "Set Model Directory first."
+
+    if root_path.startswith("~/"):
+        root_sh = f'"$HOME/{root_path[2:]}"'
+    else:
+        root_sh = shlex.quote(root_path)
+
+    check = env.execute(f"test -e {root_sh}", timeout=15)
+    if check.get("exit_code") == -1:
+        return [], f"SSH connection failed: {check.get('stderr') or 'unknown error'}"
+    if check.get("exit_code") != 0:
+        return [], f"Model directory or file not found on the SSH target: {root_path}"
+
+    result = env.execute(
+        f'find {root_sh} -iname "*.gguf" -not -iname "ggml-vocab-*"',
+        timeout=20,
+    )
+    if result.get("exit_code") == -1:
+        return [], f"SSH connection failed: {result.get('stderr') or 'unknown error'}"
+
+    paths = [line.strip() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
+    if result.get("exit_code") != 0 and not paths:
+        return [], result.get("stderr") or result.get("stdout") or "Remote model scan failed."
+
+    base_dir = root_path
+    if base_dir.startswith("~/"):
+        home_result = env.execute("echo $HOME", timeout=10)
+        home = str(home_result.get("stdout") or "").strip()
+        if home:
+            base_dir = home + "/" + base_dir[2:]
+
+    models = []
+    for path in sorted(paths):
+        rel = path[len(base_dir):].lstrip("/") if base_dir and path.startswith(base_dir) else ""
+        relative_path = rel or path.rsplit("/", 1)[-1]
+        models.append({"name": relative_path, "path": relative_path})
+    return models, ""
+
+
+def resolve_model_path(model_root: str, selected_model: str, *, local: bool) -> str:
+    """Resolve the actual launch path for a model from a scan root + selection.
+
+    - model_root is a direct .gguf file (not a directory) -> returned as-is;
+      the selected name (its own basename) must never be appended again.
+    - model_root is a directory -> os.path.join(model_root, selected_model).
+    Local paths are `~`-expanded and made absolute; remote (SSH/PCT) paths
+    keep `~/` and relative forms untouched for the target's own shell to
+    expand. Used identically for scan-result selection, status checks,
+    managed-server startup, and evaluation, so a model that appears after
+    Scan is also the exact model launched.
+    """
+    model_root = (model_root or "").strip()
+    selected_model = (selected_model or "").strip()
+    if model_root and model_root.lower().endswith(".gguf"):
+        path = model_root
+    else:
+        path = os.path.join(model_root, selected_model) if model_root and selected_model else selected_model
+    if local:
+        path = os.path.abspath(os.path.expanduser(path))
+    return path
 
 
 def normalize_openai_base_url(base_url: str) -> str:

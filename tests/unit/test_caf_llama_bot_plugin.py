@@ -11,6 +11,7 @@ import streamlit as st
 
 from core.bot_types import get_bot_plugin, refresh_bot_plugins
 from core.state import _effective_defaults
+from core.state import sync_project
 from plugins.bot_types.caf_cli_run import (
     CAF_CLI_RUN_SESSION_DEFAULTS,
     CafActiveSessionError,
@@ -19,6 +20,7 @@ from plugins.bot_types.caf_cli_run import (
     CafSessionStartTimeoutError,
 )
 from plugins.bot_types.caf_llama_bot import (
+    CAF_LLAMA_DEFAULT_MODEL_DIRECTORY,
     CafLlamaBotPlugin,
     _derive_local_url,
     _resolve_binary_and_model,
@@ -37,6 +39,10 @@ def test_registry_discovers_caf_llama_bot():
 def test_plugin_subclasses_caf_cli_run_plugin():
     assert issubclass(CafLlamaBotPlugin, CafCliRunPlugin)
     assert isinstance(CafLlamaBotPlugin(), CafCliRunPlugin)
+
+
+def test_both_caf_plugins_use_the_same_tool_discovery_method():
+    assert CafLlamaBotPlugin._fetch_tools is CafCliRunPlugin._fetch_tools
 
 
 class TestPresentationHooks:
@@ -75,6 +81,49 @@ def test_derive_local_url_normalizes_wildcard_hosts():
 
 
 class TestConfigNormalization:
+    def test_fresh_config_uses_shared_caf_and_hugging_face_defaults(self):
+        config = CafLlamaBotPlugin().default_config()
+        assert config["ssh_port"] == 22
+        assert config["caf_cli_directory"] == "~/cyber-agent-flow"
+        assert config["model_dir"] == CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
+
+    def test_blank_defaults_are_repaired_without_overwriting_explicit_values(self):
+        plugin = CafLlamaBotPlugin()
+        repaired = plugin.normalize_project_config({
+            "ssh_port": "", "caf_cli_directory": " ", "model_dir": "",
+        })
+        assert repaired["ssh_port"] == 22
+        assert repaired["caf_cli_directory"] == "~/cyber-agent-flow"
+        assert repaired["model_dir"] == CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
+
+        explicit = plugin.normalize_project_config({
+            "ssh_port": 2222, "caf_cli_directory": "/opt/caf", "model_dir": "/models",
+        })
+        assert explicit["ssh_port"] == 2222
+        assert explicit["caf_cli_directory"] == "/opt/caf"
+        assert explicit["model_dir"] == "/models"
+
+    def test_project_switch_hydrates_corrected_defaults_for_blank_fields(self):
+        st.session_state.clear()
+        st.session_state.update({
+            "projects": [{
+                "id": "caf-blank",
+                "type": "caf_llama_bot",
+                "config": {
+                    "ssh_port": "",
+                    "caf_cli_directory": " ",
+                    "model_dir": None,
+                },
+            }],
+            "active_project_id": "caf-blank",
+        })
+
+        sync_project("caf-blank")
+
+        assert st.session_state["caf_cli_ssh_port"] == 22
+        assert st.session_state["caf_cli_directory"] == "~/cyber-agent-flow"
+        assert st.session_state["caf_llama_srv_model_dir"] == CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
+
     def test_locks_connection_fields(self):
         plugin = CafLlamaBotPlugin()
         config = {
@@ -367,6 +416,31 @@ class TestScanCafLlamaModels:
         assert error == ""
         names = sorted(m["name"] for m in models)
         assert names == [os.path.join("sub", "model.gguf"), "top.gguf"]
+        assert sorted(m["path"] for m in models) == names
+
+    def test_local_scan_finds_deep_hugging_face_snapshot_only_gguf(self, tmp_path):
+        snapshot = (
+            tmp_path / "models--owner--repository" / "snapshots" / "a1b2c3"
+            / "quantized" / "release"
+        )
+        snapshot.mkdir(parents=True)
+        (snapshot / "model-q4.gguf").touch()
+        (snapshot / "model.safetensors").touch()
+        (snapshot / "ggml-vocab-test.gguf").touch()
+        (tmp_path / "unrelated.txt").touch()
+
+        models, error = scan_caf_llama_models({
+            "execution_target": "local", "model_dir": str(tmp_path),
+        })
+
+        expected = os.path.join(
+            "models--owner--repository", "snapshots", "a1b2c3",
+            "quantized", "release", "model-q4.gguf",
+        )
+        assert error == ""
+        assert models == [{
+            "name": expected, "path": expected, "size_gb": 0.0,
+        }]
 
     def test_ssh_uses_shared_environment_and_closes_it(self, monkeypatch):
         fake_env = MagicMock()
@@ -401,7 +475,7 @@ class TestScanCafLlamaModels:
         models, error = scan_caf_llama_models(config)
 
         assert error == ""
-        assert models == [{"name": "model.gguf", "path": "/home/user/models/model.gguf"}]
+        assert models == [{"name": "model.gguf", "path": "model.gguf"}]
 
     def test_ssh_missing_directory_reports_distinct_error(self, monkeypatch):
         fake_env = MagicMock()

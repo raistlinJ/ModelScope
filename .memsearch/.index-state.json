@@ -1,11 +1,11 @@
 {
   "collection": "ms_modelscope_1452eb79",
   "failed_files": [],
-  "indexed_chunks": 0,
+  "indexed_chunks": 3,
   "indexed_files": 14,
-  "last_completed_at": "2026-07-27T14:35:45.880217Z",
-  "last_started_at": "2026-07-27T14:35:39.023013Z",
-  "last_success_at": "2026-07-27T14:35:45.880217Z",
+  "last_completed_at": "2026-07-27T19:45:02.857823Z",
+  "last_started_at": "2026-07-27T19:44:58.856320Z",
+  "last_success_at": "2026-07-27T19:45:02.857823Z",
   "milvus_uri": "~/.memsearch/milvus.db",
   "operation": "index",
   "paths": [
@@ -14,5 +14,5 @@
   "schema_version": 1,
   "status": "ok",
   "total_files": 14,
-  "updated_at": "2026-07-27T14:35:45.880217Z"
+  "updated_at": "2026-07-27T19:45:02.857823Z"
 }

@@ -20,10 +20,10 @@ _LAYER_LABEL = {
     "evaluation": "Evaluation Integrity",
 }
 
-_PASS_COLOUR   = "var(--success, #22c55e)"
-_FAIL_COLOUR   = "var(--error,   #ef4444)"
-_SKIP_COLOUR   = "var(--muted,   #9e8a62)"
-_ACCENT_COLOUR = "var(--accent,  #d97706)"
+_PASS_COLOUR   = "var(--success)"
+_FAIL_COLOUR   = "var(--error)"
+_SKIP_COLOUR   = "var(--muted)"
+_ACCENT_COLOUR = "var(--accent)"
 
 
 def _result_html(r: TestResult) -> str:
@@ -41,7 +41,7 @@ def _result_html(r: TestResult) -> str:
         f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;'
         f'line-height:1.7;padding:1px 0">'
         f'<span style="color:{colour};font-weight:700">{icon}</span> '
-        f'<span style="color:var(--text,#f0e8d4);font-weight:600">{r.name}</span> '
+        f'<span style="color:var(--text);font-weight:600">{r.name}</span> '
         f'<span style="color:{_SKIP_COLOUR}">— {r.detail}</span>'
         f'{dur}</div>'
     )
@@ -60,7 +60,9 @@ def _render_console(results: list[TestResult], placeholder) -> None:
     if not results:
         placeholder.markdown(
             '<div style="font-family:\'JetBrains Mono\',monospace;'
-            'font-size:0.82rem;color:var(--muted,#9e8a62);padding:0.5rem 0">'
+            'font-size:0.82rem;color:var(--muted);padding:0.75rem 1rem;'
+            'background:var(--terminal-bg);border:1px solid var(--terminal-border);'
+            'border-radius:6px">'
             'No results yet — run a check above.</div>',
             unsafe_allow_html=True,
         )
@@ -92,8 +94,8 @@ def _render_console(results: list[TestResult], placeholder) -> None:
         lines_html.append(_result_html(r))
 
     placeholder.markdown(
-        '<div style="background:var(--surface,#13100a);border:1px solid var(--border,#2e2818);'
-        'padding:1rem 1.2rem;border-radius:2px">'
+        '<div style="background:var(--terminal-bg);color:var(--terminal-text);'
+        'border:1px solid var(--terminal-border);padding:1rem 1.2rem;border-radius:6px">'
         + "".join(lines_html)
         + "</div>",
         unsafe_allow_html=True,

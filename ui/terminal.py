@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 import streamlit as st
-from ui.theme import ThemeName, current_theme, palette
+from ui.theme import ThemeName, current_theme, terminal_palette
 
 try:
     import streamlit.components.v1 as _st_components
@@ -34,7 +34,7 @@ def render_terminal(
     # live terminal has stopped.  Keep its frame fully inline so it does not
     # depend on the page stylesheet surviving a Streamlit refresh.
     active_theme = theme or current_theme()
-    colors = palette(active_theme)
+    colors = terminal_palette(active_theme)
     terminal_style = (
         f"box-sizing:border-box;height:{height}px;overflow-y:auto;padding:14px 18px;"
         f"border:1px solid {colors['terminal_border']};border-left:3px solid {colors['accent']};"
@@ -44,7 +44,8 @@ def render_terminal(
     )
     if not logs:
         placeholder.markdown(
-            f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
+            f'<div class="terminal-window" data-theme="{active_theme}" role="log" '
+            f'aria-live="polite" aria-label="Evaluation log" '
             f'style="{terminal_style}">{empty_msg}</div>',
             unsafe_allow_html=True,
         )
@@ -68,7 +69,8 @@ def render_terminal(
         # document from injected scripts is blocked in some Streamlit builds.
         terminal_html = f"""
         <style>
-          html, body {{ margin: 0; height: 100%; background: {colors['terminal_bg']}; }}
+          html, body {{ margin: 0; height: 100%; color-scheme: {active_theme};
+            background: {colors['terminal_bg']}; color: {colors['terminal_text']}; }}
           .terminal-window {{ box-sizing: border-box; height: {height}px; overflow-y: auto;
             padding: 12px; border: 1px solid {colors['terminal_border']}; border-left: 3px solid {colors['accent']};
             border-radius: 6px; background: {colors['terminal_bg']}; color: {colors['terminal_text']};
@@ -84,7 +86,7 @@ def render_terminal(
           .log-cmd {{ color: {colors['command']}; font-weight: 600; }}
           .log-prompt {{ color: {colors['prompt']}; font-weight: 600; }}
         </style>
-        <div class="terminal-window" id="terminal">{inner}</div>
+        <div class="terminal-window" id="terminal" data-theme="{active_theme}">{inner}</div>
         <script>
           const terminal = document.getElementById('terminal');
           terminal.scrollTop = terminal.scrollHeight;
@@ -100,7 +102,8 @@ def render_terminal(
             # components.
             pass
     placeholder.markdown(
-        f'<div class="terminal-window" role="log" aria-live="polite" aria-label="Evaluation log" '
+        f'<div class="terminal-window" data-theme="{active_theme}" role="log" '
+        f'aria-live="polite" aria-label="Evaluation log" '
         f'style="{terminal_style}">{inner}</div>',
         unsafe_allow_html=True,
     )

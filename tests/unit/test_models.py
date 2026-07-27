@@ -7,7 +7,10 @@ from unittest.mock import patch, MagicMock
 import requests as req_lib
 
 from core.utils import ensure_http_scheme as _ensure_scheme
-from core.models import _is_inference_model, scan_gguf_models, fetch_ollama_models
+from core.models import (
+    _is_inference_model, fetch_ollama_models, resolve_model_path,
+    scan_gguf_models, scan_gguf_models_via_env,
+)
 
 
 # ── _ensure_scheme ────────────────────────────────────────────────────────────
@@ -90,6 +93,104 @@ class TestScanGgufModels:
     def test_vocab_file_as_path_returns_empty(self, mock_isfile):
         models = scan_gguf_models("/models/ggml-vocab-llama.gguf")
         assert models == []
+
+
+# ── scan_gguf_models_via_env ───────────────────────────────────────────────────
+
+class TestScanGgufModelsViaEnv:
+    def test_empty_root_reports_error(self):
+        models, error = scan_gguf_models_via_env(MagicMock(), "")
+        assert models == []
+        assert "Model Directory" in error
+
+    def test_connection_failure_on_existence_check_is_distinct(self):
+        env = MagicMock()
+        env.execute.return_value = {"stdout": "", "stderr": "refused", "exit_code": -1}
+        models, error = scan_gguf_models_via_env(env, "/models")
+        assert models == []
+        assert "connection failed" in error.lower()
+
+    def test_missing_path_is_distinct_from_connection_failure(self):
+        env = MagicMock()
+        env.execute.return_value = {"stdout": "", "stderr": "", "exit_code": 1}
+        models, error = scan_gguf_models_via_env(env, "/nope")
+        assert models == []
+        assert "not found" in error
+
+    def test_directory_scan_has_no_type_f_restriction_and_excludes_vocab(self):
+        env = MagicMock()
+        env.execute.side_effect = [
+            {"stdout": "", "stderr": "", "exit_code": 0},  # test -e
+            {"stdout": "/models/a.gguf\n/models/sub/b.gguf\n", "stderr": "", "exit_code": 0},  # find
+        ]
+        models, error = scan_gguf_models_via_env(env, "/models")
+        assert error == ""
+        assert sorted(m["name"] for m in models) == ["a.gguf", "sub/b.gguf"]
+        find_cmd = env.execute.call_args_list[1].args[0]
+        assert "-type f" not in find_cmd
+        assert "ggml-vocab-*" in find_cmd
+
+    def test_direct_gguf_file_root_scans_as_single_model(self):
+        env = MagicMock()
+        env.execute.side_effect = [
+            {"stdout": "", "stderr": "", "exit_code": 0},  # test -e
+            {"stdout": "/models/one.gguf\n", "stderr": "", "exit_code": 0},  # find
+        ]
+        models, error = scan_gguf_models_via_env(env, "/models/one.gguf")
+        assert error == ""
+        assert models == [{"name": "one.gguf", "path": "one.gguf"}]
+
+    def test_tilde_root_expands_relative_to_remote_home(self):
+        env = MagicMock()
+        env.execute.side_effect = [
+            {"stdout": "", "stderr": "", "exit_code": 0},  # test -e
+            {"stdout": "/home/user/models/m.gguf\n", "stderr": "", "exit_code": 0},  # find
+            {"stdout": "/home/user\n", "stderr": "", "exit_code": 0},  # echo $HOME
+        ]
+        models, error = scan_gguf_models_via_env(env, "~/models")
+        assert error == ""
+        assert models == [{"name": "m.gguf", "path": "m.gguf"}]
+
+    def test_command_failure_surfaces_stderr_distinctly(self):
+        env = MagicMock()
+        env.execute.side_effect = [
+            {"stdout": "", "stderr": "", "exit_code": 0},  # test -e
+            {"stdout": "", "stderr": "find: Permission denied", "exit_code": 1},  # find
+        ]
+        models, error = scan_gguf_models_via_env(env, "/models")
+        assert models == []
+        assert "Permission denied" in error
+
+
+# ── resolve_model_path ─────────────────────────────────────────────────────────
+
+class TestResolveModelPath:
+    def test_directory_root_joins_with_selected_model(self):
+        assert resolve_model_path("/models", "sub/m.gguf", local=False) == "/models/sub/m.gguf"
+
+    def test_direct_gguf_root_is_returned_unchanged_not_double_appended(self):
+        # This is the exact regression: a direct-file root must never have
+        # the selected (basename) model name appended onto it again.
+        assert resolve_model_path("/models/one.gguf", "one.gguf", local=False) == "/models/one.gguf"
+
+    def test_local_directory_root_is_expanded_and_absolute(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = resolve_model_path("~/models", "m.gguf", local=True)
+        assert result == str(tmp_path / "models" / "m.gguf")
+
+    def test_local_direct_file_root_is_expanded_but_not_rejoined(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = resolve_model_path("~/models/one.gguf", "one.gguf", local=True)
+        assert result == str(tmp_path / "models" / "one.gguf")
+
+    def test_remote_tilde_root_is_left_unexpanded(self):
+        assert resolve_model_path("~/models", "m.gguf", local=False) == "~/models/m.gguf"
+
+    def test_no_model_name_falls_back_to_selection_only(self):
+        assert resolve_model_path("/models", "", local=False) == ""
+
+    def test_no_root_falls_back_to_selection_only(self):
+        assert resolve_model_path("", "m.gguf", local=False) == "m.gguf"
 
 
 # ── fetch_ollama_models ───────────────────────────────────────────────────────
