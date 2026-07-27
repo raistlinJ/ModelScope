@@ -176,8 +176,8 @@ def start_pct_managed_llama_server(
         command_parts.append(sanitized_custom_flags)
     server_command = " ".join(command_parts)
 
-    log_path = f"/tmp/modelscope_llama_server_{port}.log"
-    pid_path = f"/tmp/modelscope_llama_server_{port}.pid"
+    log_path = f"/var/log/modelscope_llama_server_{port}.log"
+    pid_path = f"/var/run/modelscope_llama_server_{port}.pid"
     
     # Proxmox 8's pct exec (lxc-attach) aggressively destroys the temporary cgroup
     # when it exits, instantly SIGKILLing all background processes (even setsid).
