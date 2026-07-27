@@ -3084,9 +3084,21 @@ def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
         fields = line.split(maxsplit=4)
         if not fields or not fields[0].isdigit():
             continue  # header and any non-container diagnostics
+            
+        vmid = fields[0]
+        status = fields[1] if len(fields) > 1 else "unknown"
+        
+        # Verify template status definitively using pct config
+        try:
+            cfg = subprocess.run(["pct", "config", vmid], capture_output=True, text=True, timeout=2)
+            if "template: 1" in cfg.stdout:
+                status = "template"
+        except Exception:
+            pass
+            
         containers.append({
-            "vmid": fields[0],
-            "status": fields[1] if len(fields) > 1 else "unknown",
+            "vmid": vmid,
+            "status": status,
             # pct list's optional Lock column is blank for most LXCs, so
             # whitespace-splitting alone cannot reliably locate Name.
             "name": line[name_column:].strip() if name_column >= 0 else fields[-1],
@@ -3131,29 +3143,50 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
     else:
         selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
         vmids = [item["vmid"] for item in containers]
+        def _is_template(c: dict) -> bool:
+            return c.get("status", "").lower() == "template" or "template" in c.get("name", "").lower()
+
+        selectable_vmids = [item["vmid"] for item in containers if not _is_template(item)]
         c_all, c_invert, _ = st.columns([1, 1, 2])
         with c_all:
             if st.button("Select all", use_container_width=True):
                 for vmid in vmids:
-                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = True
-                st.session_state["llama_server_pct_vmids"] = vmids
+                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in selectable_vmids
+                st.session_state["llama_server_pct_vmids"] = selectable_vmids
                 st.rerun()
         with c_invert:
             if st.button("Invert selection", use_container_width=True):
-                inverted = [vmid for vmid in vmids if vmid not in selected]
+                inverted = [vmid for vmid in selectable_vmids if vmid not in selected]
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
                 st.session_state["llama_server_pct_vmids"] = inverted
                 st.rerun()
 
+        templates = [c for c in containers if _is_template(c)]
+        regular = [c for c in containers if not _is_template(c)]
         checked: list[str] = []
-        for item in containers:
+        
+        for item in regular:
             vmid = item["vmid"]
             label = f"{vmid} — {item.get('name') or 'unnamed'} ({item.get('status', 'unknown')})"
             if item.get("ip"):
                 label += f" · {item['ip']}"
             if st.checkbox(label, value=vmid in selected, key=f"llama_server_proxbatch_vmid_{vmid}"):
                 checked.append(vmid)
+                
+        if templates:
+            st.markdown("<div style='margin-top: 1rem; margin-bottom: 0.5rem; color: #8b949e; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;'>Templates</div>", unsafe_allow_html=True)
+            for item in templates:
+                vmid = item["vmid"]
+                label = f"{vmid} — {item.get('name') or 'unnamed'} (template)"
+                st.checkbox(
+                    label,
+                    value=False,
+                    key=f"llama_server_proxbatch_vmid_{vmid}",
+                    disabled=True,
+                    help="Templates cannot be selected for batch execution",
+                )
+                
         st.session_state["llama_server_pct_vmids"] = checked
 
     st.divider()
