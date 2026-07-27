@@ -3946,6 +3946,7 @@ def _render_llama_server_runtime(project: dict) -> None:
                 st.rerun()
             
             if checking:
+                _flush_llama_server_config(project)
                 with st.spinner("Starting llama-server... (loading the model into memory may take a few minutes)"):
                     _test_llama_server_run(project)
                 st.session_state["llama_server_checking_status"] = False
