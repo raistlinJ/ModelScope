@@ -3132,13 +3132,12 @@ def _render_proxbatch_template_selector(project: dict, selected_vmids: list[str]
     names = project.get("config", {}).get("pct_vmid_names", {})
     names = names if isinstance(names, dict) else {}
     st.selectbox(
-        "Template LXC",
+        "Master LXC",
         options=selected_vmids,
         key="llama_server_pct_template_vmid",
         format_func=lambda vmid: f"{vmid} — {names[vmid]}" if names.get(vmid) else str(vmid),
         help=(
-            "Model scans and Check Status run against this container. Every selected "
-            "LXC is assumed to be set up identically and runs the same configuration."
+            "This will be used for setup; all commands/prompts will run in the same way as they run for this master LXC."
         ),
     )
 
@@ -3684,7 +3683,6 @@ def _render_llama_server_runtime(project: dict) -> None:
                 st.error(f"Could not scan LXCs: {scan_error}")
             if st.session_state.get("llama_server_proxbatch_dialog_open"):
                 _render_llama_server_proxbatch_vmid_dialog(project)
-            _render_proxbatch_template_selector(project, selected_vmids)
         else:
             target = st.radio(
                 "Mode",
@@ -3770,13 +3768,15 @@ def _render_llama_server_runtime(project: dict) -> None:
         st.session_state["llama_server_backend"] = "llama-server (managed)"
         _exec_target_for_warning = st.session_state.get("llama_server_execution_target", "local")
         if is_proxbatch:
+            selected_vmids = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+            _render_proxbatch_template_selector(project, selected_vmids)
             _template = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
             st.info(
                 "Each selected LXC runs its own llama-server **inside the container**, so the "
                 "Binary Path and Model Directory/Model below must point to files that exist "
                 "**inside every container** — they are assumed to be set up identically. "
-                + (f"Scanning and Check Status use template LXC **{_template}**."
-                   if _template else "Select a template LXC to scan models or check status.")
+                + (f"Scanning and Check Status use Master LXC **{_template}**."
+                   if _template else "Select a Master LXC to scan models or check status.")
             )
         elif _exec_target_for_warning == "ssh":
             st.info(
