@@ -119,7 +119,9 @@ class PCTManagedServer:
 def _container_path(path: str) -> str:
     """Quote a path for the container's shell, still letting ~/ expand."""
     if path.startswith("~/"):
-        return f'"$HOME/"{shlex.quote(path[2:])}'
+        # We use ~/ instead of "$HOME/" because systemd-run clears the HOME
+        # environment variable, which would cause $HOME to expand to nothing.
+        return f'~/{shlex.quote(path[2:])}'
     return shlex.quote(path)
 
 

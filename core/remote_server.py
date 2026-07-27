@@ -115,10 +115,9 @@ class SSHPortForward:
 
 
 def _quote_remote_path(path: str) -> str:
-    """Quote a path for a remote shell command, letting a leading ~/ still
-    expand via $HOME (shlex.quote on a literal "~" would defeat that)."""
+    """Quote a path for a remote shell, still letting ~/ expand."""
     if path.startswith("~/"):
-        return f'"$HOME/"{shlex.quote(path[2:])}'
+        return f'~/{shlex.quote(path[2:])}'
     return shlex.quote(path)
 
 
