@@ -89,7 +89,7 @@ class PCTManagedServer:
 
     def read_log_tail(self, chars: int = 2000) -> str:
         result = self._env.execute(
-            f"tail -c {chars} {shlex.quote(self._log_path)} 2>/dev/null", timeout=10,
+            f"tail -c {chars} {shlex.quote(self._log_path)} 2>&1 || cat {shlex.quote(self._log_path)} 2>&1", timeout=10,
         )
         return result.get("stdout", "")
 
@@ -177,7 +177,7 @@ def start_pct_managed_llama_server(
     server_command = " ".join(command_parts)
 
     log_path = f"/tmp/modelscope_llama_server_{port}.log"
-    launch = f"nohup {server_command} > {shlex.quote(log_path)} 2>&1 & echo $!"
+    launch = f"nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
 
     result = env.execute(launch, timeout=20)
@@ -197,7 +197,12 @@ def start_pct_managed_llama_server(
         if handle.poll() is not None:
             tail = handle.read_log_tail()
             if not tail.strip():
-                tail = f"Launch stdout: {result.get('stdout', '')}\nLaunch stderr: {result.get('stderr', '')}"
+                tail = (
+                    f"Launch stdout: {result.get('stdout', '')}\nLaunch stderr: {result.get('stderr', '')}\n\n"
+                    f"Hint: If stdout/stderr are empty and no log was produced, the llama-server binary "
+                    f"might be crashing instantly (e.g. SIGILL due to unsupported CPU instructions like AVX2), "
+                    f"or it might not be fully downloaded."
+                )
             raise RuntimeError(
                 f"llama-server exited immediately in LXC {vmid}"
                 + (f": {tail[-800:]}" if tail else "")
