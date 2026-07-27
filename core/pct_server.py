@@ -182,8 +182,10 @@ def start_pct_managed_llama_server(
     # Proxmox 8's pct exec (lxc-attach) aggressively destroys the temporary cgroup
     # when it exits, instantly SIGKILLing all background processes (even setsid).
     # We use systemd-run to launch it in a persistent system service cgroup.
+    import uuid
+    unit_id = uuid.uuid4().hex[:8]
     launch_sysd = (
-        f"systemd-run --unit=modelscope_llama_server_{port} --property=Type=simple "
+        f"systemd-run --unit=modelscope_llama_server_{port}_{unit_id} --property=Type=simple "
         f"/bin/bash -c 'echo $$ > {pid_path} && exec {server_command} > {shlex.quote(log_path)} 2>&1'"
     )
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
