@@ -3093,9 +3093,21 @@ def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
         fields = line.split(maxsplit=4)
         if not fields or not fields[0].isdigit():
             continue  # header and any non-container diagnostics
+            
+        vmid = fields[0]
+        status = fields[1] if len(fields) > 1 else "unknown"
+        
+        # Verify template status definitively using pct config
+        try:
+            cfg = subprocess.run(["pct", "config", vmid], capture_output=True, text=True, timeout=2)
+            if "template: 1" in cfg.stdout:
+                status = "template"
+        except Exception:
+            pass
+            
         containers.append({
-            "vmid": fields[0],
-            "status": fields[1] if len(fields) > 1 else "unknown",
+            "vmid": vmid,
+            "status": status,
             # pct list's optional Lock column is blank for most LXCs, so
             # whitespace-splitting alone cannot reliably locate Name.
             "name": line[name_column:].strip() if name_column >= 0 else fields[-1],
@@ -3140,7 +3152,10 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
     else:
         selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
         vmids = [item["vmid"] for item in containers]
-        selectable_vmids = [item["vmid"] for item in containers if item.get("status") != "template"]
+        def _is_template(c: dict) -> bool:
+            return c.get("status", "").lower() == "template" or "template" in c.get("name", "").lower()
+
+        selectable_vmids = [item["vmid"] for item in containers if not _is_template(item)]
         c_all, c_invert, _ = st.columns([1, 1, 2])
         with c_all:
             if st.button("Select all", use_container_width=True):
@@ -3156,8 +3171,8 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
                 st.session_state["llama_server_pct_vmids"] = inverted
                 st.rerun()
 
-        templates = [c for c in containers if c.get("status") == "template"]
-        regular = [c for c in containers if c.get("status") != "template"]
+        templates = [c for c in containers if _is_template(c)]
+        regular = [c for c in containers if not _is_template(c)]
         checked: list[str] = []
         
         for item in regular:
