@@ -998,11 +998,7 @@ def _render_llama_cli_execute(
 
     progress_placeholder = st.empty() if render_progress is not None else None
 
-    def _paint_progress() -> None:
-        if render_progress is None:
-            return
-        with progress_placeholder.container():
-            render_progress(project)
+    progress_placeholder = st.empty() if render_progress is not None else None
 
     col_sh, col_ll = st.columns(2)
     col_sh.markdown("**Setup/Cleanup Log**")
@@ -1054,7 +1050,8 @@ def _render_llama_cli_execute(
         if shared.get("phase"):
             st.session_state["_exec_phase"] = shared["phase"]
 
-        _paint_progress()
+        if render_progress is not None:
+            render_progress(project)
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
         thread = st.session_state.get("_run_thread")
@@ -1086,9 +1083,15 @@ def _render_llama_cli_execute(
     if run_in_progress:
         # The progress panel owns keyed widgets, so it must be painted by
         # exactly one of these branches per script run, never both.
-        _poll_llama_execution()
+        if progress_placeholder is not None:
+            with progress_placeholder.container():
+                _poll_llama_execution()
+        else:
+            _poll_llama_execution()
     else:
-        _paint_progress()
+        if progress_placeholder is not None:
+            with progress_placeholder.container():
+                render_progress(project)
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
 

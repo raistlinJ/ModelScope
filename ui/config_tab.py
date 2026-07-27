@@ -1121,7 +1121,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
         commands = step.get("commands", [])
 
         with st.container(border=True):
-            hc1, hcl_delay, hcv_delay, hc2, hc3, hc4 = st.columns([5.0, 0.8, 1.0, 1.0, 1.0, 0.7])
+            hc1, hcl_delay, hcv_delay, hc2, hc3, hc4 = st.columns([5.5, 0.9, 1.2, 0.6, 0.6, 0.6])
             with hc1:
                 _open_key = f"_sc_{pfx}_{step_id}_open"
                 _open = st.session_state.get(_open_key, True)
@@ -1129,7 +1129,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                 _label = f"{'▼' if _open else '▶'} Step {si + 1}{(' — ' + _preview) if _preview else ' — (empty)'}"
                 st.button(_label, key=f"_sc_{pfx}_{step_id}_toggle", use_container_width=True, help="Collapse/expand this step", on_click=_val_toggle, args=(_open_key, not _open))
             with hcl_delay:
-                st.markdown("<div style='margin-top: 6px; text-align: right; font-size: 14px;'>Delay (s)</div>", unsafe_allow_html=True)
+                st.markdown("<div style='margin-top: 10px; text-align: right; font-size: 14px;'>Delay (s)</div>", unsafe_allow_html=True)
             with hcv_delay:
                 delay_key = f"_sc_{pfx}_{step_id}_delay"
                 if delay_key not in st.session_state:
