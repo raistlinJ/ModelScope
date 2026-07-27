@@ -186,7 +186,7 @@ def start_pct_managed_llama_server(
     unit_id = uuid.uuid4().hex[:8]
     launch_sysd = (
         f"systemd-run --unit=modelscope_llama_server_{port}_{unit_id} --property=Type=simple "
-        f"/bin/bash -c 'echo $$ > {pid_path} && exec {server_command} > {shlex.quote(log_path)} 2>&1'"
+        f"/bin/bash -c 'exec {server_command} > {shlex.quote(log_path)} 2>&1'"
     )
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
     
@@ -194,9 +194,12 @@ def start_pct_managed_llama_server(
     if result.get("exit_code") == 0:
         for _ in range(10):  # Wait up to ~5 seconds for systemd to schedule it
             time.sleep(0.5)
-            pid_res = env.execute(f"cat {pid_path} 2>/dev/null", timeout=5)
-            pid = pid_res.get("stdout", "").strip()
-            if pid.isdigit():
+            pid_res = env.execute(f"systemctl show -p MainPID modelscope_llama_server_{port}_{unit_id}.service 2>/dev/null", timeout=5)
+            pid_str = pid_res.get("stdout", "").strip()
+            if pid_str.startswith("MainPID="):
+                pid_str = pid_str.split("=")[-1].strip()
+            pid = pid_str
+            if pid.isdigit() and pid != "0":
                 break
     else:
         # Fallback for alpine/non-systemd containers
