@@ -177,15 +177,30 @@ def start_pct_managed_llama_server(
     server_command = " ".join(command_parts)
 
     log_path = f"/tmp/modelscope_llama_server_{port}.log"
-    # Use setsid to completely detach the process from pct exec's pseudo-terminal session,
-    # preventing it from being killed when the env.execute() shell exits.
-    launch = f"setsid nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
+    pid_path = f"/tmp/modelscope_llama_server_{port}.pid"
+    
+    # Proxmox 8's pct exec (lxc-attach) aggressively destroys the temporary cgroup
+    # when it exits, instantly SIGKILLing all background processes (even setsid).
+    # We use systemd-run to launch it in a persistent system service cgroup.
+    launch_sysd = (
+        f"systemd-run --unit=modelscope_llama_server_{port} --property=Type=simple "
+        f"/bin/bash -c 'echo $$ > {pid_path} && exec {server_command} > {shlex.quote(log_path)} 2>&1'"
+    )
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
+    
+    result = env.execute(launch_sysd, timeout=20)
+    if result.get("exit_code") == 0:
+        time.sleep(0.5)
+        pid_res = env.execute(f"cat {pid_path} 2>/dev/null", timeout=5)
+        pid = pid_res.get("stdout", "").strip()
+    else:
+        # Fallback for alpine/non-systemd containers
+        launch_fallback = f"setsid nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
+        result = env.execute(launch_fallback, timeout=20)
+        stdout = (result.get("stdout") or "").strip()
+        pid = stdout.splitlines()[-1].strip() if stdout else ""
 
-    result = env.execute(launch, timeout=20)
-    stdout = (result.get("stdout") or "").strip()
-    pid = stdout.splitlines()[-1].strip() if stdout else ""
-    if result.get("exit_code", -1) != 0 or not pid.isdigit():
+    if not pid or not pid.isdigit():
         raise RuntimeError(
             f"Failed to start llama-server in LXC {vmid}: "
             f"{result.get('stderr') or result.get('stdout') or 'unknown error'}"
