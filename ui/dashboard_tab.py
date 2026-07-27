@@ -750,7 +750,7 @@ def _render_llama_cli_dashboard(
     caf_responses, caf_tool_output, caf_turns = _caf_transcript_sections(
         tel.get("caf_transcript_events")
     )
-    if bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output):
+    if bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output):
         st.subheader(f"CAF Transcript  ({caf_turns} assistant turn{'s' if caf_turns != 1 else ''})")
         response_col, tool_col = st.columns(2)
         with response_col:
@@ -765,7 +765,7 @@ def _render_llama_cli_dashboard(
             )
 
     # Fallback for historical CAF telemetry and all non-CAF runners.
-    if prompt_responses and not (bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output)):
+    if prompt_responses and not (bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output)):
         st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
         for i, pr in enumerate(prompt_responses):
             with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):
@@ -888,6 +888,13 @@ def render() -> None:
             _proj,
             bot_type="caf_cli_run_bot",
             metrics_key="caf_cli_metrics_matrix",
+        )
+        return
+    if _proj and _proj.get("type") == "caf_llama_bot":
+        _render_llama_cli_dashboard(
+            _proj,
+            bot_type="caf_llama_bot",
+            metrics_key="caf_llama_metrics_matrix",
         )
         return
 

@@ -2671,10 +2671,28 @@ class CafCliRunPlugin(BotTypePlugin):
             _render_metric_thresholds_config(project, self.type_id, self.flush_config)
         self.flush_config(project)
 
+    def _execution_target_intro(self) -> str | None:
+        """Optional guidance shown above the Execution Target controls.
+
+        Overridden by subclasses (e.g. CafLlamaBotPlugin) whose execution
+        target also governs an additional managed backend process, not just
+        CyberAgentFlow itself.
+        """
+        return None
+
+    def _backend_section_title(self) -> str:
+        """Title of the expander wrapping connection fields, Tools, and Run
+        Policy & Limits. Overridden by subclasses that fold an additional
+        backend's configuration into this same section."""
+        return "CyberAgentFlow CLI"
+
     def _render_runtime(self) -> None:
         import streamlit as st
 
         with st.expander("Execution Target", expanded=True):
+            intro = self._execution_target_intro()
+            if intro:
+                st.info(intro)
             target = st.radio("Mode", ["local", "ssh"], horizontal=True, key="caf_cli_execution_target", format_func=lambda value: "Local" if value == "local" else "SSH (Remote)")
             if target == "ssh":
                 col_host, col_port = st.columns([4, 1])
@@ -2710,29 +2728,8 @@ class CafCliRunPlugin(BotTypePlugin):
             if test_result:
                 (st.success if test_result[0] else st.error)(test_result[1])
 
-        with st.expander("CyberAgentFlow CLI", expanded=True):
-            st.caption("CyberAgentFlow uses this provider from its selected execution-target environment.")
-            provider = st.selectbox("Provider", ["ollama_direct", "openai", "litellm", "claude"], key="caf_cli_provider")
-            url_col, fetch_col = st.columns([4, 1])
-            with url_col:
-                provider_url = st.text_input("Provider URL", key="caf_cli_url")
-            with fetch_col:
-                st.write("")
-                st.write("")
-                if st.button("Fetch", key="btn_caf_cli_fetch_models", use_container_width=True):
-                    self._fetch_models()
-            if provider != "ollama_direct":
-                st.text_input("API Key (optional)", key="caf_cli_api_key", type="password")
-            if provider_url.strip().lower().startswith("https://"):
-                st.checkbox("Require SSL certificate verification", key="caf_cli_verify_ssl")
-
-            discovered = st.session_state.get("caf_cli_discovered_models", [])
-            names = [item["name"] for item in discovered if item.get("name")]
-            if names:
-                current = st.session_state.get("caf_cli_model", "")
-                st.selectbox("Model", names, index=names.index(current) if current in names else 0, key="caf_cli_model")
-            else:
-                st.text_input("Model", key="caf_cli_model", help="Fetch models from CAF's execution target, or enter a model ID manually.")
+        with st.expander(self._backend_section_title(), expanded=True):
+            self._render_connection_fields()
 
             with st.expander("Tools", expanded=False):
                 st.caption("Fetches the tools configured on CAF's selected execution target.")
@@ -2790,6 +2787,32 @@ class CafCliRunPlugin(BotTypePlugin):
             with completion_tab:
                 st.caption("Cleanup commands run on the execution target after validation finishes.")
                 _render_command_steps("caf_cli_completion_commands", "caf_cli_completion", "e.g. rm -rf /tmp/test_workdir")
+
+    def _render_connection_fields(self) -> None:
+        import streamlit as st
+
+        st.caption("CyberAgentFlow uses this provider from its selected execution-target environment.")
+        provider = st.selectbox("Provider", ["ollama_direct", "openai", "litellm", "claude"], key="caf_cli_provider")
+        url_col, fetch_col = st.columns([4, 1])
+        with url_col:
+            provider_url = st.text_input("Provider URL", key="caf_cli_url")
+        with fetch_col:
+            st.write("")
+            st.write("")
+            if st.button("Fetch", key="btn_caf_cli_fetch_models", use_container_width=True):
+                self._fetch_models()
+        if provider != "ollama_direct":
+            st.text_input("API Key (optional)", key="caf_cli_api_key", type="password")
+        if provider_url.strip().lower().startswith("https://"):
+            st.checkbox("Require SSL certificate verification", key="caf_cli_verify_ssl")
+
+        discovered = st.session_state.get("caf_cli_discovered_models", [])
+        names = [item["name"] for item in discovered if item.get("name")]
+        if names:
+            current = st.session_state.get("caf_cli_model", "")
+            st.selectbox("Model", names, index=names.index(current) if current in names else 0, key="caf_cli_model")
+        else:
+            st.text_input("Model", key="caf_cli_model", help="Fetch models from CAF's execution target, or enter a model ID manually.")
 
     def _fetch_models(self) -> None:
         import streamlit as st

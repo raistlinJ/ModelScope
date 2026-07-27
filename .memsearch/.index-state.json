@@ -1,0 +1,18 @@
+{
+  "collection": "ms_caf_llama_ports_model_b3e31511",
+  "failed_files": [],
+  "indexed_chunks": 2,
+  "indexed_files": 10,
+  "last_completed_at": "2026-07-24T18:02:58.811699Z",
+  "last_started_at": "2026-07-24T18:02:53.065308Z",
+  "last_success_at": "2026-07-24T18:02:58.811699Z",
+  "milvus_uri": "~/.memsearch/milvus.db",
+  "operation": "index",
+  "paths": [
+    "/home/dsch/ModelScope/.claude/worktrees/caf-llama-ports-model/.memsearch/memory"
+  ],
+  "schema_version": 1,
+  "status": "ok",
+  "total_files": 10,
+  "updated_at": "2026-07-24T18:02:58.811699Z"
+}
