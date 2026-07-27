@@ -15,13 +15,33 @@ port             = 8501
 maxMessageSize   = 200
 
 [theme]
-base                     = "dark"
-# Primary accent — cyan that reads "security / terminal"
+# System font stack (no CDN, CSP safe). Paired palettes let Streamlit follow
+# the browser preference before ModelScope records an explicit toggle choice.
+font = "sans serif"
+chartCategoricalColors = ["#0f766e", "#0969da", "#8250df", "#9a6700", "#1a7f37", "#cf222e"]
+
+[theme.light]
+primaryColor             = "#0f766e"
+backgroundColor          = "#f6f8fa"
+secondaryBackgroundColor = "#eef2f5"
+textColor                = "#1f2328"
+borderColor              = "#d0d7de"
+codeBackgroundColor      = "#eef2f5"
+codeTextColor            = "#1f2328"
+
+[theme.light.sidebar]
+backgroundColor          = "#ffffff"
+secondaryBackgroundColor = "#eef2f5"
+
+[theme.dark]
 primaryColor             = "#2dd4bf"
-# Canvas and widget backgrounds — GitHub dark neutrals
 backgroundColor          = "#0d1117"
 secondaryBackgroundColor = "#21262d"
-# Text
 textColor                = "#e6edf3"
-# System font stack (no CDN, CSP safe)
-font                     = "sans serif"
+borderColor              = "#30363d"
+codeBackgroundColor      = "#21262d"
+codeTextColor            = "#e6edf3"
+
+[theme.dark.sidebar]
+backgroundColor          = "#161b22"
+secondaryBackgroundColor = "#21262d"

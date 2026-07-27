@@ -123,7 +123,7 @@ def render_attack_tree(telemetry: dict) -> None:
             tdi_c = step.get("tdi_c", 0.0)
             tdi_s = step.get("tdi_s", 1.0)
             st.markdown(
-                f'<div style="background:#1e293b;border-radius:6px;padding:8px 12px;'
+                f'<div style="background:var(--surface2);border-radius:6px;padding:8px 12px;'
                 f'margin:4px 0;font-size:0.82rem;font-family:monospace">'
                 f'<b>TDI Dimensions</b>&nbsp; '
                 f'E(evidence)={tdi_e:.2f} &nbsp;|&nbsp; '

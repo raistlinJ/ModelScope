@@ -20,6 +20,9 @@ from config.defaults import (
 
 
 _DEFAULTS: dict = {
+    # UI presentation only; never copied into bot configuration or telemetry.
+    "ui_theme": "system",
+
     # Model / backend
     "backend_type":          "llama.cpp",
     "llm_url":               LLAMA_CPP_DEFAULT_URL,

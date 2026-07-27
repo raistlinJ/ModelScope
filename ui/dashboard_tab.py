@@ -115,10 +115,10 @@ def _render_scrollable_validation_output(
     st.markdown(
         f'''<style>
             .validation-output {{ max-height: {height}px; overflow: auto; padding: 0.6rem;
-                border: 1px solid rgba(151, 166, 195, 0.25); border-radius: 0.35rem;
-                background: rgba(151, 166, 195, 0.08); }}
+                border: 1px solid var(--border); border-radius: 0.35rem;
+                background: var(--surface2); color: var(--text); }}
             .validation-output pre {{ margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }}
-            .validation-output-match {{ background: rgba(46, 160, 67, 0.35); color: #b7f5c2;
+            .validation-output-match {{ background: var(--success-dim); color: var(--success);
                 border-radius: 0.15rem; padding: 0 0.1rem; }}
         </style><div class="validation-output"><pre>{rendered}</pre></div>''',
         unsafe_allow_html=True,
@@ -222,12 +222,12 @@ def _render_dashboard_heading(project: dict | None, telemetry: dict | None) -> N
 
 
 _THRESHOLD_STYLE = {
-    "hard_fail": ("HARD FAIL", "#e5484d", "rgba(229,72,77,0.16)"),
-    "soft_fail": ("SOFT FAIL", "#ec4899", "rgba(236,72,153,0.16)"),
-    "soft_pass": ("SOFT PASS", "#d4a72c", "rgba(212,167,44,0.16)"),
-    "hard_pass": ("HARD PASS", "#2da44e", "rgba(45,164,78,0.16)"),
-    "unclassified": ("BELOW CONFIGURED BANDS", "#94a3b8", "rgba(148,163,184,0.14)"),
-    "not_available": ("NOT AVAILABLE", "#94a3b8", "rgba(148,163,184,0.14)"),
+    "hard_fail": ("HARD FAIL", "var(--error)", "var(--error-dim)"),
+    "soft_fail": ("SOFT FAIL", "var(--soft-fail)", "var(--soft-fail-dim)"),
+    "soft_pass": ("SOFT PASS", "var(--warn)", "var(--warn-dim)"),
+    "hard_pass": ("HARD PASS", "var(--success)", "var(--success-dim)"),
+    "unclassified": ("BELOW CONFIGURED BANDS", "var(--muted)", "var(--surface2)"),
+    "not_available": ("NOT AVAILABLE", "var(--muted)", "var(--surface2)"),
 }
 
 
@@ -272,10 +272,10 @@ def _render_metric_cards(
             column.markdown(
                 f'<div style="min-height:92px;border:1px solid {color};border-left:4px solid {color};'
                 f'background:{background};border-radius:0.45rem;padding:0.65rem 0.75rem;">'
-                f'<div style="font-size:0.84rem;color:#94a3b8;margin-bottom:0.25rem;">{html.escape(label)}</div>'
-                f'<div style="font-size:1.45rem;font-weight:650;line-height:1.25;color:#f0f6fc;">{html.escape(value)}</div>'
+                f'<div style="font-size:0.84rem;color:var(--muted);margin-bottom:0.25rem;">{html.escape(label)}</div>'
+                f'<div style="font-size:1.45rem;font-weight:650;line-height:1.25;color:var(--text);">{html.escape(value)}</div>'
                 f'<div style="font-size:0.71rem;font-weight:750;color:{color};letter-spacing:0.25px;margin-top:0.35rem;">'
-                f'{status}</div><div style="font-size:0.68rem;color:#94a3b8;margin-top:0.1rem;">'
+                f'{status}</div><div style="font-size:0.68rem;color:var(--muted);margin-top:0.1rem;">'
                 f'{html.escape(threshold_text)}</div></div>',
                 unsafe_allow_html=True,
             )
@@ -358,10 +358,10 @@ def _render_metrics_evaluation(
         _cat_failed = sum(1 for _, r in items if r is False)
         _cat_total  = len(items)
         _cat_summary = (
-            f"  ·  <span style='color:#3fb950'>{_cat_passed} ✓</span>"
+            f"  ·  <span style='color:var(--success)'>{_cat_passed} ✓</span>"
             if _cat_passed else ""
         ) + (
-            f"  ·  <span style='color:#f85149'>{_cat_failed} ✗</span>"
+            f"  ·  <span style='color:var(--error)'>{_cat_failed} ✗</span>"
             if _cat_failed else ""
         )
         st.markdown(
@@ -390,11 +390,11 @@ def _render_metrics_evaluation(
                 # Observed value — coloured to match the result so it's
                 # scannable at a glance even without the badge column.
                 if result is True:
-                    _obs_colour = "#3fb950"
+                    _obs_colour = "var(--success)"
                 elif result is False:
-                    _obs_colour = "#f85149"
+                    _obs_colour = "var(--error)"
                 else:
-                    _obs_colour = "#94a3b8"
+                    _obs_colour = "var(--muted)"
                 rc[4].markdown(
                     f'<span style="color:{_obs_colour};font-size:0.85rem;'
                     f'font-family:ui-monospace,monospace;">'
@@ -750,7 +750,7 @@ def _render_llama_cli_dashboard(
     caf_responses, caf_tool_output, caf_turns = _caf_transcript_sections(
         tel.get("caf_transcript_events")
     )
-    if bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output):
+    if bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output):
         st.subheader(f"CAF Transcript  ({caf_turns} assistant turn{'s' if caf_turns != 1 else ''})")
         response_col, tool_col = st.columns(2)
         with response_col:
@@ -765,7 +765,7 @@ def _render_llama_cli_dashboard(
             )
 
     # Fallback for historical CAF telemetry and all non-CAF runners.
-    if prompt_responses and not (bot_type == "caf_cli_run_bot" and (caf_responses or caf_tool_output)):
+    if prompt_responses and not (bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output)):
         st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
         for i, pr in enumerate(prompt_responses):
             with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):
@@ -888,6 +888,13 @@ def render() -> None:
             _proj,
             bot_type="caf_cli_run_bot",
             metrics_key="caf_cli_metrics_matrix",
+        )
+        return
+    if _proj and _proj.get("type") == "caf_llama_bot":
+        _render_llama_cli_dashboard(
+            _proj,
+            bot_type="caf_llama_bot",
+            metrics_key="caf_llama_metrics_matrix",
         )
         return
 

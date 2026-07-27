@@ -1,5 +1,7 @@
 import streamlit as st
 
+from ui.theme import ThemeName, css_tokens
+
 _CSS = r"""
 <style>
 /* ══════════════════════════════════════════════════════════════════
@@ -249,8 +251,8 @@ h3 {
 
 /* ─ Terminal log ─────────────────────────────────────────────────── */
 .terminal-window {
-    background: var(--bg);
-    color: var(--text);
+    background: var(--terminal-bg);
+    color: var(--terminal-text);
     padding: 14px 18px;
     border-radius: 8px;
     height: 500px;
@@ -258,7 +260,7 @@ h3 {
     font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.75;
-    border: 1px solid rgba(48,54,61,0.8);
+    border: 1px solid var(--terminal-border);
     border-left: 3px solid var(--accent);
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     white-space: pre-wrap;
@@ -266,11 +268,11 @@ h3 {
     letter-spacing: 0.02em;
 }
 .terminal-window::-webkit-scrollbar { width: 4px; }
-.terminal-window::-webkit-scrollbar-track { background: var(--bg); }
+.terminal-window::-webkit-scrollbar-track { background: var(--terminal-bg); }
 .terminal-window::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .terminal-window::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-.log-init     { color: #56b6c2; }
+.log-init     { color: var(--info); }
 .log-tools    { color: var(--accent); font-weight: 500; }
 .log-llm      { color: var(--text); }
 .log-thinking { color: var(--muted); font-style: italic; }
@@ -282,9 +284,9 @@ h3 {
 .log-cancel   { color: var(--error); font-weight: 700; text-transform: uppercase; }
 .log-tokens   { color: var(--muted); font-size: 0.72rem; }
 .log-sys      { color: var(--muted); font-size: 0.74rem; font-style: italic; }
-.log-usr      { color: #56b6c2; font-size: 0.74rem; font-style: italic; }
-.log-cmd      { color: #d946ef; font-weight: 600; }
-.log-prompt   { color: #4ade80; font-weight: 600; }
+.log-usr      { color: var(--info); font-size: 0.74rem; font-style: italic; }
+.log-cmd      { color: var(--cmd-color); font-weight: 600; }
+.log-prompt   { color: var(--prompt-color); font-weight: 600; }
 .log-stream   { color: var(--text); }
 .log-decision { color: var(--warn); font-weight: 600; }
 
@@ -361,14 +363,14 @@ div.stButton > button[kind="primary"],
 div.stButton > button[data-testid="baseButton-primary"] {
     background: var(--accent) !important;
     border-color: var(--accent) !important;
-    color: var(--bg) !important;
+    color: var(--on-accent) !important;
     box-shadow: 0 2px 8px rgba(45,212,191,0.25) !important;
 }
 div.stButton > button[kind="primary"]:hover,
 div.stButton > button[data-testid="baseButton-primary"]:hover {
     background: var(--accent-hi) !important;
     border-color: var(--accent-hi) !important;
-    color: var(--bg) !important;
+    color: var(--on-accent) !important;
     box-shadow: 0 4px 14px rgba(45,212,191,0.35) !important;
 }
 
@@ -425,6 +427,20 @@ div.stButton > button[kind="secondary"]:hover {
 [data-testid="stRadio"] input[type="radio"] {
     accent-color: var(--accent) !important;
 }
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child {
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child > div {
+    background: var(--surface) !important;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child > div {
+    background: var(--on-accent) !important;
+}
 
 /* ─ Checkbox ─────────────────────────────────────────────────────── */
 [data-testid="stCheckbox"] label {
@@ -434,6 +450,14 @@ div.stButton > button[kind="secondary"]:hover {
 }
 [data-testid="stCheckbox"] input[type="checkbox"] {
     accent-color: var(--accent) !important;
+}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > span:first-child {
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
+}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
 }
 
 /* ─ Badges ───────────────────────────────────────────────────────── */
@@ -917,6 +941,7 @@ _SCROLL_JS = """
 """
 
 
-def inject() -> None:
+def inject(theme: ThemeName) -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+    st.markdown(css_tokens(theme), unsafe_allow_html=True)
     st.html(_SCROLL_JS)

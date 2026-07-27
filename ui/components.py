@@ -58,12 +58,12 @@ def status_pill(label: str, state: str) -> str:
 # Using semi-transparent fills + colored text to match the .badge-pass/fail/na
 # CSS classes, so inline and CSS-class badges remain visually consistent.
 
-_PASS_BG   = "rgba(63,185,80,0.18)"
-_FAIL_BG   = "rgba(248,81,73,0.18)"
-_NA_BG     = "rgba(48,54,61,0.5)"
-_PASS_CLR  = "#3fb950"
-_FAIL_CLR  = "#f85149"
-_NA_CLR    = "#8b949e"
+_PASS_BG   = "var(--success-dim)"
+_FAIL_BG   = "var(--error-dim)"
+_NA_BG     = "var(--surface2)"
+_PASS_CLR  = "var(--success)"
+_FAIL_CLR  = "var(--error)"
+_NA_CLR    = "var(--muted)"
 _BADGE_CSS = (
     "padding:3px 11px;border-radius:999px;font-size:0.70rem;"
     "font-weight:700;letter-spacing:0.5px;display:inline-block;border:1px solid"
@@ -74,7 +74,7 @@ def badge_pass(label: str = "PASS") -> str:
     """Pill-shaped PASS badge consistent with .badge-pass."""
     return (
         f'<span style="background:{_PASS_BG};color:{_PASS_CLR};'
-        f'{_BADGE_CSS} rgba(63,185,80,0.35)">{label}</span>'
+        f'{_BADGE_CSS} var(--success)">{label}</span>'
     )
 
 
@@ -82,7 +82,7 @@ def badge_fail(label: str = "FAIL") -> str:
     """Pill-shaped FAIL badge consistent with .badge-fail."""
     return (
         f'<span style="background:{_FAIL_BG};color:{_FAIL_CLR};'
-        f'{_BADGE_CSS} rgba(248,81,73,0.35)">{label}</span>'
+        f'{_BADGE_CSS} var(--error)">{label}</span>'
     )
 
 
@@ -90,5 +90,5 @@ def badge_na(label: str = "N/A") -> str:
     """Pill-shaped N/A badge consistent with .badge-na."""
     return (
         f'<span style="background:{_NA_BG};color:{_NA_CLR};'
-        f'{_BADGE_CSS} rgba(48,54,61,0.7)">{label}</span>'
+        f'{_BADGE_CSS} var(--border)">{label}</span>'
     )

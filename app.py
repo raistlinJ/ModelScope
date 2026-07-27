@@ -12,6 +12,7 @@ from core.settings_store import load_settings, reconcile_projects, save_settings
 from core.project_import import prepare_imported_project
 from ui.components import status_pill
 from ui.styles import inject
+from ui.theme import current_theme
 from ui import config_tab, execute_tab, dashboard_tab
 # from ui import caf_tab, target_tab  # CAF/Target tabs hidden — re-enable when CAF bot type is implemented
 
@@ -36,21 +37,6 @@ st.set_page_config(
 )
 
 configure_logging()
-
-inject()
-# Override any stale ::after rule lingering in the Streamlit module cache
-# and adjust popover width for project status overflow
-st.markdown(
-    "<style>"
-    ".spark-title::after{content:none!important;display:none!important}"
-    ".spark-title::before{content:none!important;display:none!important}"
-    "div[data-testid=\"stPopoverBody\"]:has(.project-status-icons) {"
-    "    min-width: min-content !important;"
-    "    width: fit-content !important;"
-    "}"
-    "</style>",
-    unsafe_allow_html=True,
-)
 init_state()
 
 _current_source_revision = _source_revision()
@@ -92,6 +78,30 @@ if not st.session_state.get("_settings_loaded"):
     if _max_id:
         st.session_state["_step_id_counter"] = _max_id
     st.session_state["_settings_loaded"] = True
+
+# Styling must be injected after the persisted preference is available. The
+# sidebar control below only changes this presentation state; it never flushes
+# into a bot config or touches an active evaluator.
+_active_theme = current_theme()
+# Keep a reconnecting browser's widget cache aligned with the durable
+# presentation preference. The callback below updates ui_theme first, so this
+# assignment never discards an interaction on the same rerun.
+st.session_state["ui_light_mode"] = _active_theme == "light"
+inject(_active_theme)
+
+# Override any stale ::after rule lingering in the Streamlit module cache
+# and adjust popover width for project status overflow.
+st.markdown(
+    "<style>"
+    ".spark-title::after{content:none!important;display:none!important}"
+    ".spark-title::before{content:none!important;display:none!important}"
+    "div[data-testid=\"stPopoverBody\"]:has(.project-status-icons) {"
+    "    min-width: min-content !important;"
+    "    width: fit-content !important;"
+    "}"
+    "</style>",
+    unsafe_allow_html=True,
+)
 
 # ── Auto-bootstrap: create a default Bash-Bot project if the list is empty ────
 def _make_default_project() -> dict:
@@ -302,8 +312,21 @@ if st.session_state.pop("_show_new_project_dialog", False):
 # ── Sidebar: project list ──────────────────────────────────────────────────────
 _BOT_ICON = {plugin.type_id: plugin.icon for plugin in iter_bot_plugins()}
 
+
+def _set_explicit_theme() -> None:
+    """Persist a display-only override without touching a running bot."""
+    st.session_state["ui_theme"] = (
+        "light" if st.session_state.get("ui_light_mode") else "dark"
+    )
+
 with st.sidebar:
     st.markdown("## ModelScope")
+    st.toggle(
+        "☀️  Light mode",
+        key="ui_light_mode",
+        help="Change the ModelScope interface only. Bot runs and their output are unchanged.",
+        on_change=_set_explicit_theme,
+    )
     st.markdown("### Projects")
     st.markdown(
         "<style>"

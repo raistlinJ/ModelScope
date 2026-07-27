@@ -322,7 +322,7 @@ def _render_bash_execute(project: dict) -> None:
                 ssh_info = f" ({cfg.get('ssh_user','root')}@{cfg.get('ssh_host','?')}:{cfg.get('ssh_port',22)})" if target == "ssh" else ""
                 target_str = f"Target: {target.upper()}{ssh_info}"
                 timeout_str = f"Timeout: {cfg.get('bash_timeout', 60)}s"
-                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
+                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color:var(--muted);font-size:0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
                 with st.expander(_phase_label("Startup", "startup"), expanded=False):
                     _render_step_list_readonly(_clean_steps(cfg.get("startup_commands", [])), "startup")
@@ -861,7 +861,7 @@ def _render_llama_cli_execute(
                 target_str = f"Target: {target.upper()}{ssh_info}"
                 model_name = cfg.get("model_name", "") or "not selected"
                 timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
-                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
+                st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color:var(--muted);font-size:0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
                 if render_targets is not None:
                     render_targets(project)

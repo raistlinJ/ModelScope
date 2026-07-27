@@ -19,6 +19,9 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 PERSIST_KEYS: frozenset[str] = frozenset({
+    # UI presentation (not project or run configuration)
+    "ui_theme",
+
     # Model / backend
     "backend_type",
     "llm_url",

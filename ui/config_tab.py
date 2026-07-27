@@ -227,12 +227,12 @@ def render() -> None:
            Include both variants as a safety net across minor versions. */
         [class*="st-key-btn_del_"] button,
         [class*="st-key-btn-del-"] button {
-            border-color: #c0392b !important;
-            color:         #c0392b !important;
+            border-color: var(--error) !important;
+            color:         var(--error) !important;
         }
         [class*="st-key-btn_del_"] button:hover,
         [class*="st-key-btn-del-"] button:hover {
-            background-color: #c0392b !important;
+            background-color: var(--error) !important;
             color:            #ffffff !important;
         }
         /* Secondary tabs (nested) — visually lighter than primary tabs */
@@ -249,9 +249,9 @@ def render() -> None:
            panel so it reads as a distinct floating layer instead of blending
            into the (near-identical dark) Validation Set modal behind it. */
         div[data-testid="stPopoverBody"] {
-            background-color: #1c2333 !important;
-            border: 1px solid rgba(45, 212, 191, 0.55) !important;
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6) !important;
+            background-color: var(--surface) !important;
+            border: 1px solid var(--accent) !important;
+            box-shadow: 0 6px 16px var(--shadow) !important;
             padding: 11px !important;
         }
         </style>
