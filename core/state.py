@@ -141,6 +141,8 @@ _DEFAULTS: dict = {
 # considered per-project state and will be reset on switch.
 
 _BASE_GLOBAL_KEYS: frozenset = frozenset({
+    # UI presentation (user-level, never project-level; never exported)
+    "ui_theme",
     # LLM / backend (user-level, not project-level)
     "backend_type", "llm_url", "model_dir", "llm_models", "selected_model",
     "selected_model_path", "context_size", "model_source_mode",
@@ -356,7 +358,26 @@ def sync_project(project_id: str) -> None:
     if plugin is not None:
         for state_key, cfg_key in plugin.state_key_map.items():
             if cfg_key in cfg:
-                st.session_state[state_key] = cfg[cfg_key]
+                value = cfg[cfg_key]
+                # CAF's corrected connection/cache defaults apply to missing
+                # and blank fields, while every other plugin retains its
+                # existing hydration semantics.
+                use_caf_fallback = (
+                    bot_type in {"caf_cli_run_bot", "caf_llama_bot"}
+                    and cfg_key in {
+                        "ssh_port", "caf_cli_directory",
+                        "caf_cli_tools_config", "model_dir",
+                    }
+                )
+                if use_caf_fallback and (
+                    value is None or (isinstance(value, str) and not value.strip())
+                ):
+                    fallback = plugin.session_defaults.get(state_key)
+                    if fallback is not None and not (
+                        isinstance(fallback, str) and not fallback.strip()
+                    ):
+                        value = copy.deepcopy(fallback)
+                st.session_state[state_key] = value
         for ckey in plugin.cache_keys:
             st.session_state.pop(ckey, None)
 

@@ -29,6 +29,11 @@ from core.bot_types.base import (
 from core.utils import effective_verify_ssl, strip_ansi
 
 
+CAF_DEFAULT_SSH_PORT = 22
+CAF_DEFAULT_DIRECTORY = "~/cyber-agent-flow"
+CAF_DEFAULT_TOOLS_CONFIG = "kali_tools.json"
+
+
 CAF_CLI_RUN_STATE_KEY_MAP = {
     "caf_cli_execution_target": "execution_target",
     "caf_cli_ssh_host": "ssh_host",
@@ -46,6 +51,7 @@ CAF_CLI_RUN_STATE_KEY_MAP = {
     "caf_cli_model": "selected_model",
     "caf_cli_api_key": "caf_cli_api_key",
     "caf_cli_verify_ssl": "caf_cli_verify_ssl",
+    "caf_cli_tools_config_path": "caf_cli_tools_config",
     "caf_cli_tool_catalog": "caf_cli_tool_catalog",
     "caf_cli_enabled_tools": "caf_cli_enabled_tools",
     "caf_cli_scope": "caf_scope",
@@ -71,11 +77,11 @@ CAF_CLI_RUN_STATE_KEY_MAP = {
 CAF_CLI_RUN_SESSION_DEFAULTS = {
     "caf_cli_execution_target": "local",
     "caf_cli_ssh_host": "",
-    "caf_cli_ssh_port": 22,
+    "caf_cli_ssh_port": CAF_DEFAULT_SSH_PORT,
     "caf_cli_ssh_user": "root",
     "caf_cli_ssh_password": "",
     "caf_cli_sudo": False,
-    "caf_cli_directory": "~/modelscope",
+    "caf_cli_directory": CAF_DEFAULT_DIRECTORY,
     "caf_cli_command": "./start_cli.sh",
     "caf_cli_transport": "api",
     "caf_cli_app_url": "http://127.0.0.1:5055",
@@ -85,6 +91,7 @@ CAF_CLI_RUN_SESSION_DEFAULTS = {
     "caf_cli_model": "",
     "caf_cli_api_key": "",
     "caf_cli_verify_ssl": True,
+    "caf_cli_tools_config_path": CAF_DEFAULT_TOOLS_CONFIG,
     "caf_cli_tool_catalog": [],
     "caf_cli_enabled_tools": [],
     "caf_cli_scope": "Narrow",
@@ -149,6 +156,29 @@ def _caf_execution_status(shared: Mapping[str, Any]) -> tuple[str, str]:
     if shared.get("caf_remote_job_id"):
         return "Running", "info"
     return "Idle", "info"
+
+
+def _new_caf_execution_shared() -> dict[str, Any]:
+    """Return the only live source for CAF execution panes.
+
+    Keeping this shape in one place prevents a cleared run from leaving the
+    log viewer attached to an old, write-only compatibility mirror.
+    """
+    return {
+        "cancel_requested": False,
+        "logs": [],
+        "tool_output": [],
+        "tool_output_seen": set(),
+        "completed": False,
+        "telemetry": {},
+    }
+
+
+def _validation_completion_label(*, passed: bool | None, aborted: bool) -> str:
+    """Format completion status without labelling a user cancel as a failure."""
+    if aborted:
+        return "ABORTED"
+    return "PASS" if passed else "FAIL"
 
 
 def _load_remote_job_registry() -> dict[str, Any]:
@@ -477,9 +507,7 @@ def _run_command(config: dict[str, Any]) -> str:
     # the Execute log can receive progress before the one-shot run exits.
     command = f"PYTHONUNBUFFERED=1 {launcher} run{continue_flag} {_caf_flags(config)} -- {shlex.quote(objective)}"
     if config.get("execution_target") == "local":
-        _proj_id = config.get("id")
-        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
-        directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
+        directory = os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))
         command = f"cd {shlex.quote(directory)} && {command}"
     return _caf_with_sudo(command, config)
 
@@ -547,7 +575,7 @@ def _environment_for_config(config: dict[str, Any]):
     return create_environment(
         ssh=config.get("execution_target") == "ssh",
         host=config.get("ssh_host", ""),
-        port=int(config.get("ssh_port") or 22),
+        port=int(config.get("ssh_port") or CAF_DEFAULT_SSH_PORT),
         username=config.get("ssh_user", "root"),
         password=config.get("ssh_password") or None,
         remote_cwd=config.get("caf_cli_directory") or None,
@@ -608,9 +636,7 @@ def test_caf_cli(config: dict[str, Any]) -> tuple[bool, str]:
         launcher = shlex.join(shlex.split(str(config.get("caf_cli_command") or "./start_cli.sh")))
     except ValueError as exc:
         return False, f"Invalid CAF CLI command: {exc}"
-    _proj_id = config.get("id")
-    _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
-    directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
+    directory = os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))
     is_ssh = config.get("execution_target") == "ssh"
     if not is_ssh and not os.path.isdir(directory):
         return False, f"CAF directory not found on this machine: {directory}"
@@ -643,15 +669,13 @@ def test_caf_cli(config: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _tools_config_path(config: dict[str, Any]) -> str:
-    return str(config.get("caf_cli_tools_config") or "kali_tools.json").strip()
+    return str(config.get("caf_cli_tools_config") or CAF_DEFAULT_TOOLS_CONFIG).strip()
 
 
 def _read_tools_command(config: dict[str, Any]) -> str:
     path = _tools_config_path(config)
     if config.get("execution_target") == "local":
-        _proj_id = config.get("id")
-        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
-        directory = os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))
+        directory = os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))
         return f"cd {shlex.quote(directory)} && cat {shlex.quote(path)}"
     if path.startswith("~/"):
         return f'cat "$HOME/{path[2:]}"'
@@ -659,23 +683,43 @@ def _read_tools_command(config: dict[str, Any]) -> str:
 
 
 def fetch_caf_tools(config: dict[str, Any]) -> tuple[list[dict], str]:
-    """Read CAF's target-local kali_tools.json catalog."""
+    """Read CAF's catalog from the exact local/SSH target that runs CAF."""
+    is_ssh = config.get("execution_target") == "ssh"
+    directory = str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY).strip()
+    path = _tools_config_path(config)
+    if not is_ssh and not os.path.isdir(os.path.expanduser(directory)):
+        return [], f"CAF directory not found on this machine: {directory}"
+
     env = _environment_for_config(config)
     try:
+        if is_ssh and hasattr(env, "connect"):
+            try:
+                env.connect()
+            except Exception as exc:
+                return [], f"SSH connection failed: {exc}"
         result = env.execute(_read_tools_command(config), timeout=20)
     finally:
         if hasattr(env, "close"):
             env.close()
     if result.get("exit_code") != 0:
-        return [], result.get("stderr") or result.get("stdout") or "Could not read CAF tools config."
+        detail = str(result.get("stderr") or result.get("stdout") or "no details").strip()
+        if is_ssh and result.get("exit_code") == -1:
+            return [], f"SSH connection failed: {detail}"
+        if is_ssh and ("cd:" in detail or "chdir" in detail.lower()):
+            return [], f"CAF directory is unavailable on the SSH target: {directory} ({detail})"
+        return [], f"CAF tools manifest is unreadable: {path} ({detail})"
     try:
         payload = json.loads(result.get("stdout") or "{}")
     except json.JSONDecodeError:
-        return [], "CAF tools config contains invalid JSON."
+        return [], f"CAF tools manifest contains invalid JSON: {path}"
+    if not isinstance(payload, dict):
+        return [], f"CAF tools manifest is malformed (expected an object): {path}"
     tools = payload.get("tools", [])
     if not isinstance(tools, list):
-        return [], "CAF tools config does not contain a tools list."
-    return [tool for tool in tools if isinstance(tool, dict) and tool.get("name")], ""
+        return [], f"CAF tools manifest is malformed (expected a tools list): {path}"
+    if any(not isinstance(tool, dict) or not str(tool.get("name") or "").strip() for tool in tools):
+        return [], f"CAF tools manifest is malformed (every tool needs a name): {path}"
+    return tools, ""
 
 
 def _prepare_selected_tools(env: Any, config: dict[str, Any]) -> dict[str, Any]:
@@ -697,9 +741,7 @@ def _prepare_selected_tools(env: Any, config: dict[str, Any]) -> dict[str, Any]:
 def _transcript(env: Any, config: dict[str, Any], run_id: str, on_log: Callable[[str], None]) -> tuple[str, dict]:
     root = pathlib.Path("runs")
     if config.get("execution_target") == "local":
-        _proj_id = config.get("id")
-        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
-        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))) / "runs"
+        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))) / "runs"
     try:
         transcript = env.read_file(str(root / run_id / "transcript.md"))
         metadata = json.loads(env.read_file(str(root / run_id / "metadata.json")))
@@ -719,9 +761,7 @@ def _caf_run_completed(env: Any, config: dict[str, Any], run_id: str) -> bool:
     """
     root = pathlib.Path("runs")
     if config.get("execution_target") == "local":
-        _proj_id = config.get("id")
-        _default_dir = f"~/modelscope/{_proj_id}" if _proj_id else "~/modelscope"
-        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or _default_dir))) / "runs"
+        root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))) / "runs"
     try:
         metadata = json.loads(env.read_file(str(root / run_id / "metadata.json")))
         return metadata.get("status") == "completed"
@@ -739,9 +779,7 @@ def _caf_run_ids(env: Any, config: dict[str, Any]) -> set[str]:
 
     try:
         if isinstance(env, LocalEnvironment):
-            project_id = config.get("id")
-            default_dir = f"~/modelscope/{project_id}" if project_id else "~/modelscope"
-            root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or default_dir))) / "runs"
+            root = pathlib.Path(os.path.expanduser(str(config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))) / "runs"
             return {entry.name for entry in root.iterdir() if entry.is_dir()}
         if isinstance(env, SSHEnvironment):
             result = env.execute("find runs -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'", timeout=10)
@@ -1220,7 +1258,7 @@ class _CafAppSession:
         log_path = f"/tmp/modelscope_caf_app_{os.getpid()}_{int(time.time() * 1000)}.log"
         command = f"nohup ./start_ws.sh </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
         if self.config.get("execution_target") != "ssh":
-            directory = os.path.expanduser(str(self.config.get("caf_cli_directory") or "~/modelscope"))
+            directory = os.path.expanduser(str(self.config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))
             command = f"cd {shlex.quote(directory)} && {command}"
         command = _caf_with_sudo(command, self.config)
         target = getattr(self.env, "host", "local machine")
@@ -1930,7 +1968,10 @@ def run_caf_remote_job(env: Any, config: dict[str, Any], on_log: Callable[[str],
     telemetry.update({"run_bot_type": "caf_cli_run_bot", "run_backend": "CyberAgentFlow remote job", "run_model": config.get("selected_model") or "(not configured)", "total_latency": round(time.time() - started, 3), "validation_passed": passed, "validation_sets_results": validation_results, "tool_calls": tool_calls, "prompt_responses": responses, "caf_transcript_events": caf_transcript_events, "run_aborted": bool(cancel_ref and cancel_ref[0])})
     if job_ref[0] is not None:
         telemetry["caf_run_id"] = job_ref[0].run_id
-    on_log(f"[COMPLETE] {telemetry['total_latency']}s | validation={'PASS' if passed else 'FAIL'}")
+    on_log(
+        f"[COMPLETE] {telemetry['total_latency']}s | validation="
+        f"{_validation_completion_label(passed=passed, aborted=telemetry['run_aborted'])}"
+    )
     return telemetry
 
 
@@ -1973,7 +2014,7 @@ def run_caf_api_run(env: Any, config: dict[str, Any], on_log: Callable[[str], No
     try:
         if cancel_ref and cancel_ref[0]:
             on_log("[CANCEL] CAF execution stopped before validation")
-            passed, validation_results = False, []
+            passed, validation_results = None, []
         else:
             passed, validation_results = _run_validation_sets(
                 env, _caf_validation_sets_without_system_prompts(config.get("validation_sets", [])), on_log,
@@ -2011,7 +2052,10 @@ def run_caf_api_run(env: Any, config: dict[str, Any], on_log: Callable[[str], No
     telemetry["validation_stdout"] = "\n".join(str(step.get("stdout") or "") for step in validation_steps)
     telemetry["validation_stderr"] = "\n".join(str(step.get("stderr") or "") for step in validation_steps)
     telemetry["validation_exit_code"] = validation_steps[-1].get("exit_code") if validation_steps else None
-    on_log(f"[COMPLETE] {telemetry['total_latency']}s | validation={'PASS' if passed else 'FAIL'}")
+    on_log(
+        f"[COMPLETE] {telemetry['total_latency']}s | validation="
+        f"{_validation_completion_label(passed=passed, aborted=telemetry['run_aborted'])}"
+    )
     return telemetry
 
 
@@ -2188,7 +2232,7 @@ def run_caf_cli_run(env: Any, config: dict[str, Any], on_log: Callable[[str], No
     }
     if cancel_ref and cancel_ref[0]:
         on_log("[CANCEL] CAF execution stopped before validation")
-        passed, validation_results = False, []
+        passed, validation_results = None, []
     else:
         passed, validation_results = _run_validation_sets(
             env, _caf_validation_sets_without_system_prompts(config.get("validation_sets", [])), on_log,
@@ -2221,7 +2265,10 @@ def run_caf_cli_run(env: Any, config: dict[str, Any], on_log: Callable[[str], No
     telemetry["validation_exit_code"] = validation_steps[-1].get("exit_code") if validation_steps else None
     if context_run_id[0]:
         telemetry["caf_run_id"] = context_run_id[0]
-    on_log(f"[COMPLETE] {telemetry['total_latency']}s | validation={'PASS' if passed else 'FAIL'}")
+    on_log(
+        f"[COMPLETE] {telemetry['total_latency']}s | validation="
+        f"{_validation_completion_label(passed=passed, aborted=telemetry['run_aborted'])}"
+    )
     return telemetry
 
 
@@ -2610,13 +2657,14 @@ class CafCliRunPlugin(BotTypePlugin):
 
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {
-            "execution_target": "local", "ssh_host": "", "ssh_port": 22, "ssh_user": "root", "ssh_password": "",
+            "execution_target": "local", "ssh_host": "", "ssh_port": CAF_DEFAULT_SSH_PORT, "ssh_user": "root", "ssh_password": "",
             "sudo": False,
-            "caf_cli_directory": "~/modelscope", "caf_cli_command": "./start_cli.sh",
+            "caf_cli_directory": CAF_DEFAULT_DIRECTORY, "caf_cli_command": "./start_cli.sh",
             "caf_cli_transport": "api", "caf_cli_app_url": "http://127.0.0.1:5055",
             "caf_cli_app_server_command": "python3 mcp_kali.py",
             "caf_cli_provider": "ollama_direct", "caf_cli_url": "http://localhost:11434", "selected_model": "",
             "caf_cli_api_key": "", "caf_cli_verify_ssl": True,
+            "caf_cli_tools_config": CAF_DEFAULT_TOOLS_CONFIG,
             "caf_cli_tool_catalog": [], "caf_cli_enabled_tools": [],
             "caf_scope": "Narrow", "caf_urgency": "Balanced", "caf_cli_context_window": 8192, "caf_cli_max_turns": 20,
             "caf_cli_tool_timeout": 120, "caf_cli_tool_output_chars": 6000, "caf_cli_allow": "*", "caf_cli_disallow": "",
@@ -2629,7 +2677,18 @@ class CafCliRunPlugin(BotTypePlugin):
     def status_items(self, session_state: Mapping[str, Any], project: dict | None) -> list[StatusItem]:
         target = session_state.get("caf_cli_execution_target", "local")
         ready = target == "local" or bool(str(session_state.get("caf_cli_ssh_host", "")).strip())
-        return [StatusItem(f"CAF target: {target.upper()}", "up" if ready else "wait")]
+        backend = str(session_state.get("caf_cli_provider") or "not configured")
+        model = str(session_state.get("caf_cli_model") or "not chosen")
+        endpoint = urlsplit(str(session_state.get("caf_cli_url") or ""))
+        port = endpoint.port if endpoint.hostname else None
+        if port is None and endpoint.scheme in {"http", "https"}:
+            port = 443 if endpoint.scheme == "https" else 80
+        return [
+            StatusItem(f"Target: {str(target).upper()}", "up" if ready else "wait"),
+            StatusItem(f"Backend: {backend}", "up" if backend != "not configured" else "wait"),
+            StatusItem(f"Model: {model}", "up" if model != "not chosen" else "wait"),
+            StatusItem(f"Port: {port if port is not None else 'not set'}", "up" if port is not None else "wait"),
+        ]
 
     def normalize_project_config(self, config: dict[str, Any]) -> dict[str, Any]:
         config["type"] = self.type_id
@@ -2639,6 +2698,12 @@ class CafCliRunPlugin(BotTypePlugin):
             config["caf_cli_verify_ssl"] = not bool(config.get("caf_cli_no_ssl_verify", False))
         for key, value in self.default_config().items():
             config.setdefault(key, value)
+        if config.get("ssh_port") in (None, ""):
+            config["ssh_port"] = CAF_DEFAULT_SSH_PORT
+        if not str(config.get("caf_cli_directory") or "").strip():
+            config["caf_cli_directory"] = CAF_DEFAULT_DIRECTORY
+        if not str(config.get("caf_cli_tools_config") or "").strip():
+            config["caf_cli_tools_config"] = CAF_DEFAULT_TOOLS_CONFIG
         # Retained for local CAF web-app use; remote jobs do not depend on
         # either an app URL or an app-managed MCP command.
         for key in ("caf_cli_app_url", "caf_cli_app_server_command"):
@@ -2693,8 +2758,10 @@ class CafCliRunPlugin(BotTypePlugin):
             intro = self._execution_target_intro()
             if intro:
                 st.info(intro)
-            target = st.radio("Mode", ["local", "ssh"], horizontal=True, key="caf_cli_execution_target", format_func=lambda value: "Local" if value == "local" else "SSH (Remote)")
+            target = st.radio("Mode", ["local", "ssh"], horizontal=True, key="caf_cli_execution_target", format_func=lambda value: "Local" if value == "local" else "SSH (Remote)", label_visibility="collapsed")
             if target == "ssh":
+                if st.session_state.get("caf_cli_ssh_port") in (None, ""):
+                    st.session_state["caf_cli_ssh_port"] = CAF_DEFAULT_SSH_PORT
                 col_host, col_port = st.columns([4, 1])
                 with col_host:
                     st.text_input("Host", key="caf_cli_ssh_host", placeholder="192.168.1.100")
@@ -2710,6 +2777,8 @@ class CafCliRunPlugin(BotTypePlugin):
                 key="caf_cli_sudo",
                 help="Run remote command steps and CAF job workers as root via the configured SSH user's password.",
             )
+            if not str(st.session_state.get("caf_cli_directory") or "").strip():
+                st.session_state["caf_cli_directory"] = CAF_DEFAULT_DIRECTORY
             st.text_input("CAF directory", key="caf_cli_directory")
             st.text_input("CLI command", key="caf_cli_command", help="Normally ./start_cli.sh; validation prompts invoke one-shot run.")
             if target == "ssh":
@@ -2733,6 +2802,14 @@ class CafCliRunPlugin(BotTypePlugin):
 
             with st.expander("Tools", expanded=False):
                 st.caption("Fetches the tools configured on CAF's selected execution target.")
+                st.text_input(
+                    "Tools manifest",
+                    key="caf_cli_tools_config_path",
+                    help=(
+                        "Relative paths are resolved from the CAF directory on the selected "
+                        "execution target; absolute paths are used as entered."
+                    ),
+                )
                 if st.button("Fetch", key="btn_caf_cli_fetch_tools", use_container_width=True):
                     self._fetch_tools()
                 catalog = st.session_state.get("caf_cli_tool_catalog", [])
@@ -3076,7 +3153,12 @@ class CafCliRunPlugin(BotTypePlugin):
                     ).start()
                 st.rerun()
         with col_clear:
-            if st.button("Clear Log", key="btn_caf_cli_exec_clear", use_container_width=True):
+            if st.button(
+                "Clear Log", key="btn_caf_cli_exec_clear", use_container_width=True,
+                disabled=run_in_progress or active_remote_job,
+                help="Stop the run before clearing its live log and tool output.",
+            ):
+                st.session_state["caf_cli_exec_shared"] = _new_caf_execution_shared()
                 st.session_state["caf_cli_exec_logs"] = []
                 st.session_state["run_completed"] = False
                 st.session_state["telemetry"] = {}
@@ -3189,8 +3271,12 @@ class CafCliRunPlugin(BotTypePlugin):
                     )
                 )
             )
+            empty_tool_output_message = (
+                "Model is working — no tool output yet…"
+                if execution_active else "Awaiting tool output…"
+            )
             render_terminal(
-                tool_output_box, output_entries, lambda _line: "", empty_msg="Awaiting tool output…",
+                tool_output_box, output_entries, lambda _line: "", empty_msg=empty_tool_output_message,
                 height=360, follow_newest=execution_active,
             )
 
@@ -3223,12 +3309,7 @@ class CafCliRunPlugin(BotTypePlugin):
             st.session_state.pop("caf_cli_app_restart_required", None)
             st.session_state.pop("caf_cli_session_start_timeout", None)
             st.session_state["_run_in_progress"] = True
-            shared = {
-                "cancel_requested": False,
-                "logs": [],
-                "completed": False,
-                "telemetry": {},
-            }
+            shared = _new_caf_execution_shared()
             st.session_state["caf_cli_exec_shared"] = shared
             thread = threading.Thread(
                 target=_run_caf_cli_background,

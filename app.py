@@ -10,7 +10,7 @@ from core import llama_server
 from core.logsetup import configure_logging
 from core.settings_store import load_settings, reconcile_projects, save_settings
 from core.project_import import prepare_imported_project
-from ui.components import status_pill
+from ui.components import bot_status_bar_pills, status_pill
 from ui.styles import inject
 from ui.theme import current_theme
 from ui import config_tab, execute_tab, dashboard_tab
@@ -200,7 +200,13 @@ def _sidebar_run_indicators(project: dict, plugin, telemetry: dict) -> list[dict
     )
     if plugin is None:
         return sidebar_status_indicators(telemetry, config)
-    return plugin.sidebar_indicators(telemetry, config)
+    # Plugins are discovered from local files and entry points, so an already
+    # loaded older plugin can legitimately predate this optional hook. Keep
+    # the sidebar usable and give it the normal single-run status readout.
+    indicator_hook = getattr(plugin, "sidebar_indicators", None)
+    if not callable(indicator_hook):
+        return sidebar_status_indicators(telemetry, config)
+    return indicator_hook(telemetry, config)
 
 
 def _sidebar_run_indicator_boxes(indicators: list[dict[str, str]]) -> str:
@@ -452,10 +458,7 @@ _active_bot_type = _active_proj.get("type", "bash_bot") if _active_proj else "ba
 _active_plugin = get_bot_plugin(_active_bot_type)
 
 if _active_plugin is not None:
-    _pills = "".join(
-        status_pill(item.label, item.state)
-        for item in _active_plugin.status_items(st.session_state, _active_proj)
-    )
+    _pills = bot_status_bar_pills(_active_plugin, st.session_state, _active_proj)
     if _pills:
         st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
 else:

@@ -4,6 +4,11 @@ import pytest
 
 from core.bot_types import get_bot_plugin, refresh_bot_plugins
 from core.environment import SSHEnvironment
+from plugins.bot_types.caf_cli_run import (
+    CAF_DEFAULT_DIRECTORY,
+    CafCliRunPlugin,
+    _new_caf_execution_shared,
+)
 from ui.config_tab import _bot_prefix_from_state_key, _validation_bot_prompt_title, _validation_bot_supports_prompts
 
 
@@ -45,6 +50,16 @@ def test_caf_cli_run_plugin_runs_chat_in_configured_environment(monkeypatch):
     environment.close.assert_called_once()
 
 
+def test_cleared_caf_execution_state_resets_every_rendered_pane_source():
+    shared = _new_caf_execution_shared()
+
+    assert shared["logs"] == []
+    assert shared["tool_output"] == []
+    assert shared["tool_output_seen"] == set()
+    assert shared["completed"] is False
+    assert shared["telemetry"] == {}
+
+
 def test_caf_cli_run_plugin_normalizes_llm_judge_and_validation_sets():
     refresh_bot_plugins()
     plugin = get_bot_plugin("caf_cli_run_bot")
@@ -54,6 +69,26 @@ def test_caf_cli_run_plugin_normalizes_llm_judge_and_validation_sets():
 
     assert config["validation_sets"] == []
     assert config["llm_helper_enabled"] is False
+
+
+def test_caf_defaults_repair_blanks_and_preserve_explicit_values():
+    plugin = CafCliRunPlugin()
+    assert plugin.default_config()["caf_cli_directory"] == CAF_DEFAULT_DIRECTORY
+    repaired = plugin.normalize_project_config({
+        "ssh_port": "", "caf_cli_directory": "", "caf_cli_tools_config": "",
+    })
+    assert repaired["ssh_port"] == 22
+    assert repaired["caf_cli_directory"] == "~/cyber-agent-flow"
+    assert repaired["caf_cli_tools_config"] == "kali_tools.json"
+
+    explicit = plugin.normalize_project_config({
+        "ssh_port": 2202,
+        "caf_cli_directory": "/srv/caf",
+        "caf_cli_tools_config": "/etc/caf/tools.json",
+    })
+    assert explicit["ssh_port"] == 2202
+    assert explicit["caf_cli_directory"] == "/srv/caf"
+    assert explicit["caf_cli_tools_config"] == "/etc/caf/tools.json"
 
 
 def test_caf_cli_defaults_to_api_sse_and_fills_its_required_fields():
@@ -222,6 +257,61 @@ def test_caf_tools_are_fetched_and_filtered_on_the_configured_target(monkeypatch
     assert written[0] == ".modelscope_caf_tools.json"
     assert '"name": "nmap"' in written[1]
     assert '"name": "tcpdump"' not in written[1]
+
+
+def test_caf_tools_local_relative_manifest_is_resolved_from_caf_directory(tmp_path, monkeypatch):
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    env = MagicMock()
+    env.execute.return_value = {
+        "stdout": '{"tools": [{"name": "nmap"}]}', "stderr": "", "exit_code": 0,
+    }
+    monkeypatch.setitem(globals_, "_environment_for_config", MagicMock(return_value=env))
+
+    tools, error = globals_["fetch_caf_tools"]({
+        "execution_target": "local",
+        "caf_cli_directory": str(tmp_path),
+        "caf_cli_tools_config": "catalogs/kali_tools.json",
+    })
+
+    assert error == ""
+    assert tools == [{"name": "nmap"}]
+    assert env.execute.call_args.args[0] == (
+        f"cd {str(tmp_path)} && cat catalogs/kali_tools.json"
+    )
+
+
+def test_caf_tools_keep_connection_directory_manifest_and_catalog_errors_distinct(tmp_path, monkeypatch):
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    fetch_tools = globals_["fetch_caf_tools"]
+
+    tools, error = fetch_tools({
+        "execution_target": "local",
+        "caf_cli_directory": str(tmp_path / "missing"),
+    })
+    assert tools == []
+    assert error.startswith("CAF directory not found")
+
+    env = MagicMock()
+    env.connect.side_effect = RuntimeError("authentication failed")
+    monkeypatch.setitem(globals_, "_environment_for_config", MagicMock(return_value=env))
+    _, error = fetch_tools({"execution_target": "ssh", "caf_cli_directory": "/opt/caf"})
+    assert error.startswith("SSH connection failed:")
+
+    env = MagicMock()
+    env.execute.return_value = {"stdout": "", "stderr": "permission denied", "exit_code": 1}
+    monkeypatch.setitem(globals_, "_environment_for_config", MagicMock(return_value=env))
+    _, error = fetch_tools({"execution_target": "ssh", "caf_cli_directory": "/opt/caf"})
+    assert error.startswith("CAF tools manifest is unreadable:")
+
+    env = MagicMock()
+    env.execute.return_value = {"stdout": "{broken", "stderr": "", "exit_code": 0}
+    monkeypatch.setitem(globals_, "_environment_for_config", MagicMock(return_value=env))
+    _, error = fetch_tools({"execution_target": "ssh", "caf_cli_directory": "/opt/caf"})
+    assert "invalid JSON" in error
 
 
 def test_caf_environment_test_reports_ssh_and_directory_failures(monkeypatch):
@@ -865,7 +955,7 @@ def test_caf_stop_request_skips_remaining_commands_and_marks_run_aborted():
         "validation_sets": [{"steps": [{"commands": [{"command": "should-not-run"}]}]}],
     }, lambda _message: None)
     assert telemetry["run_aborted"] is True
-    assert telemetry["validation_passed"] is False
+    assert telemetry["validation_passed"] is None
     env.execute.assert_not_called()
 
 

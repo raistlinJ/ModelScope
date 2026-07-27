@@ -32,7 +32,7 @@ from core.llama_metrics import (
     parse_llama_cli_performance,
     strip_user_metrics_flag,
 )
-from core.models import normalize_openai_base_url
+from core.models import normalize_openai_base_url, resolve_model_path
 from core.streaming import stream_ollama, stream_llama_cpp
 from core.utils import effective_verify_ssl
 from core.utils import strip_ansi as _strip_ansi  # noqa: F401 — re-exported for callers/tests
@@ -513,7 +513,7 @@ def _run_validation_sets(
     cancel_ref: list[bool] = [False],
     config: dict = None,
     prompt_context_list: list = None,
-) -> tuple[bool, list]:
+) -> tuple[bool | None, list]:
     """
     Execute all validation sets.
     Each validation set contains steps, which contain commands and expected outputs.
@@ -524,6 +524,7 @@ def _run_validation_sets(
         return True, []
 
     overall_passed = True
+    validation_aborted = False
     results = []
 
     for vset in validation_sets:
@@ -541,6 +542,7 @@ def _run_validation_sets(
         for step_idx, step in enumerate(vset.get("steps", [])):
             if cancel_ref[0]:
                 on_log("[CANCEL] Validation cancelled by user")
+                validation_aborted = True
                 break
 
             delay = float(step.get("delay_seconds", 0.0))
@@ -550,6 +552,7 @@ def _run_validation_sets(
 
             for cmd_obj in step.get("commands", []):
                 if cancel_ref[0]:
+                    validation_aborted = True
                     break
                 if not cmd_obj.get("enabled", True):
                     continue
@@ -592,14 +595,36 @@ def _run_validation_sets(
                     stderr = res.get("stderr", "")
                     exit_code = res.get("exit_code", -1)
 
-                # Verify output. Multiple checks are accepted alternatives:
-                # any one matching check passes the command.
+                # A cancellation can interrupt an environment command with a
+                # non-zero exit code. That is an aborted validation, not a
+                # failed output check.
                 checks = _normalize_expected_checks(cmd_obj)
-                cmd_passed = (exit_code == 0)
                 matched_check = checks[0] if checks else {
                     "expected_output_type": "Ignore",
                     "expected_output": "",
                 }
+                if cancel_ref[0]:
+                    reason = "Cancelled by user"
+                    on_log(f"[VALIDATE CMD RESULT] {cmd_text!r} → ABORTED — {reason}")
+                    step_results.append({
+                        "command": cmd_text,
+                        "exit_code": exit_code,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "passed": None,
+                        "aborted": True,
+                        "reason": reason,
+                        "checks": checks,
+                        "matched_check": None,
+                        "expected_output_type": matched_check.get("expected_output_type", "Ignore"),
+                        "expected_output": matched_check.get("expected_output", ""),
+                    })
+                    validation_aborted = True
+                    break
+
+                # Verify output. Multiple checks are accepted alternatives:
+                # any one matching check passes the command.
+                cmd_passed = (exit_code == 0)
 
                 reason = ""
                 if not cmd_passed:
@@ -626,6 +651,19 @@ def _run_validation_sets(
                     "expected_output": matched_check.get("expected_output", ""),
                 })
 
+            if validation_aborted:
+                break
+
+        if validation_aborted:
+            results.append({
+                "name": set_name,
+                "description": set_desc,
+                "passed": None,
+                "aborted": True,
+                "steps": step_results,
+            })
+            break
+
         if not set_passed:
             overall_passed = False
 
@@ -636,7 +674,7 @@ def _run_validation_sets(
             "steps": step_results
         })
 
-    return overall_passed, results
+    return (None if validation_aborted else overall_passed), results
 
 
 # ── Inline tool-call parsing (fallback for models that use <tool_call> tags) ──
@@ -1489,9 +1527,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                     on_log(f"[WARN] Auto-correcting llama-server to llama-cli: {corrected}", "llama")
                     binary = corrected
 
-                model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
-                if config.get("execution_target", "local") == "local":
-                    model_path = os.path.abspath(os.path.expanduser(model_path))
+                model_path = resolve_model_path(
+                    model_dir, model_name, local=config.get("execution_target", "local") == "local",
+                )
                 if not model_path:
                     on_log("[ERROR] No model selected.", "llama")
                     return {"exit_code": 1}
@@ -1691,8 +1729,8 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 on_log(f"[WARN] Auto-correcting llama-cli to llama-server: {corrected}", "llama")
                 binary = corrected
 
-            model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
             exec_target = config.get("execution_target", "local")
+            model_path = resolve_model_path(model_dir, model_name, local=exec_target == "local")
             use_remote_server = exec_target == "ssh" and isinstance(env, SSHEnvironment)
             # Batch bots run the server inside each container so every target
             # is evaluated on its own hardware. Other PCT projects keep the
@@ -1702,8 +1740,6 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                 and exec_target == "pct"
                 and isinstance(env, PCTEnvironment)
             )
-            if exec_target == "local":
-                model_path = os.path.abspath(os.path.expanduser(model_path))
             if not model_path:
                 on_log("[ERROR] No model selected.", "llama")
                 telemetry["run_aborted"] = True

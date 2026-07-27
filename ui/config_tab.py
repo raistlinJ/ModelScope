@@ -117,7 +117,10 @@ def _show_delete_project_dialog(project_id: str) -> None:
     st.warning(f"Permanently delete **{proj['name']}**?")
     _, c1, c2 = st.columns([2, 1, 1.5])
     with c1:
-        if st.button("Delete", type="primary", use_container_width=True):
+        if st.button(
+            "Delete", type="primary", use_container_width=True,
+            key="btn_confirm_delete_project",
+        ):
             bot_type = proj.get("type", "bash_bot")
             plugin = get_bot_plugin(bot_type)
             if plugin is not None:
@@ -218,23 +221,9 @@ def render() -> None:
                 _show_delete_project_dialog(pid)
     else:
         st.header("Configuration", anchor=False)
-    # Danger styling for Delete buttons — scoped to project action headers.
-    # Uses the .st-key-{key} container class emitted by Streamlit ≥1.38.
     st.markdown(
         """
         <style>
-        /* Streamlit ≥1.38 uses st-key-{key} where underscores are preserved.
-           Include both variants as a safety net across minor versions. */
-        [class*="st-key-btn_del_"] button,
-        [class*="st-key-btn-del-"] button {
-            border-color: var(--error) !important;
-            color:         var(--error) !important;
-        }
-        [class*="st-key-btn_del_"] button:hover,
-        [class*="st-key-btn-del-"] button:hover {
-            background-color: var(--error) !important;
-            color:            #ffffff !important;
-        }
         /* Secondary tabs (nested) — visually lighter than primary tabs */
         [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"] {
             font-size: 0.68rem !important;
@@ -249,7 +238,7 @@ def render() -> None:
            panel so it reads as a distinct floating layer instead of blending
            into the (near-identical dark) Validation Set modal behind it. */
         div[data-testid="stPopoverBody"] {
-            background-color: var(--surface) !important;
+            background-color: var(--surface2) !important;
             border: 1px solid var(--accent) !important;
             box-shadow: 0 6px 16px var(--shadow) !important;
             padding: 11px !important;
@@ -546,7 +535,7 @@ def _validation_check_type_icon_html(check_type: str) -> str:
     return (
         f'<span title="{tooltip}" '
         'style="display:inline-flex;align-items:center;justify-content:center;'
-        'min-width:1.65rem;height:1.45rem;border:1px solid rgba(49, 51, 63, 0.22);'
+        'min-width:1.65rem;height:1.45rem;border:1px solid var(--border);'
         'border-radius:6px;font-weight:700;font-size:0.9rem;cursor:help;">'
         f"{icon}</span>"
     )
@@ -1240,7 +1229,7 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                                 with st.expander("User Prompt", expanded=False):
                                     cmd["user_prompt"] = st.text_area("User Prompt", key=usr_key, placeholder="User prompt...", label_visibility="collapsed")
 
-                                st.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -5px;'>Accepted Checks</div>", unsafe_allow_html=True)
+                                st.markdown("<div style='font-size:12px;font-weight:700;color:var(--text);margin-bottom:-5px;'>Accepted Checks</div>", unsafe_allow_html=True)
                                 _render_validation_checks_control(
                                     cmd,
                                     key_prefix=f"_sc_{pfx}_{step_id}_{cmd_id}_checks",
@@ -1249,10 +1238,10 @@ def _render_validation_steps(state_key: str, pfx: str, placeholder: str, bot_typ
                         else:
                             if not first_cmd_seen:
                                 hc_cmd, hc_to, hc_checks, hc_en, hc_del = st.columns([3.0, 0.8, 3.5, 0.8, 0.6])
-                                hc_cmd.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Command</div>", unsafe_allow_html=True)
-                                hc_to.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Timeout</div>", unsafe_allow_html=True)
-                                hc_checks.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Accepted Checks</div>", unsafe_allow_html=True)
-                                hc_en.markdown("<div style='font-size: 12px; font-weight: bold; margin-bottom: -15px;'>Enabled</div>", unsafe_allow_html=True)
+                                hc_cmd.markdown("<div style='font-size:12px;font-weight:700;color:var(--text);margin-bottom:-15px;'>Command</div>", unsafe_allow_html=True)
+                                hc_to.markdown("<div style='font-size:12px;font-weight:700;color:var(--text);margin-bottom:-15px;'>Timeout</div>", unsafe_allow_html=True)
+                                hc_checks.markdown("<div style='font-size:12px;font-weight:700;color:var(--text);margin-bottom:-15px;'>Accepted Checks</div>", unsafe_allow_html=True)
+                                hc_en.markdown("<div style='font-size:12px;font-weight:700;color:var(--text);margin-bottom:-15px;'>Enabled</div>", unsafe_allow_html=True)
                                 st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
                                 first_cmd_seen = True
 
@@ -1568,6 +1557,7 @@ def _render_bash_runtime(project: dict) -> None:
             key="bash_execution_target",
             help="Run commands locally, via SSH, or inside a Proxmox LXC container via pct.",
             horizontal=True,
+            label_visibility="collapsed",
         )
         st.checkbox(
             "Run commands with sudo",
@@ -2439,6 +2429,7 @@ def _render_llama_cli_runtime(project: dict) -> None:
             key="llama_cli_execution_target",
             help="Run locally, via SSH, or inside a Proxmox LXC container via pct.",
             horizontal=True,
+            label_visibility="collapsed",
         )
         st.checkbox(
             "Run commands with sudo",
@@ -2888,7 +2879,7 @@ def _render_step_editor(state_key: str, pfx: str) -> None:
         step_id = step["_id"]
         stype   = step.get("type", "prompt")
 
-        border_color = "#2dd4bf" if stype == "prompt" else "#f0883e"
+        border_color = "var(--prompt-color)" if stype == "prompt" else "var(--cmd-color)"
         with st.container(border=True):
             # Custom left-border via inline style
             st.markdown(
@@ -3303,39 +3294,6 @@ def _flush_llama_server_config(project: dict) -> None:
     save_settings(st.session_state)
 
 
-def _scan_models_via_env(env, model_dir: str) -> list[dict]:
-    """Find .gguf models under model_dir on whatever machine ``env`` reaches."""
-    if model_dir.startswith("~/"):
-        model_dir_sh = '"$HOME/' + model_dir[2:] + '"'
-    else:
-        model_dir_sh = f'"{model_dir}"'
-    res = env.execute(
-        f'find {model_dir_sh} -name "*.gguf" -not -name "ggml-vocab-*"',
-        timeout=15,
-    )
-    paths = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
-
-    # resolve the base dir on the target so we can make relative paths
-    base_dir = model_dir
-    if base_dir.startswith("~/"):
-        try:
-            home_res = env.execute("echo $HOME")
-            home = home_res["stdout"].strip()
-            base_dir = home + "/" + base_dir[2:]
-        except Exception:
-            pass
-
-    models = []
-    for p in paths:
-        rel = p
-        if p.startswith(base_dir):
-            rel = p[len(base_dir):].lstrip("/")
-        if not rel:
-            rel = p.split("/")[-1]
-        models.append({"name": rel, "path": p})
-    return models
-
-
 def _proxbatch_template_env(project: dict):
     """PCT environment for the template LXC, or None with an error shown.
 
@@ -3355,23 +3313,27 @@ def _proxbatch_template_env(project: dict):
 def _scan_llama_server_models(project: dict) -> None:
     """Scan the machine that will host the model for .gguf files.
 
-    The Model Directory is scanned wherever Execution Target points. For SSH
-    the managed llama-server also launches on that host (core.remote_server);
-    for the PCT batch bot it launches inside each container (core.pct_server),
-    so the template LXC is scanned rather than the ModelScope host.
+    The Model Directory is scanned wherever Execution Target points — a
+    directory (recursive) or a direct .gguf file, including a HuggingFace
+    snapshot symlink. For SSH the managed llama-server also launches on
+    that host (core.remote_server); for the PCT batch bot it launches
+    inside each container (core.pct_server), so the template LXC is
+    scanned rather than the ModelScope host.
     """
+    from core.models import scan_gguf_models, scan_gguf_models_via_env
+
     model_dir = st.session_state.get("llama_server_model_dir", "").strip()
     target    = st.session_state.get("llama_server_execution_target", "local")
     if not model_dir:
         st.warning("Set Model Directory first.")
         return
+    error = ""
     if _is_llama_server_proxbatch(project):
         env = _proxbatch_template_env(project)
         if env is None:
             return
-        models = _scan_models_via_env(env, model_dir)
+        models, error = scan_gguf_models_via_env(env, model_dir)
     elif target == "local":
-        from core.models import scan_gguf_models
         models = scan_gguf_models(model_dir)
     else:
         _flush_llama_server_config(project)
@@ -3385,20 +3347,24 @@ def _scan_llama_server_models(project: dict) -> None:
             remote_cwd=".",
         )
         try:
-            models = _scan_models_via_env(env, model_dir)
+            models, error = scan_gguf_models_via_env(env, model_dir)
         finally:
             env.close()
 
     st.session_state["llama_server_discovered_models"] = models
+    if error:
+        st.error(error)
+        return
     if not models:
         st.session_state["llama_server_model_name"] = ""
-        st.warning("No .gguf models found in that directory.")
+        st.warning("No .gguf models found under that directory or file.")
     else:
         current = st.session_state.get("llama_server_model_name", "")
         new_names = [m["name"] for m in models]
         if current not in new_names:
             st.session_state["llama_server_model_name"] = new_names[0]
         st.success(f"Found {len(models)} model(s).")
+    _flush_llama_server_config(project)
     _flush_llama_server_config(project)
 
 
@@ -3666,6 +3632,7 @@ def _render_llama_server_runtime(project: dict) -> None:
                     "container's network namespace can't be tunnelled to the same way."
                 ),
                 horizontal=True,
+                label_visibility="collapsed",
             )
         st.checkbox(
             "Run commands with sudo",
@@ -3773,9 +3740,9 @@ def _render_llama_server_runtime(project: dict) -> None:
                 key="llama_server_model_dir",
                 placeholder="/home/user/models",
                 help=(
-                    "Directory inside each LXC to scan for .gguf model files."
+                    "Directory or direct .gguf file inside each LXC to scan for models."
                     if is_proxbatch else
-                    "Local directory to scan for .gguf model files."
+                    "Directory or direct .gguf file to scan for models."
                 ),
             )
         with col_scan:
@@ -3879,6 +3846,8 @@ def _render_llama_server_runtime(project: dict) -> None:
         )
 
         with st.expander("Advanced Options", expanded=False):
+            from ui.optional_param_card import render_flag_card, render_optional_param_card
+
             def _adv_opt(
                 col,
                 label,
@@ -3891,29 +3860,13 @@ def _render_llama_server_runtime(project: dict) -> None:
                 value_key_suffix=None,
                 default_value=None,
             ):
-                with col:
-                    st.session_state.setdefault(f"llama_server_en_{key_suffix}", False)
-                    value_key = f"llama_server_{value_key_suffix or key_suffix}"
-                    if default_value is not None:
-                        st.session_state.setdefault(value_key, default_value)
-                    c1, c2 = st.columns([0.2, 0.8], gap="small")
-                    with c1:
-                        st.write("")
-                        st.write("")
-                        _en = st.checkbox(f"en_{key_suffix}", key=f"llama_server_en_{key_suffix}", label_visibility="collapsed", help=f"Enable {label}")
-                    with c2:
-                        st.number_input(
-                            label,
-                            min_value=float(min_v) if is_float else int(min_v),
-                            max_value=float(max_v) if is_float else int(max_v),
-                            step=float(step) if is_float else int(step),
-                            key=value_key,
-                            disabled=not _en,
-                            help=help_text,
-                            format="%.2f" if is_float else None
-                        )
+                render_optional_param_card(
+                    col, state_prefix="llama_server", label=label, key_suffix=key_suffix,
+                    min_v=min_v, max_v=max_v, step=step, help_text=help_text, is_float=is_float,
+                    value_key_suffix=value_key_suffix, default_value=default_value,
+                )
 
-            adv_cols = st.columns(4)
+            adv_cols = st.columns(3)
             _adv_opt(
                 adv_cols[0],
                 "Temperature",
@@ -3928,23 +3881,20 @@ def _render_llama_server_runtime(project: dict) -> None:
             )
             _adv_opt(adv_cols[1], "GPU Layers", "gpu_layers", 0, 999, 1, "Layers to offload to GPU (-ngl).", default_value=99)
             _adv_opt(adv_cols[2], "Threads", "threads", 1, 256, 1, "CPU threads to use (-t).", default_value=4)
-            _adv_opt(adv_cols[3], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
 
-            _adv_opt(adv_cols[0], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
-            _adv_opt(adv_cols[1], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
-            _adv_opt(adv_cols[2], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
-            _adv_opt(adv_cols[3], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
+            _adv_opt(adv_cols[0], "Top K", "top_k", 0, 1000, 1, "Limit next token selection (--top-k).", default_value=40)
+            _adv_opt(adv_cols[1], "Top P", "top_p", 0.0, 1.0, 0.05, "Cumulative probability (--top-p).", True, default_value=0.9)
+            _adv_opt(adv_cols[2], "Min P", "min_p", 0.0, 1.0, 0.05, "Minimum probability (--min-p).", True, default_value=0.1)
 
-            _adv_opt(adv_cols[0], "Predict", "predict", -1, 131072, 128, "Default tokens to predict when a request doesn't specify max_tokens (-n).", default_value=512)
-            _adv_opt(adv_cols[1], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
-            _adv_opt(adv_cols[2], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
-            _adv_opt(adv_cols[3], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
+            _adv_opt(adv_cols[0], "Repeat Pen.", "repeat_penalty", 0.0, 2.0, 0.1, "Penalize repetition (--repeat-penalty).", True, default_value=1.1)
+            _adv_opt(adv_cols[1], "Freq Pen.", "freq_penalty", 0.0, 2.0, 0.1, "Frequency penalty (--freq-penalty).", True, default_value=0.0)
+            _adv_opt(adv_cols[2], "Predict", "predict", -1, 131072, 128, "Default tokens to predict when a request doesn't specify max_tokens (-n).", default_value=512)
 
-            with adv_cols[0]:
-                st.session_state.setdefault("llama_server_flash_attn", False)
-                st.write("")
-                st.write("")
-                st.checkbox("Flash Attn", key="llama_server_flash_attn", help="Use Flash Attention (-fa).")
+            _adv_opt(adv_cols[0], "Seed", "seed", -1, 2147483647, 1, "RNG seed (-1 for random) (--seed).", default_value=-1)
+            _adv_opt(adv_cols[1], "RoPE Base", "rope_freq_base", 1000.0, 10000000.0, 1000.0, "RoPE base frequency (--rope-freq-base).", True, default_value=10000.0)
+            _adv_opt(adv_cols[2], "RoPE Scale", "rope_freq_scale", 0.0, 100.0, 0.1, "RoPE frequency scale (--rope-freq-scale).", True, default_value=1.0)
+
+            render_flag_card(adv_cols[0], key="llama_server_flash_attn", label="Flash Attn", help_text="Use Flash Attention (-fa).")
 
         _, col_status, _ = st.columns([1, 2, 1])
         with col_status:

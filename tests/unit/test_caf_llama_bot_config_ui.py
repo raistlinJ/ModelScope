@@ -88,6 +88,21 @@ def test_empty_directory_reports_warning_and_keeps_manual_entry(real_app_test, t
     assert [ti for ti in at.text_input if ti.key == "caf_llama_srv_model_name"]
 
 
+def test_direct_gguf_file_scan_renders_dropdown_with_single_model(real_app_test, tmp_path):
+    model_file = tmp_path / "solo-model.gguf"
+    model_file.touch()
+
+    at = real_app_test.from_function(_render_connection_fields, kwargs={"model_dir": str(model_file)})
+    at.run()
+    at.button(key="btn_caf_llama_scan_models").click().run()
+
+    assert not at.error
+    model_boxes = [sb for sb in at.selectbox if sb.key == "caf_llama_srv_model_name"]
+    assert len(model_boxes) == 1
+    assert model_boxes[0].options == ["solo-model.gguf"]
+    assert model_boxes[0].value == "solo-model.gguf"
+
+
 def test_missing_directory_reports_error_and_keeps_manual_entry(real_app_test):
     at = real_app_test.from_function(_render_connection_fields, kwargs={"model_dir": "/no/such/directory"})
     at.run()
