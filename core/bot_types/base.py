@@ -132,6 +132,19 @@ class BotTypePlugin:
             return [StatusItem(f"Project: {project.get('name', 'Unnamed')}")]
         return []
 
+    def sidebar_indicators(
+        self, telemetry: Mapping[str, Any] | None, current_config: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """Return this bot's status boxes for one sidebar project row.
+
+        The default is a per-metric pass/fail readout of the last run. Bot
+        types whose run isn't a single pass/fail — a batch that runs the same
+        workflow on many targets, say — override this.
+        """
+        from core.run_status import sidebar_status_indicators
+
+        return sidebar_status_indicators(dict(telemetry or {}), current_config)
+
     def normalize_project_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Mutate and return a project config before CLI execution."""
         return config

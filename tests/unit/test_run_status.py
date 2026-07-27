@@ -1,4 +1,8 @@
-from core.run_status import run_status_fingerprint, sidebar_status_indicators
+from core.run_status import (
+    batch_execution_indicator,
+    run_status_fingerprint,
+    sidebar_status_indicators,
+)
 
 
 def _config(**overrides):
@@ -50,3 +54,35 @@ def test_sidebar_indicators_hide_unclassified_and_missing_metrics():
     indicators = sidebar_status_indicators(_telemetry(config, total_tokens=25), config)
 
     assert [item["key"] for item in indicators] == ["validation"]
+
+
+# ── Batch projects report execution coverage, not pass/fail ───────────────────
+
+def _levels(telemetry):
+    return [item["level"] for item in batch_execution_indicator(telemetry)]
+
+
+def test_batch_indicator_reports_not_started_without_a_run():
+    assert _levels({}) == ["not_started"]
+    assert _levels(None) == ["not_started"]
+    assert _levels({"batch_containers": [{"state": "pending"}, {"state": "pending"}]}) == ["not_started"]
+
+
+def test_batch_indicator_distinguishes_partial_from_complete():
+    partial = batch_execution_indicator(
+        {"batch_containers": [{"state": "passed"}, {"state": "pending"}]}
+    )
+    assert partial[0]["level"] == "partial"
+    assert "1 of 2" in partial[0]["label"]
+
+    complete = batch_execution_indicator(
+        {"batch_containers": [{"state": "passed"}, {"state": "failed"}]}
+    )
+    assert complete[0]["level"] == "complete"
+
+
+def test_batch_indicator_ignores_the_config_fingerprint():
+    """How far a run got stays true even after the validation config changes."""
+    telemetry = {"batch_containers": [{"state": "passed"}], "run_status_fingerprint": "stale"}
+
+    assert _levels(telemetry) == ["complete"]

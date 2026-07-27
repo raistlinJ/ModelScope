@@ -16,6 +16,7 @@ def test_registry_exposes_builtin_bot_types_in_order():
         "bash_bot",
         "llama_cli_bot",
         "llama_server_bot",
+        "llama_server_proxbatch_bot",
         "caf_cli_run_bot",
     ]
 
@@ -119,6 +120,58 @@ def test_llama_server_plugin_normalizes_managed_project_config():
     assert config["openai_base_url"] == "http://127.0.0.1:19191"
     assert config["llm_url"] == "http://127.0.0.1:19191"
     assert [server["name"] for server in config["mcp_servers"]] == ["enabled"]
+
+
+def test_llama_server_proxbatch_plugin_is_pct_only_and_keeps_a_vmid_list():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("llama_server_proxbatch_bot")
+    config = plugin.default_config()
+
+    assert config["execution_target"] == "pct"
+    assert config["pct_vmids"] == []
+    assert "ssh_host" not in config
+    assert "pct_vmid" not in config
+
+    assert config["server_in_container"] is True
+
+    normalized = plugin.normalize_project_config({
+        "execution_target": "ssh",
+        "pct_vmid": "100",
+        "pct_vmids": [100, "101", "bad", 100],
+        "pct_template_vmid": "999",
+        "ssh_host": "not-used.example",
+    })
+    assert normalized["type"] == "llama_server_proxbatch_bot"
+    assert normalized["execution_target"] == "pct"
+    assert normalized["pct_vmids"] == ["100", "101"]
+    # An unselected template can't be scanned or tested against.
+    assert normalized["pct_template_vmid"] == "100"
+    assert normalized["server_in_container"] is True
+    assert "pct_vmid" not in normalized
+    assert "ssh_host" not in normalized
+
+
+def test_llama_server_proxbatch_plugin_reports_execution_coverage_in_the_sidebar():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("llama_server_proxbatch_bot")
+    config = {"validation_sets": [], "metric_thresholds": {}}
+
+    assert [item["level"] for item in plugin.sidebar_indicators({}, config)] == ["not_started"]
+
+    telemetry = {
+        "validation_passed": False,
+        "batch_containers": [{"state": "passed"}, {"state": "pending"}],
+    }
+    indicators = plugin.sidebar_indicators(telemetry, config)
+    assert [(item["key"], item["level"]) for item in indicators] == [("batch_execution", "partial")]
+
+
+def test_single_target_plugins_keep_the_default_pass_fail_indicators():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("llama_server_bot")
+    config = {"validation_sets": [], "metric_thresholds": {}}
+
+    assert plugin.sidebar_indicators({}, config) == []
 
 
 def test_plugin_run_dispatch_delegates_to_evaluator(monkeypatch):

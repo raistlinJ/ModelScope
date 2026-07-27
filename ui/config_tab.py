@@ -3037,6 +3037,149 @@ def _llama_server_client_base_url(host: str, port: int) -> str:
     return f"http://{client_host}:{int(port)}"
 
 
+def _is_llama_server_proxbatch(project: dict) -> bool:
+    return project.get("type") == "llama_server_proxbatch_bot"
+
+
+def _normalise_pct_vmids(vmids: object) -> list[str]:
+    """Return unique numeric VMIDs in a stable order."""
+    if not isinstance(vmids, list):
+        return []
+    result: list[str] = []
+    for vmid in vmids:
+        value = str(vmid).strip()
+        if value.isdigit() and value not in result:
+            result.append(value)
+    return result
+
+
+def _proxbatch_vmid_names(cfg: dict, containers: object) -> dict[str, str]:
+    """Remember each selected VMID's LXC name for the Execute tab's target list.
+
+    A scan lives in session state and is cleared on a project switch, so the
+    name is copied into the project config and only refreshed by a later scan.
+    """
+    names = dict(cfg.get("pct_vmid_names", {}) or {})
+    for item in containers if isinstance(containers, list) else []:
+        vmid = str(item.get("vmid", "")).strip()
+        if vmid:
+            names[vmid] = str(item.get("name", "") or "")
+    return {vmid: names.get(vmid, "") for vmid in cfg.get("pct_vmids", [])}
+
+
+def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
+    """Read the local Proxmox LXC inventory without invoking a shell."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["pct", "list"], capture_output=True, text=True, timeout=15, check=False,
+        )
+    except FileNotFoundError:
+        return [], "`pct` is not installed or is not available on this host."
+    except subprocess.TimeoutExpired:
+        return [], "Timed out while scanning Proxmox LXCs."
+    if completed.returncode:
+        error = (completed.stderr or completed.stdout).strip() or "pct list failed."
+        return [], error
+
+    lines = completed.stdout.splitlines()
+    name_column = next(
+        (line.lower().find("name") for line in lines if line.lstrip().lower().startswith("vmid")),
+        -1,
+    )
+    containers: list[dict[str, str]] = []
+    for line in lines:
+        fields = line.split(maxsplit=4)
+        if not fields or not fields[0].isdigit():
+            continue  # header and any non-container diagnostics
+        containers.append({
+            "vmid": fields[0],
+            "status": fields[1] if len(fields) > 1 else "unknown",
+            # pct list's optional Lock column is blank for most LXCs, so
+            # whitespace-splitting alone cannot reliably locate Name.
+            "name": line[name_column:].strip() if name_column >= 0 else fields[-1],
+        })
+    return containers, ""
+
+
+def _render_proxbatch_template_selector(project: dict, selected_vmids: list[str]) -> None:
+    """Pick the LXC that stands in for the batch while configuring it."""
+    from core.bot_types.llama_server_proxbatch_bot import normalize_template_vmid
+
+    if not selected_vmids:
+        return
+    # Correct the stored value only when it can no longer be selected, and only
+    # here — before the widget exists. Once the selectbox is instantiated
+    # Streamlit rejects any write to its key (see _flush_llama_server_config).
+    current = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
+    if current not in selected_vmids:
+        st.session_state["llama_server_pct_template_vmid"] = normalize_template_vmid(
+            current, selected_vmids,
+        )
+    names = project.get("config", {}).get("pct_vmid_names", {})
+    names = names if isinstance(names, dict) else {}
+    st.selectbox(
+        "Template LXC",
+        options=selected_vmids,
+        key="llama_server_pct_template_vmid",
+        format_func=lambda vmid: f"{vmid} — {names[vmid]}" if names.get(vmid) else str(vmid),
+        help=(
+            "Model scans and Check Status run against this container. Every selected "
+            "LXC is assumed to be set up identically and runs the same configuration."
+        ),
+    )
+
+
+@st.dialog("Select Proxmox LXC containers")
+def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
+    """Modal selector for the PCT-only batch bot's container list."""
+    containers = st.session_state.get("llama_server_proxbatch_containers", [])
+    if not containers:
+        st.info("No LXC containers were found. Scan again after creating or starting containers.")
+    else:
+        selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
+        vmids = [item["vmid"] for item in containers]
+        c_all, c_invert, _ = st.columns([1, 1, 2])
+        with c_all:
+            if st.button("Select all", use_container_width=True):
+                for vmid in vmids:
+                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = True
+                st.session_state["llama_server_pct_vmids"] = vmids
+                st.rerun()
+        with c_invert:
+            if st.button("Invert selection", use_container_width=True):
+                inverted = [vmid for vmid in vmids if vmid not in selected]
+                for vmid in vmids:
+                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
+                st.session_state["llama_server_pct_vmids"] = inverted
+                st.rerun()
+
+        checked: list[str] = []
+        for item in containers:
+            vmid = item["vmid"]
+            label = f"{vmid} — {item.get('name') or 'unnamed'} ({item.get('status', 'unknown')})"
+            if item.get("ip"):
+                label += f" · {item['ip']}"
+            if st.checkbox(label, value=vmid in selected, key=f"llama_server_proxbatch_vmid_{vmid}"):
+                checked.append(vmid)
+        st.session_state["llama_server_pct_vmids"] = checked
+
+    st.divider()
+    c_close, c_rescan = st.columns(2)
+    with c_close:
+        if st.button("Done", type="primary", use_container_width=True):
+            _flush_llama_server_config(project)
+            st.session_state["llama_server_proxbatch_dialog_open"] = False
+            st.rerun()
+    with c_rescan:
+        if st.button("Rescan", use_container_width=True):
+            containers, error = _scan_proxbatch_lxc_containers()
+            st.session_state["llama_server_proxbatch_containers"] = containers
+            st.session_state["llama_server_proxbatch_scan_error"] = error
+            st.rerun()
+
+
 def _flush_llama_server_config(project: dict) -> None:
     """Write flat llama_server_* working keys back into the project's config bundle."""
     get_bot_plugin(project.get("type", "llama_server_bot")).flush_mapped_config(project)
@@ -3133,24 +3276,101 @@ def _flush_llama_server_config(project: dict) -> None:
         "llm_helper_mcp_tools": st.session_state.get("llama_server_llm_helper_mcp_tools", cfg.get("llm_helper_mcp_tools", [])),
         "llm_helper_mcp_strict": st.session_state.get("llama_server_llm_helper_mcp_strict", cfg.get("llm_helper_mcp_strict", False)),
     })
+    if _is_llama_server_proxbatch(project):
+        from core.bot_types.llama_server_proxbatch_bot import normalize_template_vmid
+
+        cfg["execution_target"] = "pct"
+        cfg["server_in_container"] = True
+        cfg["pct_vmids"] = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+        cfg["pct_vmid_names"] = _proxbatch_vmid_names(
+            cfg, st.session_state.get("llama_server_proxbatch_containers", []),
+        )
+        # The session key belongs to the Template LXC selectbox, so a flush may
+        # only read it — _render_proxbatch_template_selector owns correcting it,
+        # before that widget is instantiated.
+        cfg["pct_template_vmid"] = normalize_template_vmid(
+            st.session_state.get("llama_server_pct_template_vmid", ""), cfg["pct_vmids"],
+        )
+        # Each container answers on its own address, so there is no single
+        # client URL until core.pct_server resolves one per run.
+        from core.pct_server import CONTAINER_BIND_HOST
+
+        cfg["server_host"] = CONTAINER_BIND_HOST
+        cfg["openai_base_url"] = ""
+        for key in ("pct_vmid", "ssh_host", "ssh_port", "ssh_user", "ssh_password", "ssh_key_path"):
+            cfg.pop(key, None)
     from core.settings_store import save_settings
     save_settings(st.session_state)
 
 
-def _scan_llama_server_models(project: dict) -> None:
-    """Scan local or remote machine for .gguf models for managed llama-server.
+def _scan_models_via_env(env, model_dir: str) -> list[dict]:
+    """Find .gguf models under model_dir on whatever machine ``env`` reaches."""
+    if model_dir.startswith("~/"):
+        model_dir_sh = '"$HOME/' + model_dir[2:] + '"'
+    else:
+        model_dir_sh = f'"{model_dir}"'
+    res = env.execute(
+        f'find {model_dir_sh} -name "*.gguf" -not -name "ggml-vocab-*"',
+        timeout=15,
+    )
+    paths = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
 
-    The Model Directory is scanned wherever Execution Target points (local/ssh).
-    For SSH, the managed llama-server process also launches on that same remote
-    host (see core.remote_server); for PCT it does not — see core.evaluator's
-    managed-server path.
+    # resolve the base dir on the target so we can make relative paths
+    base_dir = model_dir
+    if base_dir.startswith("~/"):
+        try:
+            home_res = env.execute("echo $HOME")
+            home = home_res["stdout"].strip()
+            base_dir = home + "/" + base_dir[2:]
+        except Exception:
+            pass
+
+    models = []
+    for p in paths:
+        rel = p
+        if p.startswith(base_dir):
+            rel = p[len(base_dir):].lstrip("/")
+        if not rel:
+            rel = p.split("/")[-1]
+        models.append({"name": rel, "path": p})
+    return models
+
+
+def _proxbatch_template_env(project: dict):
+    """PCT environment for the template LXC, or None with an error shown.
+
+    Model scans and connection tests target one container and the batch then
+    reuses that configuration for every selected LXC.
+    """
+    from core.environment import create_environment
+
+    _flush_llama_server_config(project)
+    template = str(project["config"].get("pct_template_vmid", "") or "").strip()
+    if not template:
+        st.warning("Select LXC containers and a template LXC first.")
+        return None
+    return create_environment(ssh=False, pct_vmid=template, remote_cwd=".")
+
+
+def _scan_llama_server_models(project: dict) -> None:
+    """Scan the machine that will host the model for .gguf files.
+
+    The Model Directory is scanned wherever Execution Target points. For SSH
+    the managed llama-server also launches on that host (core.remote_server);
+    for the PCT batch bot it launches inside each container (core.pct_server),
+    so the template LXC is scanned rather than the ModelScope host.
     """
     model_dir = st.session_state.get("llama_server_model_dir", "").strip()
     target    = st.session_state.get("llama_server_execution_target", "local")
     if not model_dir:
         st.warning("Set Model Directory first.")
         return
-    if target == "local":
+    if _is_llama_server_proxbatch(project):
+        env = _proxbatch_template_env(project)
+        if env is None:
+            return
+        models = _scan_models_via_env(env, model_dir)
+    elif target == "local":
         from core.models import scan_gguf_models
         models = scan_gguf_models(model_dir)
     else:
@@ -3165,34 +3385,7 @@ def _scan_llama_server_models(project: dict) -> None:
             remote_cwd=".",
         )
         try:
-            if model_dir.startswith("~/"):
-                model_dir_sh = '"$HOME/' + model_dir[2:] + '"'
-            else:
-                model_dir_sh = f'"{model_dir}"'
-            res   = env.execute(
-                f'find {model_dir_sh} -name "*.gguf" -not -name "ggml-vocab-*"',
-                timeout=15,
-            )
-            paths  = [l.strip() for l in res["stdout"].splitlines() if l.strip()]
-
-            # resolve the base dir on the remote so we can make relative paths
-            base_dir = model_dir
-            if base_dir.startswith("~/"):
-                try:
-                    home_res = env.execute("echo $HOME")
-                    home = home_res["stdout"].strip()
-                    base_dir = home + "/" + base_dir[2:]
-                except Exception:
-                    pass
-
-            models = []
-            for p in paths:
-                rel = p
-                if p.startswith(base_dir):
-                    rel = p[len(base_dir):].lstrip("/")
-                if not rel:
-                    rel = p.split("/")[-1]
-                models.append({"name": rel, "path": p})
+            models = _scan_models_via_env(env, model_dir)
         finally:
             env.close()
 
@@ -3280,12 +3473,13 @@ def _test_llama_server_run(project: dict) -> None:
 
     When Execution Target is SSH, the server is launched ON that remote host
     (see core.remote_server) and reached through an SSH-tunnelled local port —
-    matching what a real Execute run does. For Local/PCT it launches on the
-    ModelScope host itself (PCT's container network namespace can't be
-    port-forwarded to the same way SSH's host can); the "already listening"
-    pre-check (skip launching if an Execute run already has the server up)
-    only applies to that local case, since checking a remote port would need
-    its own SSH round-trip regardless of whether a launch is about to happen.
+    matching what a real Execute run does. The PCT batch bot launches inside
+    its template LXC (see core.pct_server), which is likewise what its Execute
+    run does for every selected container. Local launches on the ModelScope
+    host itself; the "already listening" pre-check (skip launching if an
+    Execute run already has the server up) only applies to that local case,
+    since checking a port on another machine would need its own round-trip
+    regardless of whether a launch is about to happen.
     """
     import os
     import subprocess
@@ -3299,7 +3493,8 @@ def _test_llama_server_run(project: dict) -> None:
     port = int(cfg.get("server_port") or 8080)
     verify_ssl = cfg.get("openai_verify_ssl", True)
     exec_target = cfg.get("execution_target", "local")
-    use_remote = exec_target == "ssh"
+    use_pct = _is_llama_server_proxbatch(project)
+    use_remote = exec_target == "ssh" and not use_pct
 
     # Validate the configured launch inputs before accepting an unrelated
     # process already bound to the default address as a successful test.
@@ -3308,7 +3503,7 @@ def _test_llama_server_run(project: dict) -> None:
         st.session_state["_llama_server_svc_result"] = ("error", "No model selected.", "")
         return
 
-    if not use_remote:
+    if not use_remote and not use_pct:
         client_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
         url = f"http://{client_host}:{port}"
         if _llama_server_mod.port_open(url, timeout=1.5):
@@ -3322,21 +3517,21 @@ def _test_llama_server_run(project: dict) -> None:
             else:
                 st.session_state["_llama_server_svc_result"] = (
                     "error",
-                    "Connection failed. A server is listening at this address but didn't return valid model info.",
+                    "Connection failed. A server is already listening at this address but didn't return valid model info.",
                     "",
                 )
             return
 
     model_dir  = cfg.get("model_dir", "")
     model_path = os.path.join(model_dir, model_name) if model_dir else model_name
-    if not use_remote:
+    if not use_remote and not use_pct:
         model_path = os.path.abspath(os.path.expanduser(model_path))
 
     binary = (cfg.get("binary_path") or "").strip()
     if not binary:
         st.session_state["_llama_server_svc_result"] = ("error", "No binary path configured.", "")
         return
-    if not use_remote and os.path.isdir(binary):
+    if not use_remote and not use_pct and os.path.isdir(binary):
         binary = os.path.join(binary, "llama-server")
 
     context_size   = int(cfg.get("tokens") or 32768)
@@ -3347,7 +3542,26 @@ def _test_llama_server_run(project: dict) -> None:
     logs: list[str] = []
     ssh_env = None
     try:
-        if use_remote:
+        if use_pct:
+            from core.pct_server import start_pct_managed_llama_server
+
+            template = str(cfg.get("pct_template_vmid", "") or "").strip()
+            if not template:
+                st.session_state["_llama_server_svc_result"] = (
+                    "error", "Select LXC containers and a template LXC first.", "",
+                )
+                return
+            from core.environment import create_environment
+            pct_env = create_environment(ssh=False, pct_vmid=template, remote_cwd=".")
+            proc = start_pct_managed_llama_server(
+                pct_env, template, binary, model_path, context_size, port,
+                logs.append,
+                custom_flags=custom_flags,
+                advanced_flags=advanced_flags,
+                ready_timeout=ready_timeout,
+            )
+            url = proc.base_url
+        elif use_remote:
             from core.environment import SSHEnvironment
             from core.remote_server import start_remote_managed_llama_server
             ssh_env = SSHEnvironment(
@@ -3389,13 +3603,13 @@ def _test_llama_server_run(project: dict) -> None:
             _max_ctx = info.get('n_ctx') or '?'
             st.session_state["_llama_server_svc_result"] = (
                 "ok",
-                f"Server started and responded correctly  |  "
+                f"Test successful — server started and responded correctly  |  "
                 f"model: `{model}`  |  Context Window Length (Tokens): `{_disp_ctx}` (Server max: `{_max_ctx}`)",
                 "",
             )
         else:
             st.session_state["_llama_server_svc_result"] = (
-                "error", "Connection failed. Server started but didn't return valid model info.", "",
+                "error", "Connection failed. Server started but didn't return model info.", "",
             )
     finally:
         proc.terminate()
@@ -3410,21 +3624,49 @@ def _test_llama_server_run(project: dict) -> None:
 def _render_llama_server_runtime(project: dict) -> None:
     """Runtime sub-tab for Llama-Server-Bot: target, model setup, server bind, commands, MCP."""
 
+    is_proxbatch = _is_llama_server_proxbatch(project)
     with st.expander("Execution Target", expanded=True):
-        target = st.radio(
-            "Mode",
-            options=["local", "ssh", "pct"],
-            format_func=lambda v: {"local": "Local", "ssh": "SSH (Remote)", "pct": "PCT (Proxmox LXC)"}.get(v, v),
-            key="llama_server_execution_target",
-            help=(
-                "Where startup/completion/validation commands run and where the model "
-                "directory is scanned. For SSH, the managed llama-server process also "
-                "launches on that remote host (via an SSH tunnel). For PCT it does not — "
-                "the managed server always starts on the ModelScope host since a PCT "
-                "container's network namespace can't be tunnelled to the same way."
-            ),
-            horizontal=True,
-        )
+        if is_proxbatch:
+            target = "pct"
+            st.session_state["llama_server_execution_target"] = "pct"
+            st.caption(
+                "PCT-only batch execution. Each selected LXC runs the same workflow "
+                "sequentially, with its own llama-server started inside it."
+            )
+            selected_vmids = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+            c_scan, c_selected = st.columns([1, 3])
+            with c_scan:
+                if st.button("Scan LXCs", key="btn_llama_server_proxbatch_scan_lxcs", use_container_width=True):
+                    containers, error = _scan_proxbatch_lxc_containers()
+                    st.session_state["llama_server_proxbatch_containers"] = containers
+                    st.session_state["llama_server_proxbatch_scan_error"] = error
+                    st.session_state["llama_server_proxbatch_dialog_open"] = True
+            with c_selected:
+                if selected_vmids:
+                    st.caption(f"Selected VMIDs: `{', '.join(selected_vmids)}`")
+                else:
+                    st.caption("No LXC containers selected.")
+            scan_error = st.session_state.get("llama_server_proxbatch_scan_error", "")
+            if scan_error:
+                st.error(f"Could not scan LXCs: {scan_error}")
+            if st.session_state.get("llama_server_proxbatch_dialog_open"):
+                _render_llama_server_proxbatch_vmid_dialog(project)
+            _render_proxbatch_template_selector(project, selected_vmids)
+        else:
+            target = st.radio(
+                "Mode",
+                options=["local", "ssh", "pct"],
+                format_func=lambda v: {"local": "Local", "ssh": "SSH (Remote)", "pct": "PCT (Proxmox LXC)"}.get(v, v),
+                key="llama_server_execution_target",
+                help=(
+                    "Where startup/completion/validation commands run and where the model "
+                    "directory is scanned. For SSH, the managed llama-server process also "
+                    "launches on that remote host (via an SSH tunnel). For PCT it does not — "
+                    "the managed server always starts on the ModelScope host since a PCT "
+                    "container's network namespace can't be tunnelled to the same way."
+                ),
+                horizontal=True,
+            )
         st.checkbox(
             "Run commands with sudo",
             key="llama_server_sudo",
@@ -3437,7 +3679,9 @@ def _render_llama_server_runtime(project: dict) -> None:
                 type="password",
                 help="Piped to `sudo -S`. Leave blank to reuse the SSH password or if passwordless sudo (NOPASSWD) is configured.",
             )
-        if target == "local":
+        if is_proxbatch:
+            pass
+        elif target == "local":
             st.divider()
             _render_test_button("local", "llama_server")
         elif target == "pct":
@@ -3492,7 +3736,16 @@ def _render_llama_server_runtime(project: dict) -> None:
     with st.expander("Server Setup", expanded=True):
         st.session_state["llama_server_backend"] = "llama-server (managed)"
         _exec_target_for_warning = st.session_state.get("llama_server_execution_target", "local")
-        if _exec_target_for_warning == "ssh":
+        if is_proxbatch:
+            _template = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
+            st.info(
+                "Each selected LXC runs its own llama-server **inside the container**, so the "
+                "Binary Path and Model Directory/Model below must point to files that exist "
+                "**inside every container** — they are assumed to be set up identically. "
+                + (f"Scanning and Check Status use template LXC **{_template}**."
+                   if _template else "Select a template LXC to scan models or check status.")
+            )
+        elif _exec_target_for_warning == "ssh":
             st.info(
                 "Execution Target is **SSH** — the managed llama-server launches on that remote "
                 "host (via an SSH tunnel), so the Binary Path and Model Directory/Model below must "
@@ -3519,7 +3772,11 @@ def _render_llama_server_runtime(project: dict) -> None:
                 "Model Directory",
                 key="llama_server_model_dir",
                 placeholder="/home/user/models",
-                help="Local directory to scan for .gguf model files.",
+                help=(
+                    "Directory inside each LXC to scan for .gguf model files."
+                    if is_proxbatch else
+                    "Local directory to scan for .gguf model files."
+                ),
             )
         with col_scan:
             st.write("")
@@ -3550,15 +3807,11 @@ def _render_llama_server_runtime(project: dict) -> None:
                 help="Enter a local model filename/path manually, or use Scan to find models.",
             )
 
-        col_host, col_port = st.columns([3, 1])
-        with col_host:
-            st.text_input(
-                "Listen Host",
-                key="llama_server_server_host",
-                placeholder="127.0.0.1",
-                help="Interface llama-server binds to. Use 127.0.0.1 for local-only or 0.0.0.0 to listen on all interfaces.",
-            )
-        with col_port:
+        if is_proxbatch:
+            # A container's loopback is unreachable from the Proxmox host, so the
+            # bind address isn't the user's to choose here.
+            from core.pct_server import CONTAINER_BIND_HOST
+
             st.number_input(
                 "Listen Port",
                 min_value=1,
@@ -3566,12 +3819,35 @@ def _render_llama_server_runtime(project: dict) -> None:
                 step=1,
                 key="llama_server_server_port",
             )
+            port = int(st.session_state.get("llama_server_server_port") or 8080)
+            st.session_state["llama_server_server_host"] = CONTAINER_BIND_HOST
+            st.caption(
+                f"Each container's llama-server binds `{CONTAINER_BIND_HOST}:{port}`; ModelScope "
+                "calls it at that container's own IP address."
+            )
+        else:
+            col_host, col_port = st.columns([3, 1])
+            with col_host:
+                st.text_input(
+                    "Listen Host",
+                    key="llama_server_server_host",
+                    placeholder="127.0.0.1",
+                    help="Interface llama-server binds to. Use 127.0.0.1 for local-only or 0.0.0.0 to listen on all interfaces.",
+                )
+            with col_port:
+                st.number_input(
+                    "Listen Port",
+                    min_value=1,
+                    max_value=65535,
+                    step=1,
+                    key="llama_server_server_port",
+                )
 
-        host = st.session_state.get("llama_server_server_host", "127.0.0.1")
-        port = int(st.session_state.get("llama_server_server_port") or 8080)
-        base_url = _llama_server_client_base_url(host, port)
-        st.session_state["llama_server_openai_base_url"] = base_url
-        st.caption(f"ModelScope will call `{base_url}` after starting the server.")
+            host = st.session_state.get("llama_server_server_host", "127.0.0.1")
+            port = int(st.session_state.get("llama_server_server_port") or 8080)
+            base_url = _llama_server_client_base_url(host, port)
+            st.session_state["llama_server_openai_base_url"] = base_url
+            st.caption(f"ModelScope will call `{base_url}` after starting the server.")
 
         st.session_state.setdefault("llama_server_tokens", 32768)
         st.number_input(
@@ -3745,6 +4021,21 @@ def _render_llama_server_validation(project: dict) -> None:
 
 def _render_llama_server_bot_config(project: dict) -> None:
     """Top-level renderer for Llama-Server bot configuration."""
+    st.divider()
+
+    sub_runtime, sub_val, sub_metrics = st.tabs(
+        ["🖥  Runtime", "✅  Validation", "📊  Metrics Config"]
+    )
+    with sub_runtime:
+        _render_llama_server_runtime(project)
+    with sub_val:
+        _render_llama_server_validation(project)
+    with sub_metrics:
+        _render_metric_thresholds_config(project, "llama_server", _flush_llama_server_config)
+
+
+def _render_llama_server_proxbatch_bot_config(project: dict) -> None:
+    """Configuration for the PCT-only batch form of Llama-Server-Bot."""
     st.divider()
 
     sub_runtime, sub_val, sub_metrics = st.tabs(

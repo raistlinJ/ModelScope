@@ -23,6 +23,34 @@ def run_status_fingerprint(config: dict[str, Any]) -> str:
     return json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
 
 
+_BATCH_LEVEL_ICONS = {"not_started": "○", "partial": "◐", "complete": "●"}
+
+
+def batch_execution_indicator(telemetry: dict[str, Any] | None) -> list[dict[str, str]]:
+    """Return one box describing how far a batch project's last run got.
+
+    Batch projects run the same workflow on many containers, so a single
+    pass/fail box would hide the fact that only some of them ran. This
+    reports execution coverage instead: not started, partially complete,
+    or fully complete. It is deliberately independent of
+    :func:`run_status_fingerprint` — how far a run got stays true even
+    after the validation config is edited.
+    """
+    from core.batch_progress import batch_summary
+
+    containers = (telemetry or {}).get("batch_containers")
+    summary = batch_summary(containers if isinstance(containers, list) else [])
+    level = summary["level"]
+    total, finished = summary["total"], summary["finished"]
+    if level == "complete":
+        label = f"Execution: complete — all {total} container(s) ran"
+    elif level == "partial":
+        label = f"Execution: partially complete — {finished} of {total} container(s) finished"
+    else:
+        label = "Execution: not started"
+    return [{"key": "batch_execution", "icon": _BATCH_LEVEL_ICONS[level], "level": level, "label": label}]
+
+
 def sidebar_status_indicators(
     telemetry: dict[str, Any] | None, current_config: dict[str, Any],
 ) -> list[dict[str, str]]:
