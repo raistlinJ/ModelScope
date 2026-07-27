@@ -196,6 +196,8 @@ def start_pct_managed_llama_server(
     while time.time() < deadline:
         if handle.poll() is not None:
             tail = handle.read_log_tail()
+            if not tail.strip():
+                tail = f"Launch stdout: {result.get('stdout', '')}\nLaunch stderr: {result.get('stderr', '')}"
             raise RuntimeError(
                 f"llama-server exited immediately in LXC {vmid}"
                 + (f": {tail[-800:]}" if tail else "")
