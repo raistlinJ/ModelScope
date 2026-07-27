@@ -192,9 +192,12 @@ def start_pct_managed_llama_server(
     
     result = env.execute(launch_sysd, timeout=20)
     if result.get("exit_code") == 0:
-        time.sleep(0.5)
-        pid_res = env.execute(f"cat {pid_path} 2>/dev/null", timeout=5)
-        pid = pid_res.get("stdout", "").strip()
+        for _ in range(10):  # Wait up to ~5 seconds for systemd to schedule it
+            time.sleep(0.5)
+            pid_res = env.execute(f"cat {pid_path} 2>/dev/null", timeout=5)
+            pid = pid_res.get("stdout", "").strip()
+            if pid.isdigit():
+                break
     else:
         # Fallback for alpine/non-systemd containers
         launch_fallback = f"setsid nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
