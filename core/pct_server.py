@@ -177,7 +177,9 @@ def start_pct_managed_llama_server(
     server_command = " ".join(command_parts)
 
     log_path = f"/tmp/modelscope_llama_server_{port}.log"
-    launch = f"nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
+    # Use setsid to completely detach the process from pct exec's pseudo-terminal session,
+    # preventing it from being killed when the env.execute() shell exits.
+    launch = f"setsid nohup {server_command} </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
 
     result = env.execute(launch, timeout=20)
