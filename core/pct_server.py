@@ -208,10 +208,13 @@ def start_pct_managed_llama_server(
         stdout = (result.get("stdout") or "").strip()
         pid = stdout.splitlines()[-1].strip() if stdout else ""
 
-    if not pid or not pid.isdigit():
+    if not pid or not pid.isdigit() or pid == "0":
+        # The service died instantly. Read the log file to see why (e.g. missing LD_LIBRARY_PATH).
+        log_res = env.execute(f"cat {shlex.quote(log_path)} 2>/dev/null", timeout=5)
+        log_out = log_res.get("stdout", "").strip()
+        error_details = log_out if log_out else (result.get('stderr') or result.get('stdout') or 'unknown error')
         raise RuntimeError(
-            f"Failed to start llama-server in LXC {vmid}: "
-            f"{result.get('stderr') or result.get('stdout') or 'unknown error'}"
+            f"Failed to start llama-server in LXC {vmid} (service died instantly):\n{error_details}"
         )
 
     base_url = f"http://{address}:{port}"
