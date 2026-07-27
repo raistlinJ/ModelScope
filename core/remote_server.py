@@ -204,6 +204,7 @@ def start_remote_managed_llama_server(
     itself (typically 127.0.0.1) — ModelScope talks to the server through an
     SSH-tunnelled local port instead of the remote address directly.
     """
+    binary = (binary or "").strip() or "llama-server"
     cmd_parts = [
         _quote_remote_path(binary) if binary.startswith("~/") else shlex.quote(binary),
         "-m", _quote_remote_path(model_path),

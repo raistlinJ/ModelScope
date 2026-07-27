@@ -131,7 +131,7 @@ def resolve_container_binary(env: Any, binary: str) -> str:
     """
     binary = (binary or "").strip()
     if not binary:
-        return binary
+        return "llama-server"
     probe = env.execute(f"test -d {_container_path(binary)}", timeout=10)
     if probe.get("exit_code", 1) == 0:
         return f"{binary.rstrip('/')}/llama-server"
