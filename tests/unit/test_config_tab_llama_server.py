@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 from ui.config_tab import (
     _state_prefix_from_test_result_key,
     _flush_llama_server_config,
+    _render_proxbatch_template_selector,
+    _scan_llama_server_models,
+    _scan_proxbatch_lxc_containers,
     _test_llama_server_run,
 )
 
@@ -79,6 +82,31 @@ class TestStatePrefixFromTestResultKey:
         assert _state_prefix_from_test_result_key("llama_server_pct_test_result") == "llama_server"
 
 
+class TestProxBatchLxcScan:
+    @patch("subprocess.run")
+    def test_parses_pct_list_rows(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "VMID       Status     Lock         Name\n"
+                "100        running                 api\n"
+                "101        stopped    snapshot     worker one\n"
+            ),
+            stderr="",
+        )
+
+        containers, error = _scan_proxbatch_lxc_containers()
+
+        mock_run.assert_called_once_with(
+            ["pct", "list"], capture_output=True, text=True, timeout=15, check=False,
+        )
+        assert error == ""
+        assert containers == [
+            {"vmid": "100", "status": "running", "name": "api"},
+            {"vmid": "101", "status": "stopped", "name": "worker one"},
+        ]
+
+
 # ── _flush_llama_server_config ────────────────────────────────────────────────
 
 class TestFlushLlamaServerExecutionTarget:
@@ -104,6 +132,117 @@ class TestFlushLlamaServerExecutionTarget:
         _flush_llama_server_config(project)
         assert project["config"]["execution_target"] == "pct"
         assert project["config"]["pct_vmid"] == "101"
+
+
+class TestFlushProxBatchConfig:
+    """The batch bot serves from inside each container, which changes what a
+    flush is allowed to write for the bind address and client URL."""
+
+    def _proxbatch_project(self):
+        return {"id": "p2", "name": "Batch", "type": "llama_server_proxbatch_bot", "config": {}}
+
+    def test_template_defaults_to_the_first_selected_container(self):
+        project = self._proxbatch_project()
+        _set_session(llama_server_pct_vmids=["100", "101"], llama_server_pct_template_vmid="")
+
+        _flush_llama_server_config(project)
+
+        assert project["config"]["pct_vmids"] == ["100", "101"]
+        assert project["config"]["pct_template_vmid"] == "100"
+
+    def test_a_template_that_is_no_longer_selected_is_replaced(self):
+        project = self._proxbatch_project()
+        _set_session(llama_server_pct_vmids=["101", "102"], llama_server_pct_template_vmid="100")
+
+        _flush_llama_server_config(project)
+
+        assert project["config"]["pct_template_vmid"] == "101"
+        # The flush runs after the Template LXC selectbox has been drawn, and
+        # Streamlit raises if a widget's key is written once it exists — so the
+        # corrected value may only reach the config, never session state.
+        assert st.session_state["llama_server_pct_template_vmid"] == "100"
+
+    def test_server_binds_the_container_and_has_no_fixed_client_url(self):
+        project = self._proxbatch_project()
+        _set_session(llama_server_pct_vmids=["100"], llama_server_server_host="127.0.0.1")
+
+        _flush_llama_server_config(project)
+
+        assert project["config"]["server_in_container"] is True
+        assert project["config"]["server_host"] == "0.0.0.0"
+        # Each container answers on its own IP, so no single URL is knowable here.
+        assert project["config"]["openai_base_url"] == ""
+
+
+class TestProxBatchTemplateSelector:
+    @patch("ui.config_tab.st")
+    def test_an_unselectable_template_is_corrected_before_the_widget(self, mock_st):
+        mock_st.session_state = st.session_state
+        seen: list[str] = []
+        mock_st.selectbox.side_effect = lambda *a, **k: seen.append(
+            st.session_state["llama_server_pct_template_vmid"]
+        )
+        st.session_state["llama_server_pct_template_vmid"] = "100"
+
+        _render_proxbatch_template_selector({"config": {}}, ["101", "102"])
+
+        assert seen == ["101"]
+
+    @patch("ui.config_tab.st")
+    def test_a_valid_choice_is_left_for_the_widget_to_own(self, mock_st):
+        mock_st.session_state = st.session_state
+        st.session_state["llama_server_pct_template_vmid"] = "102"
+
+        _render_proxbatch_template_selector({"config": {}}, ["101", "102"])
+
+        assert st.session_state["llama_server_pct_template_vmid"] == "102"
+
+    @patch("ui.config_tab.st")
+    def test_no_selection_means_no_dropdown(self, mock_st):
+        mock_st.session_state = st.session_state
+
+        _render_proxbatch_template_selector({"config": {}}, [])
+
+        mock_st.selectbox.assert_not_called()
+
+
+class TestScanProxBatchModels:
+    """The mock streamlit module has no output functions, so these swap in a
+    recording double for the duration of the call."""
+
+    @patch("ui.config_tab.st")
+    @patch("core.environment.create_environment")
+    def test_models_are_scanned_inside_the_template_container(self, mock_create_env, mock_st):
+        mock_st.session_state = st.session_state
+        env = MagicMock()
+        env.execute.return_value = {
+            "stdout": "/models/a.gguf\n/models/sub/b.gguf\n", "stderr": "", "exit_code": 0,
+        }
+        mock_create_env.return_value = env
+        project = {"id": "p2", "name": "Batch", "type": "llama_server_proxbatch_bot", "config": {}}
+        _set_session(
+            llama_server_model_dir="/models",
+            llama_server_pct_vmids=["100", "101"],
+            llama_server_pct_template_vmid="101",
+        )
+
+        _scan_llama_server_models(project)
+
+        mock_create_env.assert_called_once_with(ssh=False, pct_vmid="101", remote_cwd=".")
+        assert [m["name"] for m in st.session_state["llama_server_discovered_models"]] == [
+            "a.gguf", "sub/b.gguf",
+        ]
+
+    @patch("ui.config_tab.st")
+    @patch("core.environment.create_environment")
+    def test_scanning_without_a_selection_does_not_reach_a_container(self, mock_create_env, mock_st):
+        mock_st.session_state = st.session_state
+        project = {"id": "p2", "name": "Batch", "type": "llama_server_proxbatch_bot", "config": {}}
+        _set_session(llama_server_model_dir="/models", llama_server_pct_vmids=[])
+
+        _scan_llama_server_models(project)
+
+        mock_create_env.assert_not_called()
 
 
 # ── _test_llama_server_run ────────────────────────────────────────────────────

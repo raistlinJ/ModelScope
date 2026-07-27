@@ -535,6 +535,10 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
     ``shared`` is a plain dict visible to both this thread and the main
     Streamlit thread.  We never touch ``st.session_state`` here.
     """
+    if bot_type == "llama_server_proxbatch_bot":
+        _run_llama_server_proxbatch_bot(project, shared)
+        return
+
     import shlex
     from core.environment import LocalEnvironment, SSHEnvironment
     from core.evaluator import run_llama_cli_evaluation
@@ -582,7 +586,7 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         pct_vmid=cfg.get("pct_vmid", "") if tgt == "pct" else None,
     )
 
-    is_llama_server = bot_type == "llama_server_bot"
+    is_llama_server = bot_type in ("llama_server_bot", "llama_server_proxbatch_bot")
     default_backend = "llama-server (managed)" if is_llama_server else "llama.cpp"
 
     llama_config = {
@@ -598,6 +602,7 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
         "server_host":         cfg.get("server_host", "127.0.0.1"),
         "server_port":         cfg.get("server_port", 8080),
         "server_ready_timeout": cfg.get("server_ready_timeout", 300),
+        "server_in_container": cfg.get("server_in_container", False),
         "mcp_server_url":      "http://127.0.0.1:9191",
         "mcp_enabled":         cfg.get("mcp_enabled", False),
         "mcp_config_path":     cfg.get("mcp_config_path", ""),
@@ -681,6 +686,120 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
     shared["project_id"] = project.get("id")
 
 
+class _ProxBatchLog(list):
+    """One container's log list, wired into progress and the batch-wide stream.
+
+    ``_run_llama_cli_bot`` appends to whatever list it finds under
+    ``logs_setup`` / ``logs_validation``, so seeding those keys with this list
+    is enough to track a container without the runner knowing about batches.
+    """
+
+    def __init__(self, container_state: dict, batch_shared: dict, mirror: list, vmid: str):
+        super().__init__()
+        self._state = container_state
+        self._batch_shared = batch_shared
+        self._mirror = mirror
+        self._vmid = vmid
+
+    def append(self, entry: dict) -> None:
+        from core.batch_progress import observe_log
+
+        super().append(entry)
+        text = entry.get("text", "") if isinstance(entry, dict) else str(entry)
+        observe_log(self._state, text)
+        # The batch-wide phase drives the shared Startup/Validation/Completion
+        # expander labels; "done" belongs to one container, not the batch.
+        if self._state.get("phase") in ("startup", "validation", "completion"):
+            self._batch_shared["phase"] = self._state["phase"]
+        mirrored = dict(entry) if isinstance(entry, dict) else {}
+        mirrored["text"] = f"[{self._vmid}] {text}"
+        self._mirror.append(mirrored)
+
+
+class _ProxBatchItem(dict):
+    """Per-container run state that shares the batch's cancellation flag."""
+
+    def __init__(self, batch_shared: dict, container_state: dict, vmid: str):
+        super().__init__()
+        self._batch_shared = batch_shared
+        self["phase"] = ""
+        for key in ("logs_setup", "logs_validation"):
+            stream = _ProxBatchLog(
+                container_state, batch_shared, batch_shared.setdefault(key, []), vmid,
+            )
+            self[key] = stream
+            container_state[key] = stream
+
+    def get(self, key, default=None):
+        if key == "cancel_requested":
+            return self._batch_shared.get("cancel_requested", False)
+        return super().get(key, default)
+
+
+def _run_llama_server_proxbatch_bot(project: dict, shared: dict) -> None:
+    """Run a PCT-only managed-server project once per selected LXC VMID.
+
+    The loop and roll-up live in core.proxbatch so the CLI runs the identical
+    batch; what belongs here is the Streamlit-side wiring — per-container log
+    streams feeding the live progress cards, and the batch's own session log.
+    """
+    import copy
+    from core import batch_progress, proxbatch
+    from core.session_log import SessionLog
+
+    cfg = project.get("config", {})
+
+    if not proxbatch.selected_vmids(cfg):
+        shared.setdefault("logs_setup", []).append({
+            "text": "[ERROR] Select at least one PCT LXC before executing.", "tag": "warn",
+        })
+        shared["telemetry"] = proxbatch.no_vmids_telemetry("llama_server_proxbatch_bot")
+        shared["completed"] = True
+        shared["project_id"] = project.get("id")
+        return
+
+    # The Execute tab seeds this before starting the thread so the progress
+    # cards appear immediately; a headless run plans from the config instead.
+    batch = shared.get("batch")
+    if not isinstance(batch, dict) or not batch.get("containers"):
+        batch = proxbatch.new_batch_state(cfg)
+        shared["batch"] = batch
+    containers = batch["containers"]
+    for vmid in proxbatch.selected_vmids(cfg):
+        containers.setdefault(vmid, batch_progress.new_container_state(vmid))
+
+    def run_one(vmid: str, container_state: dict) -> dict:
+        item_project = copy.deepcopy(project)
+        item_project["type"] = "llama_server_bot"
+        item_project["config"] = proxbatch.container_config(item_project["config"], vmid)
+        item_shared = _ProxBatchItem(shared, container_state, vmid)
+        _run_llama_cli_bot(item_project, item_shared, "llama_server_bot")
+        return copy.deepcopy(item_shared.get("telemetry", {}))
+
+    aggregate = proxbatch.run_pct_batch(
+        containers,
+        run_one,
+        on_log=lambda message: shared.setdefault("logs_setup", []).append(
+            {"text": message, "tag": "sys"},
+        ),
+        is_cancelled=lambda: bool(shared.get("cancel_requested")),
+    )
+
+    # Preserve a single, dashboard-visible record for the entire batch as well
+    # as the individual LXC diagnostics emitted by the existing runner.
+    session_log = SessionLog()
+    session_log.save_telemetry(aggregate)
+    session_log.save_config({
+        **copy.deepcopy(project.get("config", {})),
+        "type": "llama_server_proxbatch_bot",
+        "active_project_id": project.get("id"),
+    })
+    session_log.close()
+    shared["telemetry"] = aggregate
+    shared["completed"] = True
+    shared["project_id"] = project.get("id")
+
+
 def _get_llama_selected_validation_sets(cfg: dict, exec_prefix: str = "llama_exec") -> list:
     """Return a filtered deep-copy of cfg['validation_sets'] based on execute-tab checkboxes."""
     import copy
@@ -704,8 +823,19 @@ def _render_llama_cli_execute(
     llm_label: str = "LLAMA-CLI",
     exec_prefix: str = "llama_exec",
     flush_fn=_flush_llama_cli_config,
+    render_targets=None,
+    render_progress=None,
+    on_run_start=None,
+    on_clear=None,
 ) -> None:
-    """Execute view for llama-backed bots: config summary + Execute button + log."""
+    """Execute view for llama-backed bots: config summary + Execute button + log.
+
+    The four optional hooks let a bot type that runs on more than one target
+    extend this view without forking it: ``render_targets(project)`` lists the
+    run targets in the config panel, ``render_progress(project)`` draws live
+    per-target status above the logs, and ``on_run_start(project, shared)`` /
+    ``on_clear(project)`` set up and tear down that per-target state.
+    """
     cfg = project.get("config", {})
 
     st.markdown(f"### {project['name']}")
@@ -733,12 +863,19 @@ def _render_llama_cli_execute(
                 timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
                 st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color: #888; font-size: 0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
+                if render_targets is not None:
+                    render_targets(project)
+
                 # Model info summary
                 backend = cfg.get("backend", "llama-cli")
                 with st.expander("**Model Info**", expanded=True):
                     st.caption(f"Backend: **{backend}**")
                     st.caption(f"Model: **{model_name}**")
-                    if bot_type == "llama_server_bot":
+                    if bot_type == "llama_server_proxbatch_bot":
+                        st.caption(f"Binary (in container): `{cfg.get('binary_path', '') or 'not configured'}`")
+                        st.caption(f"Listen: `{cfg.get('server_host', '0.0.0.0')}:{cfg.get('server_port', 8080)}` inside each LXC")
+                        st.caption("Client URL: each container's own address, resolved when it starts.")
+                    elif bot_type == "llama_server_bot":
                         st.caption(f"Binary: `{cfg.get('binary_path', '') or 'not configured'}`")
                         st.caption(f"Listen: `{cfg.get('server_host', '127.0.0.1')}:{cfg.get('server_port', 8080)}`")
                         st.caption(f"Client URL: `{cfg.get('openai_base_url', '') or 'not configured'}`")
@@ -855,7 +992,17 @@ def _render_llama_cli_execute(
             st.session_state["_run_in_progress"] = False
             st.session_state["cancel_requested"] = False
             st.session_state["_exec_phase"]      = ""
+            if on_clear is not None:
+                on_clear(project)
             st.rerun()
+
+    progress_placeholder = st.empty() if render_progress is not None else None
+
+    def _paint_progress() -> None:
+        if render_progress is None:
+            return
+        with progress_placeholder.container():
+            render_progress(project)
 
     col_sh, col_ll = st.columns(2)
     col_sh.markdown("**Setup/Cleanup Log**")
@@ -888,6 +1035,8 @@ def _render_llama_cli_execute(
             "completed": False,
             "telemetry": {},
         }
+        if on_run_start is not None:
+            on_run_start(project, shared_state)
         st.session_state["_run_shared"] = shared_state
         thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state, bot_type), daemon=True)
         thread.start()
@@ -898,13 +1047,14 @@ def _render_llama_cli_execute(
     @st.fragment(run_every="0.5s")
     def _poll_llama_execution():
         shared = st.session_state.get("_run_shared", {})
-        
+
         # Sync shared state to session state for UI to render
         st.session_state["run_logs_setup"] = shared.get("logs_setup", [])
         st.session_state["run_logs_validation"] = shared.get("logs_validation", [])
         if shared.get("phase"):
             st.session_state["_exec_phase"] = shared["phase"]
-            
+
+        _paint_progress()
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
         thread = st.session_state.get("_run_thread")
@@ -934,8 +1084,11 @@ def _render_llama_cli_execute(
             st.rerun()
 
     if run_in_progress:
+        # The progress panel owns keyed widgets, so it must be painted by
+        # exactly one of these branches per script run, never both.
         _poll_llama_execution()
     else:
+        _paint_progress()
         _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
         _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
 
@@ -970,6 +1123,232 @@ def _render_llama_server_execute(project: dict) -> None:
         llm_label="LLAMA-SERVER",
         exec_prefix="llama_server_exec",
         flush_fn=_flush_llama_server_config,
+    )
+
+
+_PROXBATCH_EXEC_PREFIX = "llama_server_proxbatch_exec"
+_PROXBATCH_DETAIL_KEY = "_proxbatch_detail_vmid"
+
+# state → (badge, wording used on the card and in the details dialog)
+_PROXBATCH_BADGES = {
+    "pending":  ("⏳", "Not started"),
+    "running":  ("🔄", "Running"),
+    "passed":   ("✅", "Validation passed"),
+    "failed":   ("❌", "Validation failed"),
+    "aborted":  ("⚠️", "Aborted"),
+    "complete": ("☑️", "Complete"),
+    "skipped":  ("⏭️", "Skipped"),
+}
+
+
+def _proxbatch_state_key(project: dict) -> str:
+    return f"_proxbatch_batch_{project.get('id', '')}"
+
+
+def _proxbatch_containers(project: dict) -> list[dict]:
+    """Per-container records for this project's most recent batch run.
+
+    Live records are held by reference while the worker thread runs. Once the
+    session has been restarted they are gone, so the saved telemetry summaries
+    stand in — same status and percentages, without the logs.
+    """
+    batch = st.session_state.get(_proxbatch_state_key(project)) or {}
+    containers = list((batch.get("containers") or {}).values())
+    if containers:
+        return containers
+    saved = (st.session_state.get("telemetry") or {}).get("batch_containers")
+    return [dict(item) for item in saved] if isinstance(saved, list) else []
+
+
+def _proxbatch_container(project: dict, vmid: str) -> dict | None:
+    return next(
+        (state for state in _proxbatch_containers(project) if str(state.get("vmid")) == vmid),
+        None,
+    )
+
+
+def _proxbatch_phase_label(state: dict) -> str:
+    """Phase wording for a card, with the two states that have no phase yet."""
+    from core.batch_progress import PENDING, PHASE_LABELS, SKIPPED
+
+    if state.get("state") == PENDING:
+        return "Queued"
+    if state.get("state") == SKIPPED:
+        return "Skipped"
+    phase = state.get("phase", "")
+    return PHASE_LABELS.get(phase, phase or "—")
+
+
+def _proxbatch_on_run_start(project: dict, shared_state: dict) -> None:
+    """Seed pending container cards before the worker thread starts.
+
+    Planning happens here, in the main thread, because the unit count depends
+    on which validation sets are ticked in this tab. The state dict is shared
+    by reference, so the worker's updates land straight in what we render.
+    """
+    from core.proxbatch import new_batch_state
+
+    cfg = project.get("config", {})
+    batch = new_batch_state(
+        cfg, _get_llama_selected_validation_sets(cfg, _PROXBATCH_EXEC_PREFIX),
+    )
+    shared_state["batch"] = batch
+    st.session_state[_proxbatch_state_key(project)] = batch
+    st.session_state.pop(_PROXBATCH_DETAIL_KEY, None)
+
+
+def _proxbatch_on_clear(project: dict) -> None:
+    st.session_state.pop(_proxbatch_state_key(project), None)
+    st.session_state.pop(_PROXBATCH_DETAIL_KEY, None)
+
+
+def _render_proxbatch_targets(project: dict) -> None:
+    """List the containers each phase will run in, before anything runs."""
+    from core.batch_progress import plan_unit_total
+    from core.proxbatch import selected_vmids
+
+    cfg = project.get("config", {})
+    vmids = selected_vmids(cfg)
+    names = cfg.get("pct_vmid_names", {})
+    names = names if isinstance(names, dict) else {}
+    val_sets = _get_llama_selected_validation_sets(cfg, _PROXBATCH_EXEC_PREFIX)
+
+    with st.expander(f"**🎯 Batch Targets** — {len(vmids)} LXC container(s)", expanded=True):
+        if not vmids:
+            st.warning(
+                "No LXC containers selected. Pick them in the Config tab under "
+                "Runtime → Execution Target → Scan LXCs."
+            )
+            return
+        template = str(cfg.get("pct_template_vmid", "") or "")
+        st.caption(
+            "Startup, Validation and Completion all run inside every container listed "
+            "below, one container at a time, each with its own llama-server started in "
+            "that container."
+            + (f" All of them use the configuration verified against template LXC {template}."
+               if template else "")
+        )
+        counts = {
+            "Startup": plan_unit_total(_clean_steps(cfg.get("startup_commands", [])), [], []),
+            "Validation": plan_unit_total([], val_sets, []),
+            "Completion": plan_unit_total([], [], _clean_steps(cfg.get("completion_commands", []))),
+        }
+        header = "| # | VMID | Name | " + " | ".join(f"{k} ({v})" for k, v in counts.items()) + " |"
+        rows = [header, "|---|---|---|:---:|:---:|:---:|"]
+        for index, vmid in enumerate(vmids, start=1):
+            marks = " | ".join("✓" if counts[phase] else "—" for phase in counts)
+            rows.append(f"| {index} | `{vmid}` | {names.get(vmid) or '—'} | {marks} |")
+        st.markdown("\n".join(rows))
+        st.caption("Numbers in the headers are the commands configured for that phase.")
+
+
+def _render_proxbatch_progress(project: dict) -> None:
+    """Live status card per container, each opening a details dialog."""
+    from core.batch_progress import batch_summary
+
+    containers = _proxbatch_containers(project)
+    if not containers:
+        return
+
+    summary = batch_summary(containers)
+    heading = f"**📦 Container Progress** — {summary['finished']} of {summary['total']} finished"
+    if summary["running"]:
+        heading += f", {summary['running']} running"
+    if summary["failed"]:
+        heading += f", {summary['failed']} failed or aborted"
+    st.markdown(heading)
+
+    per_row = 3
+    for row_start in range(0, len(containers), per_row):
+        row = containers[row_start:row_start + per_row]
+        columns = st.columns(per_row)
+        for column, state in zip(columns, row):
+            with column, st.container(border=True):
+                badge, wording = _PROXBATCH_BADGES.get(state.get("state", ""), ("•", "Unknown"))
+                name = state.get("name") or ""
+                st.markdown(f"{badge} **VMID {state['vmid']}**" + (f" · {name}" if name else ""))
+                percent = int(state.get("percent", 0) or 0)
+                st.progress(percent / 100, text=f"{percent}% — {wording}")
+                units = f"{state.get('units_started', 0)}/{state.get('total_units', 0)} steps"
+                st.caption(f"{_proxbatch_phase_label(state)} · {units}")
+                st.caption(f"↳ {state.get('current_step') or 'Waiting to start'}")
+                if st.button(
+                    "🔍 Details",
+                    key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{state['vmid']}",
+                    use_container_width=True,
+                ):
+                    st.session_state[_PROXBATCH_DETAIL_KEY] = state["vmid"]
+                    # Full-app rerun: the dialog is opened by the page body, not
+                    # by this fragment, so it survives the 0.5s poll cycle.
+                    st.rerun(scope="app")
+
+
+@st.dialog("Container run details", width="large")
+def _render_proxbatch_detail_dialog(project: dict, vmid: str) -> None:
+    """Full log view for one container, during or after its run."""
+    state = _proxbatch_container(project, vmid)
+    if state is None:
+        st.info(f"No run details recorded for VMID {vmid}.")
+        return
+
+    badge, wording = _PROXBATCH_BADGES.get(state.get("state", ""), ("•", "Unknown"))
+    name = state.get("name") or ""
+    st.markdown(f"### {badge} VMID {vmid}" + (f" · {name}" if name else ""))
+    percent = int(state.get("percent", 0) or 0)
+    st.progress(percent / 100, text=f"{percent}% — {wording}")
+
+    telemetry = state.get("telemetry") or {}
+    col_phase, col_steps, col_latency = st.columns(3)
+    col_phase.metric("Phase", _proxbatch_phase_label(state))
+    col_steps.metric("Steps", f"{state.get('units_started', 0)}/{state.get('total_units', 0)}")
+    latency = telemetry.get("total_latency", state.get("total_latency"))
+    col_latency.metric("Latency", f"{latency}s" if latency is not None else "—")
+    st.caption(f"Current step: {state.get('current_step') or 'Waiting to start'}")
+    if telemetry.get("error"):
+        st.error(telemetry["error"])
+
+    setup_logs = list(state.get("logs_setup", []))
+    validation_logs = list(state.get("logs_validation", []))
+    if not setup_logs and not validation_logs and state.get("state") not in ("pending", "skipped"):
+        st.caption(
+            "This run's per-container logs are no longer in memory — the full "
+            "transcript is in `logs/sessions/`."
+        )
+    tab_setup, tab_validation = st.tabs(["Setup/Cleanup Log", "Validation Log"])
+    with tab_setup:
+        _render_terminal(st.empty(), setup_logs)
+    with tab_validation:
+        _render_terminal(st.empty(), validation_logs)
+
+    col_refresh, col_close = st.columns(2)
+    with col_refresh:
+        if st.button("↻ Refresh", use_container_width=True, key=f"{_PROXBATCH_EXEC_PREFIX}_detail_refresh"):
+            st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
+            st.rerun()
+    with col_close:
+        if st.button("Close", type="primary", use_container_width=True,
+                     key=f"{_PROXBATCH_EXEC_PREFIX}_detail_close"):
+            st.rerun()
+
+
+def _render_llama_server_proxbatch_execute(project: dict) -> None:
+    """Execute view for the PCT-only batch form of Llama-Server-Bot."""
+    # Popping the key here means a dismissed dialog stays dismissed: only a
+    # fresh Details click (or Refresh) sets it again.
+    detail_vmid = st.session_state.pop(_PROXBATCH_DETAIL_KEY, "")
+    if detail_vmid:
+        _render_proxbatch_detail_dialog(project, detail_vmid)
+
+    _render_llama_cli_execute(
+        project,
+        bot_type="llama_server_proxbatch_bot",
+        llm_label="LLAMA-SERVER",
+        exec_prefix=_PROXBATCH_EXEC_PREFIX,
+        flush_fn=_flush_llama_server_config,
+        render_targets=_render_proxbatch_targets,
+        render_progress=_render_proxbatch_progress,
+        on_run_start=_proxbatch_on_run_start,
+        on_clear=_proxbatch_on_clear,
     )
 
 

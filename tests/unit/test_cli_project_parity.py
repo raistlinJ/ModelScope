@@ -105,6 +105,66 @@ class TestProjectSessionArtifacts:
         session.close.assert_called_once()
 
 
+class TestProxBatchProjectRun:
+    """`modelscope project` must batch a ProxBatch project the way the Execute
+    tab does — one evaluation per selected container, not one run total."""
+
+    def _project(self, tmp_path):
+        return _write_project(tmp_path, "llama_server_proxbatch_bot", {
+            "pct_vmids": ["100", "101"],
+            "pct_vmid_names": {"100": "kali-one", "101": "kali-two"},
+            "binary_path": "/usr/local/bin/llama-server",
+            "model_dir": "/opt/models",
+            "model_name": "demo.gguf",
+            "startup_commands": [{"commands": [{"command": "echo start"}]}],
+            "validation_sets": [{"name": "smoke", "steps": [{"commands": [{"command": "true"}]}]}],
+        })
+
+    @patch("core.session_log.SessionLog")
+    @patch("core.evaluator.run_llama_cli_evaluation")
+    def test_each_container_is_evaluated_in_its_own_environment(
+        self, mock_evaluation, mock_session_log, tmp_path, capsys,
+    ):
+        seen = []
+
+        def fake_evaluation(env, config, on_log):
+            seen.append((env.vmid, config["server_in_container"]))
+            on_log("[STARTUP] echo start", "shell")
+            on_log("[VALIDATE CMD] Running: true", "shell")
+            return {"validation_passed": True, "total_latency": 1.5}
+
+        mock_evaluation.side_effect = fake_evaluation
+
+        assert cli.main(["project", "-f", str(self._project(tmp_path))]) == 0
+
+        assert seen == [("100", True), ("101", True)]
+        telemetry = mock_session_log.return_value.save_telemetry.call_args.args[0]
+        assert telemetry["run_bot_type"] == "llama_server_proxbatch_bot"
+        assert telemetry["pct_vmids"] == ["100", "101"]
+        assert telemetry["total_latency"] == 3.0
+        # Log-derived progress must be recorded headlessly too, so a CLI run's
+        # session log renders in the GUI exactly like one started there.
+        assert [item["units_started"] for item in telemetry["batch_containers"]] == [2, 2]
+        assert "Containers" in capsys.readouterr().out
+
+    @patch("core.session_log.SessionLog")
+    @patch("core.evaluator.run_llama_cli_evaluation")
+    def test_the_summary_breaks_the_batch_down_per_container(
+        self, mock_evaluation, mock_session_log, tmp_path, capsys,
+    ):
+        mock_evaluation.side_effect = lambda env, config, on_log: {
+            "validation_passed": config["pct_vmid"] == "100", "total_latency": 1.0,
+        }
+
+        cli.main(["project", "-f", str(self._project(tmp_path))])
+
+        out = capsys.readouterr().out
+        assert "kali-one" in out
+        assert "kali-two" in out
+        assert "PASSED" in out
+        assert "FAILED" in out
+
+
 class TestLlmHelperApiKeyResolution:
     def test_flag_injects_helper_api_key(self, tmp_path, capsys):
         path = _write_project(tmp_path, "llama_cli_bot", {"llm_helper_enabled": True})

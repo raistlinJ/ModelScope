@@ -22,7 +22,7 @@ import requests
 
 from config.defaults import MCP_SERVER_BASE_URL
 from core.caf_state import StepTelemetry, infer_phase, score_evidence_confidence
-from core.environment import BaseEnvironment, SSHEnvironment
+from core.environment import BaseEnvironment, PCTEnvironment, SSHEnvironment
 from core.mcp_manager import call_mcp_tool, probe_mcp_server
 from core.mcp_catalog import bundled_tool_names, enabled_builtin_tool_names
 from core.llama_metrics import (
@@ -1693,10 +1693,15 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
             model_path = os.path.join(model_dir, model_name) if model_dir and model_name else model_name
             exec_target = config.get("execution_target", "local")
-            # SSHEnvironment is the only target this launches the server ON — a
-            # PCTEnvironment's remote host has its own network namespace, so a
-            # port-forward to "the host" wouldn't actually reach the container.
             use_remote_server = exec_target == "ssh" and isinstance(env, SSHEnvironment)
+            # Batch bots run the server inside each container so every target
+            # is evaluated on its own hardware. Other PCT projects keep the
+            # historical behaviour of serving from the ModelScope host.
+            use_pct_server = (
+                bool(config.get("server_in_container"))
+                and exec_target == "pct"
+                and isinstance(env, PCTEnvironment)
+            )
             if exec_target == "local":
                 model_path = os.path.abspath(os.path.expanduser(model_path))
             if not model_path:
@@ -1707,7 +1712,7 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
 
             server_host = (config.get("server_host") or "127.0.0.1").strip()
             server_port = int(config.get("server_port") or 8080)
-            if not use_remote_server:
+            if not use_remote_server and not use_pct_server:
                 config["openai_base_url"] = _llama_server_base_url(server_host, server_port)
                 config["llm_url"] = config["openai_base_url"]
                 if exec_target == "pct":
@@ -1718,7 +1723,23 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
                         "llama",
                     )
             try:
-                if use_remote_server:
+                if use_pct_server:
+                    from core.pct_server import start_pct_managed_llama_server
+                    managed_server_proc = start_pct_managed_llama_server(
+                        env,
+                        getattr(env, "vmid", ""),
+                        binary,
+                        model_path,
+                        int(tokens),
+                        server_port,
+                        lambda msg: on_log(msg, "llama"),
+                        custom_flags=custom_flags,
+                        advanced_flags=_managed_llama_server_advanced_flags(config),
+                        ready_timeout=float(config.get("server_ready_timeout") or 300),
+                    )
+                    config["openai_base_url"] = managed_server_proc.base_url
+                    config["llm_url"] = config["openai_base_url"]
+                elif use_remote_server:
                     from core.remote_server import start_remote_managed_llama_server
                     managed_server_proc = start_remote_managed_llama_server(
                         env,

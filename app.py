@@ -162,6 +162,10 @@ _RUN_INDICATOR_COLOURS = {
     "soft_fail": "#ec4899",  # pink
     "soft_pass": "#d4a72c",  # yellow
     "hard_pass": "#2da44e",  # green
+    # Batch bots report execution coverage rather than metric pass/fail
+    "not_started": "#6b7280",  # grey
+    "partial": "#d4a72c",      # yellow
+    "complete": "#2da44e",     # green
 }
 
 
@@ -176,14 +180,17 @@ def _current_status_config(project: dict, plugin) -> dict:
 
 
 def _sidebar_run_indicators(project: dict, plugin, telemetry: dict) -> list[dict[str, str]]:
-    """Return freshness-aware status indicators for one project row."""
+    """Return each bot type's status indicators for one project row."""
     from core.run_status import sidebar_status_indicators
 
-    return sidebar_status_indicators(
-        telemetry,
-        _current_status_config(project, plugin) if project["id"] == st.session_state.get("active_project_id")
-        else project.get("config", {}),
+    config = (
+        _current_status_config(project, plugin)
+        if project["id"] == st.session_state.get("active_project_id")
+        else project.get("config", {})
     )
+    if plugin is None:
+        return sidebar_status_indicators(telemetry, config)
+    return plugin.sidebar_indicators(telemetry, config)
 
 
 def _sidebar_run_indicator_boxes(indicators: list[dict[str, str]]) -> str:

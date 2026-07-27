@@ -633,6 +633,38 @@ def _print_run_summary(telemetry: dict) -> None:
     ]
     print(_box_table(rows, title="Run Summary"))
 
+    _print_batch_summary(telemetry)
+
+
+_BATCH_STATE_COLOURS = {
+    "passed": _GREEN, "complete": _GREEN, "failed": _RED,
+    "aborted": _RED, "skipped": _DIM, "pending": _DIM,
+}
+
+
+def _print_batch_summary(telemetry: dict) -> None:
+    """Break a batch run down per container; the roll-up alone hides which
+    targets actually ran."""
+    containers = telemetry.get("batch_containers")
+    if not isinstance(containers, list) or not containers:
+        return
+
+    rows = []
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        state = str(container.get("state", "pending"))
+        latency = container.get("total_latency")
+        rows.append({
+            "VMID": str(container.get("vmid", "?")),
+            "Name": str(container.get("name") or "—"),
+            "Result": _c(state.upper(), _BATCH_STATE_COLOURS.get(state, _DIM)),
+            "Steps": f"{container.get('units_started', 0)}/{container.get('total_units', 0)}",
+            "Latency": f"{latency:.3f}s" if isinstance(latency, (int, float)) else "—",
+        })
+    if rows:
+        print(_box_table(rows, title="Containers"))
+
 
 # ── `project` subcommand ──────────────────────────────────────────────────────
 
@@ -735,10 +767,14 @@ def _cmd_project(args: argparse.Namespace) -> int:
             key_path=config.get("ssh_key_path"),
             remote_cwd=None,
             pct_vmid=config.get("pct_vmid") if is_pct else None,
-            project_id=project.get("id"),
+            project_id=proj.get("id"),
         )
         if is_pct:
-            on_log(f"[INIT] Target: PCT (VMID: {config.get('pct_vmid', '?')}) via SSH/Local")
+            # A batch project names its containers in pct_vmids and has no
+            # single pct_vmid; the plugin wraps this env once per container.
+            batch_vmids = [str(vmid) for vmid in (config.get("pct_vmids") or [])]
+            target = ", ".join(batch_vmids) if batch_vmids else config.get("pct_vmid", "?")
+            on_log(f"[INIT] Target: PCT (VMID: {target}) via SSH/Local")
         elif is_ssh:
             on_log(
                 f"[INIT] Target: SSH "

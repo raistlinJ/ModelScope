@@ -876,6 +876,13 @@ def render() -> None:
             metrics_key="llama_server_metrics_matrix",
         )
         return
+    if _proj and _proj.get("type") == "llama_server_proxbatch_bot":
+        _render_llama_cli_dashboard(
+            _proj,
+            bot_type="llama_server_proxbatch_bot",
+            metrics_key="llama_server_metrics_matrix",
+        )
+        return
     if _proj and _proj.get("type") == "caf_cli_run_bot":
         _render_llama_cli_dashboard(
             _proj,

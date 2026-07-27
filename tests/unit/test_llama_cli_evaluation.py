@@ -11,7 +11,7 @@ HTTP or subprocess calls happen.
 import pytest
 from unittest.mock import MagicMock, call, patch
 from core.evaluator import run_llama_cli_evaluation
-from core.environment import LocalEnvironment, SSHEnvironment
+from core.environment import LocalEnvironment, PCTEnvironment, SSHEnvironment
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -660,6 +660,74 @@ class TestManagedLlamaServerRemoteDispatch:
         mock_local_start.assert_called_once()
         mock_remote_start.assert_not_called()
         assert any("does not support launching inside a PCT" in m for m in logs)
+
+    def test_server_in_container_launches_inside_the_lxc(self):
+        """The batch bot evaluates each LXC on its own hardware, so its server
+        runs in the container and ModelScope talks to the container's IP."""
+        env = MagicMock(spec=PCTEnvironment)
+        env.is_remote_caf = False
+        env.vmid = "101"
+        env.execute.return_value = {"stdout": "", "stderr": "", "exit_code": 0}
+        container_proc = MagicMock()
+        container_proc.base_url = "http://10.0.0.8:8080"
+        with patch("core.pct_server.start_pct_managed_llama_server") as mock_pct_start, \
+             patch("core.evaluator._start_managed_llama_server") as mock_local_start:
+            mock_pct_start.return_value = container_proc
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                logs = []
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="pct",
+                        server_in_container=True,
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        server_port=8080,
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    lambda msg, tag=None: logs.append(msg),
+                )
+
+        mock_local_start.assert_not_called()
+        mock_pct_start.assert_called_once()
+        args = mock_pct_start.call_args.args
+        assert args[1] == "101"
+        assert args[2] == "/opt/llama.cpp/llama-server"
+        assert args[3] == "/models/server.gguf"
+        assert mock_stream.call_args.kwargs["base_url"] == "http://10.0.0.8:8080"
+        assert not any("does not support launching inside a PCT" in m for m in logs)
+        container_proc.terminate.assert_called_once()
+
+    def test_server_in_container_is_ignored_without_a_pct_target(self):
+        """The flag describes where a PCT run serves from; a local project
+        must not be re-routed by a stale config value."""
+        env = _env()
+        with patch("core.pct_server.start_pct_managed_llama_server") as mock_pct_start, \
+             patch("core.evaluator._start_managed_llama_server") as mock_local_start:
+            mock_local_start.return_value = MagicMock()
+            with patch("core.evaluator.stream_llama_cpp") as mock_stream:
+                mock_stream.return_value = {"message": {"content": ""}, "usage": {}}
+                run_llama_cli_evaluation(
+                    env,
+                    _cfg(
+                        type="llama_server_bot",
+                        backend="llama-server (managed)",
+                        execution_target="local",
+                        server_in_container=True,
+                        binary_path="/opt/llama.cpp/llama-server",
+                        model_dir="/models",
+                        model_name="server.gguf",
+                        validation_sets=[_prompt_set("hello")],
+                    ),
+                    _log(),
+                )
+
+        mock_pct_start.assert_not_called()
+        mock_local_start.assert_called_once()
 
 
 class TestManagedLlamaServerAdvancedFlags:
