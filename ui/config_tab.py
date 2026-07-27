@@ -3156,21 +3156,31 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
                 st.session_state["llama_server_pct_vmids"] = inverted
                 st.rerun()
 
+        templates = [c for c in containers if c.get("status") == "template"]
+        regular = [c for c in containers if c.get("status") != "template"]
         checked: list[str] = []
-        for item in containers:
+        
+        for item in regular:
             vmid = item["vmid"]
-            is_template = item.get("status") == "template"
             label = f"{vmid} — {item.get('name') or 'unnamed'} ({item.get('status', 'unknown')})"
             if item.get("ip"):
                 label += f" · {item['ip']}"
-            if st.checkbox(
-                label,
-                value=vmid in selected and not is_template,
-                key=f"llama_server_proxbatch_vmid_{vmid}",
-                disabled=is_template,
-                help="Templates cannot be selected for batch execution" if is_template else None,
-            ):
+            if st.checkbox(label, value=vmid in selected, key=f"llama_server_proxbatch_vmid_{vmid}"):
                 checked.append(vmid)
+                
+        if templates:
+            st.markdown("<div style='margin-top: 1rem; margin-bottom: 0.5rem; color: #8b949e; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;'>Templates</div>", unsafe_allow_html=True)
+            for item in templates:
+                vmid = item["vmid"]
+                label = f"{vmid} — {item.get('name') or 'unnamed'} (template)"
+                st.checkbox(
+                    label,
+                    value=False,
+                    key=f"llama_server_proxbatch_vmid_{vmid}",
+                    disabled=True,
+                    help="Templates cannot be selected for batch execution",
+                )
+                
         st.session_state["llama_server_pct_vmids"] = checked
 
     st.divider()
