@@ -3140,16 +3140,17 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
     else:
         selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
         vmids = [item["vmid"] for item in containers]
+        selectable_vmids = [item["vmid"] for item in containers if item.get("status") != "template"]
         c_all, c_invert, _ = st.columns([1, 1, 2])
         with c_all:
             if st.button("Select all", use_container_width=True):
                 for vmid in vmids:
-                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = True
-                st.session_state["llama_server_pct_vmids"] = vmids
+                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in selectable_vmids
+                st.session_state["llama_server_pct_vmids"] = selectable_vmids
                 st.rerun()
         with c_invert:
             if st.button("Invert selection", use_container_width=True):
-                inverted = [vmid for vmid in vmids if vmid not in selected]
+                inverted = [vmid for vmid in selectable_vmids if vmid not in selected]
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
                 st.session_state["llama_server_pct_vmids"] = inverted
@@ -3158,10 +3159,17 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
         checked: list[str] = []
         for item in containers:
             vmid = item["vmid"]
+            is_template = item.get("status") == "template"
             label = f"{vmid} — {item.get('name') or 'unnamed'} ({item.get('status', 'unknown')})"
             if item.get("ip"):
                 label += f" · {item['ip']}"
-            if st.checkbox(label, value=vmid in selected, key=f"llama_server_proxbatch_vmid_{vmid}"):
+            if st.checkbox(
+                label,
+                value=vmid in selected and not is_template,
+                key=f"llama_server_proxbatch_vmid_{vmid}",
+                disabled=is_template,
+                help="Templates cannot be selected for batch execution" if is_template else None,
+            ):
                 checked.append(vmid)
         st.session_state["llama_server_pct_vmids"] = checked
 
