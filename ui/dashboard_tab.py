@@ -2,6 +2,7 @@ import html
 import json
 import re
 import streamlit as st
+from core.bot_types import get_bot_plugin
 from config.metrics import (
     METRIC_TYPES, CATEGORIES,
     evaluate_metric, format_criterion, metric_observed_value,
@@ -24,41 +25,6 @@ def _render_scrollable_output(
 ) -> None:
     """Render run output in the same bounded, scrollable control as stdout."""
     st.text_area(label, value=str(value or ""), height=height, key=key)
-
-
-def _caf_transcript_sections(events: object) -> tuple[str, str, int]:
-    """Format durable CAF events for the dashboard's two transcript panes."""
-    if not isinstance(events, list):
-        return "", "", 0
-    responses: list[str] = []
-    tool_output: list[str] = []
-    seen_results: set[tuple[str, str]] = set()
-    turn = 0
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        event_type = str(event.get("type") or "")
-        if event_type == "response":
-            text = str(event.get("text") or event.get("content") or "").strip()
-            if text:
-                turn += 1
-                responses.append(f"Assistant — turn {turn}\n{text}")
-        elif event_type == "error":
-            message = str(event.get("message") or "CAF reported an unknown error.").strip()
-            if message:
-                responses.append(f"CAF error\n{message}")
-        elif event_type == "tool_result":
-            tool = str(event.get("tool") or "tool")
-            result = str(event.get("result") or event.get("output") or "").strip()
-            fingerprint = (tool, result)
-            if not result or fingerprint in seen_results:
-                continue
-            seen_results.add(fingerprint)
-            exit_code = event.get("exit_code", "?")
-            duration = event.get("duration_ms")
-            suffix = f" · {duration} ms" if duration is not None else ""
-            tool_output.append(f"[{tool}] exit={exit_code}{suffix}\n{result}")
-    return "\n\n".join(responses), "\n\n".join(tool_output), turn
 
 
 def _highlight_validation_matches(output: object, checks: list[dict] | None = None) -> str:
@@ -696,99 +662,6 @@ def _render_llama_cli_dashboard(
     _render_llama_cli_dashboard_core(project, tel, bot_type, metrics_key)
 
 
-def _render_proxbatch_dashboard(
-    project: dict,
-    bot_type: str = "llama_server_proxbatch_bot",
-    metrics_key: str = "llama_server_metrics_matrix",
-) -> None:
-    """ProxBatch dashboard — per-container telemetry selection."""
-    _hydrate_project_history_if_empty(project)
-    pid = project["id"]
-    history_key = f"run_history_{pid}"
-    history: list = st.session_state.get(history_key, [])
-    history = [h for h in history if h.get("run_bot_type") == bot_type]
-
-    if not history:
-        st.info("No runs yet for this project — go to **Execute** and run it.")
-        return
-
-    if len(history) > 1:
-        labels = []
-        for i, h in enumerate(reversed(history)):
-            ts  = h.get("run_timestamp", "")
-            lbl = f"Run {len(history) - i}  —  {ts}"
-            labels.append(lbl)
-        sel_label = st.selectbox(
-            "Select run", options=labels, index=0,
-            key=f"{bot_type}_dash_sel_{pid}_{len(history)}",
-        )
-        tel = list(reversed(history))[labels.index(sel_label)]
-    else:
-        tel: dict = history[-1]
-
-    batch_results = tel.get("batch_results", [])
-    if not batch_results:
-        st.info("No container-level telemetry available for this batch run.")
-        return
-
-    st.markdown("### Container Results")
-    st.caption("Select a container below to view its specific analytics and outputs.")
-    
-    # Default to the first container
-    selected_vmid = st.session_state.get(f"_dash_sel_vmid_{pid}", batch_results[0].get("pct_vmid"))
-    
-    per_row = 4
-    for row_start in range(0, len(batch_results), per_row):
-        row = batch_results[row_start:row_start + per_row]
-        columns = st.columns(per_row)
-        for column, res in zip(columns, row):
-            vmid = res.get("pct_vmid")
-            is_selected = (vmid == selected_vmid)
-            
-            # Validation icon logic
-            assessments = _configured_metric_assessments(project, res)
-            if assessments:
-                badge_html = ""
-                _metric_icons = {
-                    "total_latency": "L", "prompts_run": "R", "commands_run": "C",
-                    "prompt_tokens": "PT", "completion_tokens": "CT", "total_tokens": "TT",
-                    "prompt_tokens_per_second": "P/s", "completion_tokens_per_second": "C/s",
-                    "prompt_seconds": "Ps", "completion_seconds": "Cs", "cli_invocations": "I",
-                    "requests_processing": "A", "requests_deferred": "D", "context_high_watermark": "W",
-                    "decode_calls": "DC", "busy_slots_per_decode": "BS",
-                }
-                for metric, assessment in assessments.items():
-                    level = assessment.get("level", "not_available")
-                    if level in ("unclassified", "not_available"):
-                        continue
-                    color = _THRESHOLD_STYLE.get(level, ("", "var(--muted)"))[1]
-                    title = f"{metric}: {level.replace('_', ' ').title()}"
-                    abbr = _metric_icons.get(metric, metric[:1].upper())
-                    badge_html += f'<span class="run-indicator" title="{title}" style="background:{color};">{abbr}</span>'
-            
-            if not badge_html:
-                val_passed = res.get("validation_passed")
-                color = "var(--success)" if val_passed else ("var(--error)" if val_passed is False else "var(--muted)")
-                title = "Validation Passed" if val_passed else ("Validation Failed" if val_passed is False else "No Validation")
-                icon = "✓" if val_passed else ("✕" if val_passed is False else "?")
-                badge_html = f'<span class="run-indicator" title="{title}" style="background:{color};">{icon}</span>'
-            
-            with column, st.container(border=True):
-                st.markdown(f"{badge_html} **VMID {vmid}**", unsafe_allow_html=True)
-                if st.button("View Analytics" if not is_selected else "Viewing Analytics", 
-                             key=f"dash_btn_{pid}_{vmid}", disabled=is_selected, use_container_width=True):
-                    st.session_state[f"_dash_sel_vmid_{pid}"] = vmid
-                    st.rerun()
-                    
-    st.divider()
-    
-    # Find the telemetry for the selected container
-    selected_res = next((r for r in batch_results if r.get("pct_vmid") == selected_vmid), batch_results[0])
-    
-    # Render the specific container's dashboard
-    _render_llama_cli_dashboard_core(project, selected_res, bot_type, metrics_key)
-
-
 def _render_llama_cli_dashboard_core(
     project: dict,
     tel: dict,
@@ -851,27 +724,15 @@ def _render_llama_cli_dashboard_core(
                 + (f": {server_metrics.get('error')}" if server_metrics.get("error") else ".")
             )
 
-    # Durable CAF jobs preserve every assistant turn and final tool artifact,
-    # unlike the generic per-prompt summary which is intentionally aggregated.
-    caf_responses, caf_tool_output, caf_turns = _caf_transcript_sections(
-        tel.get("caf_transcript_events")
+    # A bot whose run is a conversation renders its own transcript here; the
+    # generic per-prompt summary below is the fallback for everything else
+    # (including historical runs with no transcript recorded).
+    _plugin = get_bot_plugin(bot_type)
+    _transcript_shown = bool(
+        _plugin is not None and _plugin.render_run_transcript(project, tel, _run_tok)
     )
-    if bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output):
-        st.subheader(f"CAF Transcript  ({caf_turns} assistant turn{'s' if caf_turns != 1 else ''})")
-        response_col, tool_col = st.columns(2)
-        with response_col:
-            _render_scrollable_output(
-                "Assistant Responses", caf_responses,
-                key=f"caf_transcript_responses_{pid}_{_run_tok}", height=420,
-            )
-        with tool_col:
-            _render_scrollable_output(
-                "Tool Output", caf_tool_output,
-                key=f"caf_transcript_tools_{pid}_{_run_tok}", height=420,
-            )
 
-    # Fallback for historical CAF telemetry and all non-CAF runners.
-    if prompt_responses and not (bot_type in ("caf_cli_run_bot", "caf_llama_bot") and (caf_responses or caf_tool_output)):
+    if prompt_responses and not _transcript_shown:
         st.subheader(f"Prompt Responses  ({len(prompt_responses)})")
         for i, pr in enumerate(prompt_responses):
             with st.expander(f"Prompt {i + 1}: {pr.get('prompt', '')[:60]}…"):
@@ -969,44 +830,17 @@ def render() -> None:
     if _proj is not None:
         _hydrate_project_history_if_empty(_proj)
     _render_dashboard_heading(_proj, _selected_telemetry_for_export(_proj) if _proj else None)
-    if _proj and _proj.get("type") == "bash_bot":
-        _render_bash_dashboard(_proj)
-        return
-    if _proj and _proj.get("type") == "llama_cli_bot":
-        _render_llama_cli_dashboard(_proj)
-        return
-    if _proj and _proj.get("type") == "llama_server_bot":
-        _render_llama_cli_dashboard(
-            _proj,
-            bot_type="llama_server_bot",
-            metrics_key="llama_server_metrics_matrix",
-        )
-        return
-    if _proj and _proj.get("type") == "llama_server_proxbatch_bot":
-        _render_proxbatch_dashboard(
-            _proj,
-            bot_type="llama_server_proxbatch_bot",
-            metrics_key="llama_server_metrics_matrix",
-        )
-        return
-    if _proj and _proj.get("type") == "caf_cli_run_bot":
-        _render_llama_cli_dashboard(
-            _proj,
-            bot_type="caf_cli_run_bot",
-            metrics_key="caf_cli_metrics_matrix",
-        )
-        return
-    if _proj and _proj.get("type") == "caf_llama_bot":
-        _render_llama_cli_dashboard(
-            _proj,
-            bot_type="caf_llama_bot",
-            metrics_key="caf_llama_metrics_matrix",
-        )
-        return
-
     if _proj is None:
         st.info("No project selected. Use the sidebar to add or select a project.")
         return
+
+    _plugin = get_bot_plugin(_proj.get("type"))
+    if _plugin is not None:
+        try:
+            _plugin.render_dashboard(_proj)
+            return
+        except NotImplementedError:
+            pass
 
     st.info(
         f"**{_proj['name']}** ({_proj.get('type', '?')}) — dashboard coming soon."

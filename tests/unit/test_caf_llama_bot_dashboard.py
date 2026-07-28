@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 from ui import dashboard_tab
@@ -51,6 +52,9 @@ def test_caf_transcript_gate_renders_for_caf_llama_bot(monkeypatch):
     fake_st.tabs.side_effect = lambda labels, **kw: tuple(MagicMock() for _ in labels)
     fake_st.session_state = state
     monkeypatch.setattr(dashboard_tab, "st", fake_st)
+    # The transcript is drawn by the CAF plugin, which imports streamlit inside
+    # the hook, so the stand-in has to go in ahead of that import.
+    monkeypatch.setitem(sys.modules, "streamlit", fake_st)
 
     dashboard_tab._render_llama_cli_dashboard(
         project, bot_type="caf_llama_bot", metrics_key="caf_llama_metrics_matrix"

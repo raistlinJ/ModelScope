@@ -65,7 +65,42 @@ def _entry_points() -> Iterable[object]:
         return ()
 
 
+def _importable_module_name(path: Path) -> str | None:
+    """Dotted name for a plugin file that is already importable, else None.
+
+    Plugin directories inside the project (``plugins/bot_types/...``) sit on
+    sys.path, so a file there can be reached both by import and by path. Load
+    it by path as well and the file is executed twice, leaving two module
+    objects and two copies of every class in it — one registered, one that
+    ``import plugins.bot_types.x`` hands out. Patching or subclassing the copy
+    the registry never returned then silently does nothing.
+    """
+    resolved = path.resolve()
+    for entry in sys.path:
+        try:
+            base = Path(entry or ".").resolve()
+        except OSError:
+            continue
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError:
+            continue
+        parts = list(relative.with_suffix("").parts)
+        if parts and all(part.isidentifier() for part in parts):
+            return ".".join(parts)
+    return None
+
+
 def _load_plugin_file(path: Path) -> ModuleType:
+    dotted = _importable_module_name(path)
+    if dotted is not None:
+        try:
+            return importlib.import_module(dotted)
+        except Exception:
+            # Not actually importable under that name (shadowed, or a partial
+            # package); fall through to loading it by path.
+            pass
+
     digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
     module_name = f"_modelscope_bot_plugin_{path.stem}_{digest}"
     spec = importlib_util.spec_from_file_location(module_name, path)

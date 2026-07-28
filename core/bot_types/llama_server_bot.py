@@ -184,6 +184,9 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
     default_project_name = "Llama-Server Project"
     state_key_map = LLAMA_SERVER_STATE_KEY_MAP
     session_defaults = LLAMA_SERVER_SESSION_DEFAULTS
+    dashboard_metrics_key = "llama_server_metrics_matrix"
+    default_backend = "llama-server (managed)"
+    exec_state_prefix = "llama_server_exec"
     owned_prefixes = (
         "llama_server_val_",       # llama-server validation set widgets
         "_llama_server_val_",      # llama-server validation dialog steps
@@ -309,6 +312,14 @@ class LlamaServerBotPlugin(LlamaCliBotPlugin):
         from ui import execute_tab
 
         execute_tab._render_llama_server_execute(project)
+
+    def render_model_info(self, config: dict[str, Any]) -> bool:
+        import streamlit as st
+
+        st.caption(f"Binary: `{config.get('binary_path', '') or 'not configured'}`")
+        st.caption(f"Listen: `{config.get('server_host', '127.0.0.1')}:{config.get('server_port', 8080)}`")
+        st.caption(f"Client URL: `{config.get('openai_base_url', '') or 'not configured'}`")
+        return True
 
     def flush_config(self, project: dict[str, Any]) -> None:
         from ui import config_tab
