@@ -778,7 +778,7 @@ def _run_llama_server_proxbatch_bot(project: dict, shared: dict) -> None:
         item_shared = _ProxBatchItem(shared, container_state, vmid)
         _run_llama_cli_bot(item_project, item_shared, "llama_server_bot")
         return copy.deepcopy(item_shared.get("telemetry", {}))
-    concurrency = cfg.get("_proxbatch_concurrency", 1)
+    concurrency = int(cfg.get("_proxbatch_concurrency", 1))
     shared.setdefault("logs_setup", []).append({"text": f"[SYS] Starting ProxBatch with max_workers={concurrency}", "tag": "sys"})
 
     aggregate = proxbatch.run_pct_batch(
@@ -992,9 +992,9 @@ def _render_llama_cli_execute(
             st.number_input(
                 "Parallel",
                 min_value=1,
-                max_value=16,
+                max_value=32,
                 step=1,
-                value=st.session_state.get(f"{exec_prefix}_concurrency", 1),
+                value=int(st.session_state.get(f"{exec_prefix}_concurrency", cfg.get("_proxbatch_concurrency", 1))),
                 key=f"{exec_prefix}_concurrency",
                 disabled=run_in_progress,
                 label_visibility="collapsed",
