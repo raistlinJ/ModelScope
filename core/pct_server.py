@@ -193,7 +193,7 @@ def start_pct_managed_llama_server(
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
     
     # Ensure no orphaned servers from previous cancelled runs are holding the port
-    env.execute(f"killall -9 llama-server 2>/dev/null || true", timeout=5)
+    env.execute(f"pkill -9 llama-server 2>/dev/null || fuser -k -9 {port}/tcp 2>/dev/null || true", timeout=5)
     
     result = env.execute(launch_sysd, timeout=20)
     if result.get("exit_code") == 0:
