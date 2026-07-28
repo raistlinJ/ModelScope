@@ -1298,13 +1298,13 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                 st.caption(f"↳ {state.get('current_step') or 'Waiting to start'}")
                 
                 if st.button(
-                    "Showing Logs" if is_selected else "View Logs",
+                    "Showing Logs" if is_selected else "Focus Logs",
                     key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
                     use_container_width=True,
                     disabled=is_selected,
                 ):
                     st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
-                    st.rerun(scope="fragment")
+                    st.rerun()
 
     return selected_logs
 
