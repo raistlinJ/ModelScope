@@ -3688,12 +3688,14 @@ def _render_llama_server_runtime(project: dict) -> None:
         _, col_status, _ = st.columns([1, 2, 1])
         with col_status:
             checking = st.session_state.get("llama_server_checking_status", False)
+            scanning = st.session_state.get("_llama_server_proxbatch_scanning", False)
+            buttons_disabled = checking or scanning
             if st.button(
                 "Checking..." if checking else "Check Status",
                 key="btn_llama_server_check_status",
                 use_container_width=True,
                 type="primary",
-                disabled=checking,
+                disabled=buttons_disabled,
                 help="Launches the managed llama-server with the current settings to verify "
                      "they work, then stops it again (unless a server is already running here).",
             ):

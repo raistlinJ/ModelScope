@@ -426,20 +426,20 @@ def _vmid_dialog_body(project: dict) -> None:
         selectable_vmids = [item["vmid"] for item in containers if not _is_template(item)]
         c_all, c_invert, c_clear = st.columns(3)
         with c_all:
-            if st.button("Select all", use_container_width=True):
+            if st.button("All", use_container_width=True):
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in selectable_vmids
                 st.session_state["llama_server_pct_vmids"] = selectable_vmids
                 st.rerun()
         with c_invert:
-            if st.button("Invert selection", use_container_width=True):
+            if st.button("Invert", use_container_width=True):
                 inverted = [vmid for vmid in selectable_vmids if vmid not in selected]
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
                 st.session_state["llama_server_pct_vmids"] = inverted
                 st.rerun()
         with c_clear:
-            if st.button("Clear selection", use_container_width=True):
+            if st.button("Clear", use_container_width=True):
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = False
                 st.session_state["llama_server_pct_vmids"] = []
@@ -1147,12 +1147,23 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
         )
         selected = normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
         c_scan, c_selected = st.columns([1, 3])
+        is_scanning = st.session_state.get("_llama_server_proxbatch_scanning", False)
+        is_checking = st.session_state.get("llama_server_checking_status", False)
+        buttons_disabled = is_scanning or is_checking
+
         with c_scan:
-            if st.button("Scan LXCs", key="btn_llama_server_proxbatch_scan_lxcs", use_container_width=True):
+            if st.button("Scanning..." if is_scanning else "Scan LXCs", key="btn_llama_server_proxbatch_scan_lxcs", use_container_width=True, disabled=buttons_disabled):
+                st.session_state["_llama_server_proxbatch_scanning"] = True
+                st.rerun()
+                
+        if is_scanning:
+            with st.spinner("Scanning LXCs..."):
                 containers, error = scan_lxc_containers()
                 st.session_state["llama_server_proxbatch_containers"] = containers
                 st.session_state["llama_server_proxbatch_scan_error"] = error
                 st.session_state["llama_server_proxbatch_dialog_open"] = True
+            st.session_state["_llama_server_proxbatch_scanning"] = False
+            st.rerun()
         with c_selected:
             if selected:
                 st.caption(f"Selected VMIDs: `{', '.join(selected)}`")
