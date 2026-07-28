@@ -1489,6 +1489,9 @@ def run_llama_cli_evaluation(env: BaseEnvironment, config: dict, on_log: Callabl
     managed_judge_mcp_proc = None
     server_metrics_before = None
     try:
+        if type(env).__name__ == "PCTEnvironment":
+            on_log("[CLEANUP] Killing any pre-existing llama-server processes in LXC container", "shell")
+            _exec_cmd("pkill -9 -f llama-server; sleep 1", label="CLEANUP", timeout_override=10)
 
         def _exec_llama_prompt(prompt_text: str, label: str = "PROMPT", preserve_context: bool = True) -> dict:
             if not prompt_text:
