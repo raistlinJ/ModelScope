@@ -133,6 +133,7 @@ def run_pct_batch(
     on_log: Callable[[str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     bot_type: str = "llama_server_proxbatch_bot",
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Run ``run_one`` once per container, then aggregate.
 
@@ -144,17 +145,38 @@ def run_pct_batch(
     total = len(containers)
     batch_results: list[dict] = []
 
-    for index, (vmid, state) in enumerate(containers.items(), start=1):
+    def _run_task(vmid: str, state: dict, index: int) -> dict | None:
         if is_cancelled():
             batch_progress.skip_container(state)
-            continue
+            return None
         batch_progress.start_container(state)
         log(f"[SYS] PCT batch {index}/{total} — VMID {vmid}")
         result = dict(run_one(vmid, state) or {})
         result["pct_vmid"] = vmid
         batch_progress.finish_container(state, result, cancelled=is_cancelled())
-        batch_results.append(result)
         log(f"[SYS] VMID {vmid} finished — {state['state']}")
+        return result
+
+    import concurrent.futures
+
+    if max_workers <= 1:
+        for index, (vmid, state) in enumerate(containers.items(), start=1):
+            res = _run_task(vmid, state, index)
+            if res is not None:
+                batch_results.append(res)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for index, (vmid, state) in enumerate(containers.items(), start=1):
+                if is_cancelled():
+                    batch_progress.skip_container(state)
+                    continue
+                futures.append(executor.submit(_run_task, vmid, state, index))
+
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
+                if res is not None:
+                    batch_results.append(res)
 
     return aggregate_batch_telemetry(
         containers, batch_results, cancelled=is_cancelled(), bot_type=bot_type,

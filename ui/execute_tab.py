@@ -827,6 +827,7 @@ def _render_llama_cli_execute(
     render_progress=None,
     on_run_start=None,
     on_clear=None,
+    allow_concurrency: bool = False,
 ) -> None:
     """Execute view for llama-backed bots: config summary + Execute button + log.
 
@@ -966,7 +967,11 @@ def _render_llama_cli_execute(
 
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
-    col_run, col_cancel, col_clear = st.columns([3, 1, 1])
+    if allow_concurrency:
+        col_run, col_conc, col_cancel, col_clear = st.columns([2.5, 0.5, 1, 1])
+    else:
+        col_run, col_cancel, col_clear = st.columns([3, 1, 1])
+        
     with col_run:
         run_btn = st.button(
             "▶  Execute",
@@ -975,6 +980,19 @@ def _render_llama_cli_execute(
             use_container_width=True,
             disabled=run_in_progress,
         )
+    if allow_concurrency:
+        with col_conc:
+            st.number_input(
+                "Parallel",
+                min_value=1,
+                max_value=16,
+                step=1,
+                value=1,
+                key=f"{exec_prefix}_concurrency",
+                disabled=run_in_progress,
+                label_visibility="collapsed",
+                help="Number of LXC containers to execute simultaneously.",
+            )
     with col_cancel:
         if st.button("⏹  Stop", key=f"btn_{exec_prefix}_cancel",
                      use_container_width=True, disabled=not run_in_progress):
@@ -1322,6 +1340,7 @@ def _render_llama_server_proxbatch_execute(project: dict) -> None:
         render_progress=_render_proxbatch_progress,
         on_run_start=_proxbatch_on_run_start,
         on_clear=_proxbatch_on_clear,
+        allow_concurrency=True,
     )
 
 
