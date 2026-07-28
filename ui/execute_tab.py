@@ -775,6 +775,8 @@ def _run_llama_server_proxbatch_bot(project: dict, shared: dict) -> None:
         item_shared = _ProxBatchItem(shared, container_state, vmid)
         _run_llama_cli_bot(item_project, item_shared, "llama_server_bot")
         return copy.deepcopy(item_shared.get("telemetry", {}))
+    concurrency = cfg.get("_proxbatch_concurrency", 1)
+    shared.setdefault("logs_setup", []).append({"text": f"[SYS] Starting ProxBatch with max_workers={concurrency}", "tag": "sys"})
 
     aggregate = proxbatch.run_pct_batch(
         containers,
@@ -783,7 +785,7 @@ def _run_llama_server_proxbatch_bot(project: dict, shared: dict) -> None:
             {"text": message, "tag": "sys"},
         ),
         is_cancelled=lambda: bool(shared.get("cancel_requested")),
-        max_workers=cfg.get("_proxbatch_concurrency", 1),
+        max_workers=concurrency,
     )
 
     # Preserve a single, dashboard-visible record for the entire batch as well
