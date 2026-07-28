@@ -2654,6 +2654,14 @@ class CafCliRunPlugin(BotTypePlugin):
     session_defaults = CAF_CLI_RUN_SESSION_DEFAULTS
     owned_prefixes = ("caf_cli_val_", "_caf_cli_val_", "caf_cli_tool_en_", "caf_cli_llm_helper_", "caf_cli_is_fetching_", "_caf_cli_run_bot_metric_threshold_", "_sc_caf_cli_")
     metric_specs = COMMON_DASHBOARD_METRIC_SPECS
+    dashboard_metrics_key = "caf_cli_metrics_matrix"
+
+    def render_dashboard(self, project: dict[str, Any]) -> None:
+        from ui.dashboard_tab import _render_llama_cli_dashboard
+
+        _render_llama_cli_dashboard(
+            project, bot_type=self.type_id, metrics_key=self.dashboard_metrics_key,
+        )
 
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {

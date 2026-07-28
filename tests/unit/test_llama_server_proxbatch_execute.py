@@ -3,8 +3,8 @@
 from unittest.mock import patch
 
 from core.batch_progress import ABORTED, FAILED, PASSED, SKIPPED
-from core.proxbatch import new_batch_state
-from ui.execute_tab import _run_llama_server_proxbatch_bot
+from plugins.bot_types.llama_server_proxbatch_bot import new_batch_state
+from plugins.bot_types.llama_server_proxbatch_bot import run_batch as _run_llama_server_proxbatch_bot
 
 
 @patch("core.session_log.SessionLog")

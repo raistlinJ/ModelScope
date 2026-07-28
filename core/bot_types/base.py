@@ -109,6 +109,17 @@ class BotTypePlugin:
     global_keys: frozenset[str] = frozenset()
     owned_prefixes: tuple[str, ...] = ()
     metric_specs: Mapping[str, Mapping[str, str]] = {}
+    # Session-state key holding this bot's configured metric matrix. The
+    # dashboard scores a run against the thresholds stored under it.
+    dashboard_metrics_key = ""
+    # Project-config key for the Execute tab's parallelism setting, for bots
+    # that opt into it. Named per bot so an existing project keeps its value.
+    concurrency_config_key = "_batch_concurrency"
+    # Backend shown when a project has not recorded one yet.
+    default_backend = "llama.cpp"
+    # Execute-tab widget-key prefix this bot reads its ticked validation
+    # sets from. Bots sharing a runner must not share a prefix.
+    exec_state_prefix = "llama_exec"
 
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {}
@@ -154,6 +165,80 @@ class BotTypePlugin:
 
     def render_execute(self, project: dict[str, Any]) -> None:
         raise NotImplementedError
+
+    def render_dashboard(self, project: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    # ── Optional hooks ────────────────────────────────────────────────
+    #
+    # These let a bot type extend a shared renderer or runner without the
+    # shared code testing for its type_id. Returning None/False everywhere
+    # means "not overridden — draw the default", so a plugin only implements
+    # the ones it actually changes.
+
+    def run_in_execute_tab(
+        self, project: dict[str, Any], shared: dict[str, Any], bot_type: str,
+    ) -> bool:
+        """Take over the Execute tab's run. Return True when handled."""
+        return False
+
+    def flush_ui_config(self, project: dict[str, Any], config: dict[str, Any]) -> None:
+        """Derive extra config keys during a bot family's shared UI flush."""
+        return None
+
+    # True when this bot's binary and model paths live on a probe target
+    # rather than on the ModelScope host, so local filesystem checks and the
+    # "is something already listening here?" pre-check do not apply.
+    uses_config_probe_env = False
+
+    def config_probe_env(self, project: dict[str, Any]):
+        """Environment for config-time probing (model scan, status check).
+
+        Only consulted when ``uses_config_probe_env`` is set. Returning None
+        means the target is not usable yet and the plugin has already said why.
+        """
+        return None
+
+    def start_config_test_server(
+        self, project: dict[str, Any], params: Mapping[str, Any], log: Callable[[str], None],
+    ):
+        """Start the managed server behind the Config tab's Check Status.
+
+        Return a process handle, or None to fall through to the shared
+        local/SSH paths.
+        """
+        return None
+
+    def render_execution_target(self, project: dict[str, Any]) -> str | None:
+        """Draw this bot's Execution Target control.
+
+        Returns the resolved target, or None to let the shared renderer draw
+        its own control.
+        """
+        return None
+
+    def render_target_test(self, project: dict[str, Any], target: str) -> bool:
+        """Draw this bot's connection-test controls. True when handled."""
+        return False
+
+    def render_server_setup_notice(self, project: dict[str, Any]) -> bool:
+        """Draw the Server Setup preamble. True when handled."""
+        return False
+
+    def render_bind_controls(self, project: dict[str, Any]) -> bool:
+        """Draw the listen host/port controls. True when handled."""
+        return False
+
+    def model_dir_help(self) -> str | None:
+        """Override the Model Directory help text, or None for the default."""
+        return None
+
+    def render_model_info(self, config: dict[str, Any]) -> bool:
+        """Draw the bot-specific lines of the Execute tab's Model Info panel.
+
+        True when handled; False leaves the generic binary/URL summary.
+        """
+        return False
 
     def flush_mapped_config(
         self, project: dict[str, Any], session_state: Mapping[str, Any] | None = None

@@ -171,6 +171,7 @@ class LlamaCliBotPlugin(BashBotPlugin):
     default_project_name = "Llama-CLI Project"
     state_key_map = LLAMA_CLI_STATE_KEY_MAP
     session_defaults = LLAMA_CLI_SESSION_DEFAULTS
+    dashboard_metrics_key = "llama_cli_metrics_matrix"
     owned_prefixes = (
         "llama_cli_val_",       # llama-cli validation set widgets
         "_llama_cli_val_",      # llama-cli validation dialog steps
@@ -253,6 +254,13 @@ class LlamaCliBotPlugin(BashBotPlugin):
         from ui import execute_tab
 
         execute_tab._render_llama_cli_execute(project)
+
+    def render_dashboard(self, project: dict[str, Any]) -> None:
+        from ui import dashboard_tab
+
+        dashboard_tab._render_llama_cli_dashboard(
+            project, bot_type=self.type_id, metrics_key=self.dashboard_metrics_key,
+        )
 
     def flush_config(self, project: dict[str, Any]) -> None:
         from ui import config_tab

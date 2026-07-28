@@ -84,6 +84,7 @@ class BashBotPlugin(BotTypePlugin):
     default_project_name = "Bash Project"
     state_key_map = BASH_STATE_KEY_MAP
     session_defaults = BASH_SESSION_DEFAULTS
+    dashboard_metrics_key = "bash_metrics_matrix"
     owned_prefixes = (
         "bash_val_",       # bash validation set widgets (name, desc, enabled, etc.)
         "_bash_val_",      # bash validation dialog steps
@@ -140,6 +141,11 @@ class BashBotPlugin(BotTypePlugin):
         from ui import execute_tab
 
         execute_tab._render_bash_execute(project)
+
+    def render_dashboard(self, project: dict[str, Any]) -> None:
+        from ui import dashboard_tab
+
+        dashboard_tab._render_bash_dashboard(project)
 
     def flush_config(self, project: dict[str, Any]) -> None:
         from ui import config_tab

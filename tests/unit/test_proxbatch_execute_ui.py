@@ -6,11 +6,19 @@ dialog through a recording double — enough to catch a broken layout call or a
 mis-keyed widget without a browser.
 """
 
+import sys
+
 import pytest
 
-import ui.execute_tab as execute_tab
 from core.batch_progress import observe_log, start_container
-from core.proxbatch import new_batch_state
+from core.bot_types import get_bot_plugin
+
+# The ProxBatch panels live in the plugin. The registry loads plugin files
+# under a synthetic module name, so bind to the module it actually registered —
+# importing plugins.bot_types.* directly would give a second copy that the app
+# never calls.
+proxbatch = sys.modules[type(get_bot_plugin("llama_server_proxbatch_bot")).__module__]
+new_batch_state = proxbatch.new_batch_state
 
 
 class _Recorder:
@@ -90,7 +98,7 @@ def page(monkeypatch):
     import streamlit as st
 
     stub = _StubPage(st.session_state)
-    monkeypatch.setattr(execute_tab, "st", stub)
+    monkeypatch.setattr(proxbatch, "st", stub)
     return stub
 
 
@@ -115,14 +123,14 @@ def _seed_batch(page, project, **container_overrides):
     )
     for vmid, updates in container_overrides.items():
         batch["containers"][vmid].update(updates)
-    page.session_state[execute_tab._proxbatch_state_key(project)] = batch
+    page.session_state[proxbatch._state_key(project)] = batch
     return batch
 
 
 # ── Target listing ────────────────────────────────────────────────────────────
 
 def test_targets_listing_names_every_container_and_phase(page):
-    execute_tab._render_proxbatch_targets(_project())
+    proxbatch._render_targets(_project())
 
     assert page.expanders == ["**🎯 Batch Targets** — 2 LXC container(s)"]
     table = "\n".join(page.text)
@@ -137,7 +145,7 @@ def test_targets_listing_warns_when_nothing_is_selected(page):
     project = _project()
     project["config"]["pct_vmids"] = []
 
-    execute_tab._render_proxbatch_targets(project)
+    proxbatch._render_targets(project)
 
     assert any("No LXC containers selected" in line for line in page.text)
 
@@ -151,7 +159,7 @@ def test_progress_cards_show_percent_phase_and_current_step(page):
     start_container(running)
     observe_log(running, "[STARTUP] echo start")
 
-    execute_tab._render_proxbatch_progress(project)
+    proxbatch._render_progress(project)
 
     body = "\n".join(page.text)
     assert "0 of 2 finished, 1 running" in body
@@ -166,7 +174,7 @@ def test_progress_cards_show_percent_phase_and_current_step(page):
 
 
 def test_progress_panel_is_silent_before_the_first_run(page):
-    execute_tab._render_proxbatch_progress(_project())
+    proxbatch._render_progress(_project())
 
     assert page.text == []
     assert page.button_keys == []
@@ -176,13 +184,13 @@ def test_details_click_requests_a_dialog_on_the_next_app_run(page, monkeypatch):
     import streamlit as st
 
     stub = _StubPage(st.session_state, clicked_buttons=["llama_server_proxbatch_exec_detail_101"])
-    monkeypatch.setattr(execute_tab, "st", stub)
+    monkeypatch.setattr(proxbatch, "st", stub)
     project = _project()
     _seed_batch(stub, project)
 
-    execute_tab._render_proxbatch_progress(project)
+    proxbatch._render_progress(project)
 
-    assert stub.session_state[execute_tab._PROXBATCH_DETAIL_KEY] == "101"
+    assert stub.session_state[proxbatch.DETAIL_KEY] == "101"
     assert stub.reruns == 1
 
 
@@ -195,7 +203,7 @@ def test_progress_falls_back_to_saved_telemetry_after_a_restart(page):
         ],
     }
 
-    execute_tab._render_proxbatch_progress(project)
+    proxbatch._render_progress(project)
 
     assert page.progress_calls == [(1.0, "100% — Validation passed")]
     assert any("1 of 1 finished" in line for line in page.text)
@@ -211,7 +219,7 @@ def test_details_dialog_shows_that_container_s_own_logs(page):
     state["telemetry"] = {"total_latency": 4.25}
     start_container(state)
 
-    execute_tab._render_proxbatch_detail_dialog(project, "100")
+    proxbatch._render_detail_dialog(project, "100")
 
     body = "\n".join(page.text)
     assert "VMID 100 · kali-one" in body
@@ -226,12 +234,12 @@ def test_details_dialog_explains_when_logs_were_not_retained(page):
         "batch_containers": [{"vmid": "100", "state": "passed", "percent": 100}],
     }
 
-    execute_tab._render_proxbatch_detail_dialog(project, "100")
+    proxbatch._render_detail_dialog(project, "100")
 
     assert any("no longer in memory" in line for line in page.text)
 
 
 def test_details_dialog_handles_an_unknown_container(page):
-    execute_tab._render_proxbatch_detail_dialog(_project(), "999")
+    proxbatch._render_detail_dialog(_project(), "999")
 
     assert any("No run details recorded for VMID 999" in line for line in page.text)

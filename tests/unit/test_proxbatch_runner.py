@@ -1,4 +1,4 @@
-"""Unit tests for core.proxbatch — the per-container loop and roll-up.
+"""Unit tests for the ProxBatch plugin's per-container loop and roll-up.
 
 This is the batch itself, shared by the Execute tab and the CLI, so the tests
 drive it through both entry points: the pure functions here and the plugin's
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from core.batch_progress import ABORTED, FAILED, PASSED, SKIPPED
 from core.bot_types import get_bot_plugin, refresh_bot_plugins
 from core.environment import LocalEnvironment, PCTEnvironment
-from core.proxbatch import (
+from plugins.bot_types.llama_server_proxbatch_bot import (
     aggregate_batch_telemetry,
     container_config,
     container_env,

@@ -11,15 +11,35 @@ from ui.config_tab import _export_project_json
 
 
 def test_registry_exposes_builtin_bot_types_in_order():
+    """Built-ins come from core.bot_types; the rest are discovered plugins.
+
+    ProxBatch and both CAF types own their code under plugins/bot_types, so
+    they must arrive through file discovery rather than the built-in package.
+    """
     refresh_bot_plugins()
     assert [plugin.type_id for plugin in iter_bot_plugins()] == [
         "bash_bot",
         "llama_cli_bot",
         "llama_server_bot",
-        "llama_server_proxbatch_bot",
         "caf_cli_run_bot",
         "caf_llama_bot",
+        "llama_server_proxbatch_bot",
     ]
+
+
+def test_plugin_bot_types_are_not_imported_from_core():
+    """core must not carry a module for any plugin-owned bot type."""
+    import importlib
+
+    for module_name in (
+        "core.proxbatch",
+        "core.bot_types.llama_server_proxbatch_bot",
+    ):
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+        raise AssertionError(f"{module_name} should live in plugins/bot_types, not core")
 
 
 def test_llama_cli_plugin_extends_bash_base():

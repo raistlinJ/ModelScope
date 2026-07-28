@@ -3033,10 +3033,6 @@ def _llama_server_client_base_url(host: str, port: int) -> str:
     return f"http://{client_host}:{int(port)}"
 
 
-def _is_llama_server_proxbatch(project: dict) -> bool:
-    return project.get("type") == "llama_server_proxbatch_bot"
-
-
 def _normalise_pct_vmids(vmids: object) -> list[str]:
     """Return unique numeric VMIDs in a stable order."""
     if not isinstance(vmids, list):
@@ -3047,200 +3043,6 @@ def _normalise_pct_vmids(vmids: object) -> list[str]:
         if value.isdigit() and value not in result:
             result.append(value)
     return result
-
-
-def _proxbatch_vmid_names(cfg: dict, containers: object) -> dict[str, str]:
-    """Remember each selected VMID's LXC name for the Execute tab's target list.
-
-    A scan lives in session state and is cleared on a project switch, so the
-    name is copied into the project config and only refreshed by a later scan.
-    """
-    names = dict(cfg.get("pct_vmid_names", {}) or {})
-    for item in containers if isinstance(containers, list) else []:
-        vmid = str(item.get("vmid", "")).strip()
-        if vmid:
-            names[vmid] = str(item.get("name", "") or "")
-    return {vmid: names.get(vmid, "") for vmid in cfg.get("pct_vmids", [])}
-
-
-def _scan_proxbatch_lxc_containers(progress_callback=None) -> tuple[list[dict[str, str]], str]:
-    """Read the local Proxmox LXC inventory without invoking a shell."""
-    import subprocess
-    import concurrent.futures
-
-    try:
-        completed = subprocess.run(
-            ["pct", "list"], capture_output=True, text=True, timeout=15, check=False,
-        )
-    except FileNotFoundError:
-        return [], "`pct` is not installed or is not available on this host."
-    except subprocess.TimeoutExpired:
-        return [], "Timed out while scanning Proxmox LXCs."
-    if completed.returncode:
-        error = (completed.stderr or completed.stdout).strip() or "pct list failed."
-        return [], error
-
-    lines = completed.stdout.splitlines()
-    name_column = next(
-        (line.lower().find("name") for line in lines if line.lstrip().lower().startswith("vmid")),
-        -1,
-    )
-    
-    # First pass: parse lines
-    parsed_items = []
-    for line in lines:
-        fields = line.split(maxsplit=4)
-        if not fields or not fields[0].isdigit():
-            continue  # header and any non-container diagnostics
-            
-        vmid = fields[0]
-        status = fields[1] if len(fields) > 1 else "unknown"
-        name = line[name_column:].strip() if name_column >= 0 else fields[-1]
-        parsed_items.append({"vmid": vmid, "status": status, "name": name, "line": line, "fields": fields})
-
-    if progress_callback:
-        progress_callback(0, len(parsed_items))
-
-    def check_template(vmid: str) -> bool:
-        try:
-            cfg = subprocess.run(["pct", "config", vmid], capture_output=True, text=True, timeout=2)
-            return "template: 1" in cfg.stdout
-        except Exception:
-            return False
-
-    template_status = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        futures = {executor.submit(check_template, item["vmid"]): item["vmid"] for item in parsed_items}
-        for i, future in enumerate(concurrent.futures.as_completed(futures)):
-            vmid = futures[future]
-            try:
-                template_status[vmid] = future.result()
-            except Exception:
-                template_status[vmid] = False
-            if progress_callback:
-                progress_callback(i + 1, len(parsed_items))
-
-    containers: list[dict[str, str]] = []
-    for item in parsed_items:
-        status = item["status"]
-        if template_status.get(item["vmid"]):
-            status = "template"
-            
-        containers.append({
-            "vmid": item["vmid"],
-            "status": status,
-            "name": item["name"],
-        })
-        
-    return containers, ""
-
-
-def _render_proxbatch_template_selector(project: dict, selected_vmids: list[str]) -> None:
-    """Pick the LXC that stands in for the batch while configuring it."""
-    from core.bot_types.llama_server_proxbatch_bot import normalize_template_vmid
-
-    if not selected_vmids:
-        return
-    # Correct the stored value only when it can no longer be selected, and only
-    # here — before the widget exists. Once the selectbox is instantiated
-    # Streamlit rejects any write to its key (see _flush_llama_server_config).
-    current = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
-    if current not in selected_vmids:
-        st.session_state["llama_server_pct_template_vmid"] = normalize_template_vmid(
-            current, selected_vmids,
-        )
-    names = project.get("config", {}).get("pct_vmid_names", {})
-    names = names if isinstance(names, dict) else {}
-    st.selectbox(
-        "Master LXC",
-        options=selected_vmids,
-        key="llama_server_pct_template_vmid",
-        format_func=lambda vmid: f"{vmid} — {names[vmid]}" if names.get(vmid) else str(vmid),
-        help=(
-            "This will be used for setup; all commands/prompts will run in the same way as they run for this master LXC."
-        ),
-    )
-
-
-@st.dialog("Select Proxmox LXC containers")
-def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
-    """Modal selector for the PCT-only batch bot's container list."""
-    containers = st.session_state.get("llama_server_proxbatch_containers", [])
-    if not containers:
-        st.info("No LXC containers were found. Scan again after creating or starting containers.")
-    else:
-        selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
-        vmids = [item["vmid"] for item in containers]
-        def _is_template(c: dict) -> bool:
-            return c.get("status", "").lower() == "template" or "template" in c.get("name", "").lower()
-
-        selectable_vmids = [item["vmid"] for item in containers if not _is_template(item)]
-        c_all, c_invert, c_clear = st.columns(3)
-        with c_all:
-            if st.button("Select all", use_container_width=True):
-                for vmid in vmids:
-                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in selectable_vmids
-                st.session_state["llama_server_pct_vmids"] = selectable_vmids
-                st.rerun()
-        with c_invert:
-            if st.button("Invert selection", use_container_width=True):
-                inverted = [vmid for vmid in selectable_vmids if vmid not in selected]
-                for vmid in vmids:
-                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
-                st.session_state["llama_server_pct_vmids"] = inverted
-                st.rerun()
-        with c_clear:
-            if st.button("Clear selection", use_container_width=True):
-                for vmid in vmids:
-                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = False
-                st.session_state["llama_server_pct_vmids"] = []
-                st.rerun()
-
-        templates = [c for c in containers if _is_template(c)]
-        regular = [c for c in containers if not _is_template(c)]
-        checked: list[str] = []
-        
-        for item in regular:
-            vmid = item["vmid"]
-            label = f"{vmid} — {item.get('name') or 'unnamed'} ({item.get('status', 'unknown')})"
-            if item.get("ip"):
-                label += f" · {item['ip']}"
-            if st.checkbox(label, value=vmid in selected, key=f"llama_server_proxbatch_vmid_{vmid}"):
-                checked.append(vmid)
-                
-        if templates:
-            st.markdown("<div style='margin-top: 1rem; margin-bottom: 0.5rem; color: #8b949e; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;'>Templates</div>", unsafe_allow_html=True)
-            for item in templates:
-                vmid = item["vmid"]
-                label = f"{vmid} — {item.get('name') or 'unnamed'} (template)"
-                st.checkbox(
-                    label,
-                    value=False,
-                    key=f"llama_server_proxbatch_vmid_{vmid}",
-                    disabled=True,
-                    help="Templates cannot be selected for batch execution",
-                )
-                
-        st.session_state["llama_server_pct_vmids"] = checked
-
-    st.divider()
-    c_close, c_rescan = st.columns(2)
-    with c_close:
-        if st.button("Done", type="primary", use_container_width=True):
-            _flush_llama_server_config(project)
-            st.session_state["llama_server_proxbatch_dialog_open"] = False
-            st.rerun()
-    with c_rescan:
-        if st.button("Rescan", use_container_width=True):
-            progress_bar = st.progress(0, text="Scanning LXC containers...")
-            def update_progress(current, total):
-                if total > 0:
-                    progress_bar.progress(current / total, text=f"Scanning LXC containers... ({current}/{total})")
-            containers, error = _scan_proxbatch_lxc_containers(progress_callback=update_progress)
-            progress_bar.empty()
-            st.session_state["llama_server_proxbatch_containers"] = containers
-            st.session_state["llama_server_proxbatch_scan_error"] = error
-            st.rerun()
 
 
 def _flush_llama_server_config(project: dict) -> None:
@@ -3339,47 +3141,11 @@ def _flush_llama_server_config(project: dict) -> None:
         "llm_helper_mcp_tools": st.session_state.get("llama_server_llm_helper_mcp_tools", cfg.get("llm_helper_mcp_tools", [])),
         "llm_helper_mcp_strict": st.session_state.get("llama_server_llm_helper_mcp_strict", cfg.get("llm_helper_mcp_strict", False)),
     })
-    if _is_llama_server_proxbatch(project):
-        from core.bot_types.llama_server_proxbatch_bot import normalize_template_vmid
-
-        cfg["execution_target"] = "pct"
-        cfg["server_in_container"] = True
-        cfg["pct_vmids"] = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
-        cfg["pct_vmid_names"] = _proxbatch_vmid_names(
-            cfg, st.session_state.get("llama_server_proxbatch_containers", []),
-        )
-        # The session key belongs to the Template LXC selectbox, so a flush may
-        # only read it — _render_proxbatch_template_selector owns correcting it,
-        # before that widget is instantiated.
-        cfg["pct_template_vmid"] = normalize_template_vmid(
-            st.session_state.get("llama_server_pct_template_vmid", ""), cfg["pct_vmids"],
-        )
-        # Each container answers on its own address, so there is no single
-        # client URL until core.pct_server resolves one per run.
-        from core.pct_server import CONTAINER_BIND_HOST
-
-        cfg["server_host"] = CONTAINER_BIND_HOST
-        cfg["openai_base_url"] = ""
-        for key in ("pct_vmid", "ssh_host", "ssh_port", "ssh_user", "ssh_password", "ssh_key_path"):
-            cfg.pop(key, None)
+    _plugin = get_bot_plugin(project.get("type", "llama_server_bot"))
+    if _plugin is not None:
+        _plugin.flush_ui_config(project, cfg)
     from core.settings_store import save_settings
     save_settings(st.session_state)
-
-
-def _proxbatch_template_env(project: dict):
-    """PCT environment for the template LXC, or None with an error shown.
-
-    Model scans and connection tests target one container and the batch then
-    reuses that configuration for every selected LXC.
-    """
-    from core.environment import create_environment
-
-    _flush_llama_server_config(project)
-    template = str(project["config"].get("pct_template_vmid", "") or "").strip()
-    if not template:
-        st.warning("Select LXC containers and a template LXC first.")
-        return None
-    return create_environment(ssh=False, pct_vmid=template, remote_cwd=".")
 
 
 def _scan_llama_server_models(project: dict) -> None:
@@ -3400,8 +3166,9 @@ def _scan_llama_server_models(project: dict) -> None:
         st.warning("Set Model Directory first.")
         return
     error = ""
-    if _is_llama_server_proxbatch(project):
-        env = _proxbatch_template_env(project)
+    _plugin = get_bot_plugin(project.get("type", "llama_server_bot"))
+    if _plugin is not None and _plugin.uses_config_probe_env:
+        env = _plugin.config_probe_env(project)
         if env is None:
             return
         models, error = scan_gguf_models_via_env(env, model_dir)
@@ -3531,7 +3298,10 @@ def _test_llama_server_run(project: dict) -> None:
     port = int(cfg.get("server_port") or 8080)
     verify_ssl = cfg.get("openai_verify_ssl", True)
     exec_target = cfg.get("execution_target", "local")
-    use_pct = _is_llama_server_proxbatch(project)
+    _plugin = get_bot_plugin(project.get("type", "llama_server_bot"))
+    # A bot that probes through a dedicated target keeps its binary and model
+    # on that target, so the local filesystem checks below don't apply to it.
+    use_pct = bool(_plugin is not None and _plugin.uses_config_probe_env)
     use_remote = exec_target == "ssh" and not use_pct
 
     # Validate the configured launch inputs before accepting an unrelated
@@ -3581,23 +3351,17 @@ def _test_llama_server_run(project: dict) -> None:
     ssh_env = None
     try:
         if use_pct:
-            from core.pct_server import start_pct_managed_llama_server
-
-            template = str(cfg.get("pct_template_vmid", "") or "").strip()
-            if not template:
-                st.session_state["_llama_server_svc_result"] = (
-                    "error", "Select LXC containers and a template LXC first.", "",
-                )
-                return
-            from core.environment import create_environment
-            pct_env = create_environment(ssh=False, pct_vmid=template, remote_cwd=".")
-            proc = start_pct_managed_llama_server(
-                pct_env, template, binary, model_path, context_size, port,
+            proc = _plugin.start_config_test_server(
+                project,
+                {
+                    "binary": binary, "model_path": model_path, "port": port,
+                    "context_size": context_size, "custom_flags": custom_flags,
+                    "advanced_flags": advanced_flags, "ready_timeout": ready_timeout,
+                },
                 logs.append,
-                custom_flags=custom_flags,
-                advanced_flags=advanced_flags,
-                ready_timeout=ready_timeout,
             )
+            if proc is None:
+                return  # the plugin already reported why
             url = proc.base_url
         elif use_remote:
             from core.environment import SSHEnvironment
@@ -3662,34 +3426,10 @@ def _test_llama_server_run(project: dict) -> None:
 def _render_llama_server_runtime(project: dict) -> None:
     """Runtime sub-tab for Llama-Server-Bot: target, model setup, server bind, commands, MCP."""
 
-    is_proxbatch = _is_llama_server_proxbatch(project)
+    plugin = get_bot_plugin(project.get("type", "llama_server_bot"))
     with st.expander("Execution Target", expanded=True):
-        if is_proxbatch:
-            target = "pct"
-            st.session_state["llama_server_execution_target"] = "pct"
-            st.caption(
-                "PCT-only batch execution. Each selected LXC runs the same workflow "
-                "sequentially, with its own llama-server started inside it."
-            )
-            selected_vmids = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
-            c_scan, c_selected = st.columns([1, 3])
-            with c_scan:
-                if st.button("Scan LXCs", key="btn_llama_server_proxbatch_scan_lxcs", use_container_width=True):
-                    containers, error = _scan_proxbatch_lxc_containers()
-                    st.session_state["llama_server_proxbatch_containers"] = containers
-                    st.session_state["llama_server_proxbatch_scan_error"] = error
-                    st.session_state["llama_server_proxbatch_dialog_open"] = True
-            with c_selected:
-                if selected_vmids:
-                    st.caption(f"Selected VMIDs: `{', '.join(selected_vmids)}`")
-                else:
-                    st.caption("No LXC containers selected.")
-            scan_error = st.session_state.get("llama_server_proxbatch_scan_error", "")
-            if scan_error:
-                st.error(f"Could not scan LXCs: {scan_error}")
-            if st.session_state.get("llama_server_proxbatch_dialog_open"):
-                _render_llama_server_proxbatch_vmid_dialog(project)
-        else:
+        target = plugin.render_execution_target(project) if plugin is not None else None
+        if target is None:
             target = st.radio(
                 "Mode",
                 options=["local", "ssh", "pct"],
@@ -3717,7 +3457,7 @@ def _render_llama_server_runtime(project: dict) -> None:
                 type="password",
                 help="Piped to `sudo -S`. Leave blank to reuse the SSH password or if passwordless sudo (NOPASSWD) is configured.",
             )
-        if is_proxbatch:
+        if plugin is not None and plugin.render_target_test(project, target):
             pass
         elif target == "local":
             st.divider()
@@ -3774,17 +3514,8 @@ def _render_llama_server_runtime(project: dict) -> None:
     with st.expander("Server Setup", expanded=True):
         st.session_state["llama_server_backend"] = "llama-server (managed)"
         _exec_target_for_warning = st.session_state.get("llama_server_execution_target", "local")
-        if is_proxbatch:
-            selected_vmids = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
-            _render_proxbatch_template_selector(project, selected_vmids)
-            _template = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
-            st.info(
-                "Each selected LXC runs its own llama-server **inside the container**, so the "
-                "Binary Path and Model Directory/Model below must point to files that exist "
-                "**inside every container** — they are assumed to be set up identically. "
-                + (f"Scanning and Check Status use Master LXC **{_template}**."
-                   if _template else "Select a Master LXC to scan models or check status.")
-            )
+        if plugin is not None and plugin.render_server_setup_notice(project):
+            pass
         elif _exec_target_for_warning == "ssh":
             st.info(
                 "Execution Target is **SSH** — the managed llama-server launches on that remote "
@@ -3813,9 +3544,8 @@ def _render_llama_server_runtime(project: dict) -> None:
                 key="llama_server_model_dir",
                 placeholder="/home/user/models",
                 help=(
-                    "Directory or direct .gguf file inside each LXC to scan for models."
-                    if is_proxbatch else
-                    "Directory or direct .gguf file to scan for models."
+                    (plugin.model_dir_help() if plugin is not None else None)
+                    or "Directory or direct .gguf file to scan for models."
                 ),
             )
         with col_scan:
@@ -3847,24 +3577,8 @@ def _render_llama_server_runtime(project: dict) -> None:
                 help="Enter a local model filename/path manually, or use Scan to find models.",
             )
 
-        if is_proxbatch:
-            # A container's loopback is unreachable from the Proxmox host, so the
-            # bind address isn't the user's to choose here.
-            from core.pct_server import CONTAINER_BIND_HOST
-
-            st.number_input(
-                "Listen Port",
-                min_value=1,
-                max_value=65535,
-                step=1,
-                key="llama_server_server_port",
-            )
-            port = int(st.session_state.get("llama_server_server_port") or 8080)
-            st.session_state["llama_server_server_host"] = CONTAINER_BIND_HOST
-            st.caption(
-                f"Each container's llama-server binds `{CONTAINER_BIND_HOST}:{port}`; ModelScope "
-                "calls it at that container's own IP address."
-            )
+        if plugin is not None and plugin.render_bind_controls(project):
+            pass
         else:
             col_host, col_port = st.columns([3, 1])
             with col_host:
@@ -4058,16 +3772,3 @@ def _render_llama_server_bot_config(project: dict) -> None:
         _render_metric_thresholds_config(project, "llama_server", _flush_llama_server_config)
 
 
-def _render_llama_server_proxbatch_bot_config(project: dict) -> None:
-    """Configuration for the PCT-only batch form of Llama-Server-Bot."""
-    st.divider()
-
-    sub_runtime, sub_val, sub_metrics = st.tabs(
-        ["🖥  Runtime", "✅  Validation", "📊  Metrics Config"]
-    )
-    with sub_runtime:
-        _render_llama_server_runtime(project)
-    with sub_val:
-        _render_llama_server_validation(project)
-    with sub_metrics:
-        _render_metric_thresholds_config(project, "llama_server", _flush_llama_server_config)

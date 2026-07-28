@@ -9,15 +9,35 @@ Unit tests for the Llama-Server-Bot pieces of ui.config_tab:
 All process/network calls are mocked — no real llama-server binary or port
 is touched.
 """
+import sys
 import streamlit as st
 from unittest.mock import MagicMock, patch
 
+from core.bot_types import get_bot_plugin
+
+# The ProxBatch bot owns its own rendering, so its Streamlit calls are patched
+# on the plugin module rather than on ui.config_tab. The registry loads plugin
+# files under a synthetic (but path-stable) module name; importing
+# plugins.bot_types.* directly would give a second copy that the app never
+# calls. refresh_bot_plugins() re-executes the file and replaces the module
+# object, so resolve it per call rather than binding it once at import.
+_PROXBATCH_ST = f"{type(get_bot_plugin('llama_server_proxbatch_bot')).__module__}.st"
+
+
+def _proxbatch_mod():
+    return sys.modules[type(get_bot_plugin("llama_server_proxbatch_bot")).__module__]
+
+
+def _render_proxbatch_template_selector(*args, **kwargs):
+    return _proxbatch_mod().render_template_selector(*args, **kwargs)
+
+
+def _scan_proxbatch_lxc_containers(*args, **kwargs):
+    return _proxbatch_mod().scan_lxc_containers(*args, **kwargs)
 from ui.config_tab import (
     _state_prefix_from_test_result_key,
     _flush_llama_server_config,
-    _render_proxbatch_template_selector,
     _scan_llama_server_models,
-    _scan_proxbatch_lxc_containers,
     _test_llama_server_run,
 )
 
@@ -175,7 +195,7 @@ class TestFlushProxBatchConfig:
 
 
 class TestProxBatchTemplateSelector:
-    @patch("ui.config_tab.st")
+    @patch(_PROXBATCH_ST)
     def test_an_unselectable_template_is_corrected_before_the_widget(self, mock_st):
         mock_st.session_state = st.session_state
         seen: list[str] = []
@@ -188,7 +208,7 @@ class TestProxBatchTemplateSelector:
 
         assert seen == ["101"]
 
-    @patch("ui.config_tab.st")
+    @patch(_PROXBATCH_ST)
     def test_a_valid_choice_is_left_for_the_widget_to_own(self, mock_st):
         mock_st.session_state = st.session_state
         st.session_state["llama_server_pct_template_vmid"] = "102"
@@ -197,7 +217,7 @@ class TestProxBatchTemplateSelector:
 
         assert st.session_state["llama_server_pct_template_vmid"] == "102"
 
-    @patch("ui.config_tab.st")
+    @patch(_PROXBATCH_ST)
     def test_no_selection_means_no_dropdown(self, mock_st):
         mock_st.session_state = st.session_state
 
@@ -210,10 +230,14 @@ class TestScanProxBatchModels:
     """The mock streamlit module has no output functions, so these swap in a
     recording double for the duration of the call."""
 
+    @patch(_PROXBATCH_ST)
     @patch("ui.config_tab.st")
     @patch("core.environment.create_environment")
-    def test_models_are_scanned_inside_the_template_container(self, mock_create_env, mock_st):
+    def test_models_are_scanned_inside_the_template_container(
+        self, mock_create_env, mock_st, mock_plugin_st,
+    ):
         mock_st.session_state = st.session_state
+        mock_plugin_st.session_state = st.session_state
         env = MagicMock()
         env.execute.return_value = {
             "stdout": "/models/a.gguf\n/models/sub/b.gguf\n", "stderr": "", "exit_code": 0,
@@ -233,10 +257,14 @@ class TestScanProxBatchModels:
             "a.gguf", "sub/b.gguf",
         ]
 
+    @patch(_PROXBATCH_ST)
     @patch("ui.config_tab.st")
     @patch("core.environment.create_environment")
-    def test_scanning_without_a_selection_does_not_reach_a_container(self, mock_create_env, mock_st):
+    def test_scanning_without_a_selection_does_not_reach_a_container(
+        self, mock_create_env, mock_st, mock_plugin_st,
+    ):
         mock_st.session_state = st.session_state
+        mock_plugin_st.session_state = st.session_state
         project = {"id": "p2", "name": "Batch", "type": "llama_server_proxbatch_bot", "config": {}}
         _set_session(llama_server_model_dir="/models", llama_server_pct_vmids=[])
 

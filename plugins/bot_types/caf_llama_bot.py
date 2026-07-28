@@ -175,6 +175,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
 
     type_id = "caf_llama_bot"
     label = "CAF + llama.cpp"
+    dashboard_metrics_key = "caf_llama_metrics_matrix"
     icon = "🦙"
     default_project_name = "CAF + llama.cpp"
     state_key_map = {
