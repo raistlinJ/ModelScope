@@ -562,3 +562,46 @@ class TestTestLlamaServerRunRemote:
         _test_llama_server_run(project)
 
         remote_proc.terminate.assert_called_once()
+
+
+# ── ProxBatch container-picker lifecycle ──────────────────────────────────────
+
+class TestProxBatchDialogLifecycle:
+    """The picker must not survive being dismissed.
+
+    Streamlit gives no callback when a modal is closed with Escape, the X, or a
+    click outside, so an "is open" flag that lived until the dialog's own Done
+    button stayed set after any other exit — and the next unrelated rerun
+    (pressing Check Status, say) put the picker back on screen.
+    """
+
+    def _page(self, session_state):
+        page = MagicMock()
+        page.session_state = session_state
+        page.columns.side_effect = lambda spec, **kw: [
+            MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+        ]
+        page.button.return_value = False
+        return page
+
+    def _render(self, session_state, monkeypatch):
+        import plugins.bot_types.llama_server_proxbatch_bot as proxbatch
+
+        opened: list[bool] = []
+        monkeypatch.setattr(proxbatch, "st", self._page(session_state))
+        monkeypatch.setattr(proxbatch, "render_vmid_dialog", lambda project: opened.append(True))
+        proxbatch.LlamaServerProxBatchBotPlugin().render_execution_target({"id": "p", "config": {}})
+        return opened
+
+    def test_a_scan_opens_the_picker_once(self, monkeypatch):
+        state = {"llama_server_proxbatch_dialog_open": True, "llama_server_pct_vmids": []}
+
+        assert self._render(state, monkeypatch) == [True]
+        # The flag is consumed on open, so a later rerun does not resurrect it.
+        assert not state.get("llama_server_proxbatch_dialog_open")
+        assert self._render(state, monkeypatch) == []
+
+    def test_no_scan_means_no_picker(self, monkeypatch):
+        state = {"llama_server_pct_vmids": []}
+
+        assert self._render(state, monkeypatch) == []

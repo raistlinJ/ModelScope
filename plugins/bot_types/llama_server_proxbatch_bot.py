@@ -430,20 +430,20 @@ def _vmid_dialog_body(project: dict) -> None:
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in selectable_vmids
                 st.session_state["llama_server_pct_vmids"] = selectable_vmids
-                st.rerun()
+                st.rerun(scope="fragment")
         with c_invert:
             if st.button("Invert", use_container_width=True):
                 inverted = [vmid for vmid in selectable_vmids if vmid not in selected]
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
                 st.session_state["llama_server_pct_vmids"] = inverted
-                st.rerun()
+                st.rerun(scope="fragment")
         with c_clear:
             if st.button("Clear", use_container_width=True):
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = False
                 st.session_state["llama_server_pct_vmids"] = []
-                st.rerun()
+                st.rerun(scope="fragment")
 
         templates = [c for c in containers if _is_template(c)]
         regular = [c for c in containers if not _is_template(c)]
@@ -481,7 +481,8 @@ def _vmid_dialog_body(project: dict) -> None:
     with c_close:
         if st.button("Done", type="primary", use_container_width=True):
             flush_llama_server_config(project)
-            st.session_state["llama_server_proxbatch_dialog_open"] = False
+            # An app-scope rerun leaves the dialog behind; the open flag was
+            # already consumed when it was rendered.
             st.rerun()
     with c_rescan:
         if st.button("Rescan", use_container_width=True):
@@ -495,7 +496,7 @@ def _vmid_dialog_body(project: dict) -> None:
             progress_bar.empty()
             st.session_state["llama_server_proxbatch_containers"] = containers
             st.session_state["llama_server_proxbatch_scan_error"] = error
-            st.rerun()
+            st.rerun(scope="fragment")
 
 
 def render_vmid_dialog(project: dict) -> None:
@@ -1172,7 +1173,13 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
         scan_error = st.session_state.get("llama_server_proxbatch_scan_error", "")
         if scan_error:
             st.error(f"Could not scan LXCs: {scan_error}")
-        if st.session_state.get("llama_server_proxbatch_dialog_open"):
+        if st.session_state.pop("llama_server_proxbatch_dialog_open", False):
+            # Consumed on open, not on close. Streamlit gives no callback when a
+            # modal is dismissed with Escape, the X, or a click outside, so a flag
+            # that survived until "Done" stayed set after any other exit and
+            # re-opened the picker on the next unrelated rerun — pressing Check
+            # Status brought it back. The dialog body re-runs as a fragment, so
+            # clearing the flag here does not disturb it while it is in use.
             render_vmid_dialog(project)
         return "pct"
 
