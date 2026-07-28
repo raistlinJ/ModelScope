@@ -3146,7 +3146,7 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
             return c.get("status", "").lower() == "template" or "template" in c.get("name", "").lower()
 
         selectable_vmids = [item["vmid"] for item in containers if not _is_template(item)]
-        c_all, c_invert, _ = st.columns([1, 1, 2])
+        c_all, c_invert, c_clear = st.columns(3)
         with c_all:
             if st.button("Select all", use_container_width=True):
                 for vmid in vmids:
@@ -3159,6 +3159,12 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
                 for vmid in vmids:
                     st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = vmid in inverted
                 st.session_state["llama_server_pct_vmids"] = inverted
+                st.rerun()
+        with c_clear:
+            if st.button("Clear selection", use_container_width=True):
+                for vmid in vmids:
+                    st.session_state[f"llama_server_proxbatch_vmid_{vmid}"] = False
+                st.session_state["llama_server_pct_vmids"] = []
                 st.rerun()
 
         templates = [c for c in containers if _is_template(c)]
@@ -3197,9 +3203,10 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
             st.rerun()
     with c_rescan:
         if st.button("Rescan", use_container_width=True):
-            containers, error = _scan_proxbatch_lxc_containers()
-            st.session_state["llama_server_proxbatch_containers"] = containers
-            st.session_state["llama_server_proxbatch_scan_error"] = error
+            with st.spinner("Scanning LXC containers..."):
+                containers, error = _scan_proxbatch_lxc_containers()
+                st.session_state["llama_server_proxbatch_containers"] = containers
+                st.session_state["llama_server_proxbatch_scan_error"] = error
             st.rerun()
 
 
