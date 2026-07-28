@@ -1,4 +1,4 @@
-"""CAF CLI Run bot plugin."""
+"""CAF Standard bot plugin."""
 
 from __future__ import annotations
 
@@ -2682,9 +2682,9 @@ class CafCliRunPlugin(BotTypePlugin):
     """Run CAF validation prompts locally or over a standard SSH shell."""
 
     type_id = "caf_cli_run_bot"
-    label = "CAF CLI Run"
+    label = "CAF Standard"
     icon = "💬"
-    default_project_name = "CAF CLI Run"
+    default_project_name = "CAF Standard"
     state_key_map = CAF_CLI_RUN_STATE_KEY_MAP
     session_defaults = CAF_CLI_RUN_SESSION_DEFAULTS
     owned_prefixes = ("caf_cli_val_", "_caf_cli_val_", "caf_cli_tool_en_", "caf_cli_llm_helper_", "caf_cli_is_fetching_", "_caf_cli_run_bot_metric_threshold_", "_sc_caf_cli_")

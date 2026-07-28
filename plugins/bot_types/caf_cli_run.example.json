@@ -1,6 +1,6 @@
 {
   "id": "caf-cli-run-example",
-  "name": "CAF CLI Run",
+  "name": "CAF Standard",
   "type": "caf_cli_run_bot",
   "config": {
     "execution_target": "local",
