@@ -732,6 +732,8 @@ class _ProxBatchItem(dict):
 
     def get(self, key, default=None):
         if key == "cancel_requested":
+            if self._state.get("cancel_requested"):
+                return True
             return self._batch_shared.get("cancel_requested", False)
         return super().get(key, default)
 
@@ -997,7 +999,8 @@ def _render_llama_cli_execute(
                 help="Number of LXC containers to execute simultaneously.",
             )
     with col_cancel:
-        if st.button("⏹  Stop", key=f"btn_{exec_prefix}_cancel",
+        stop_label = "⏹  Stop All" if is_proxbatch else "⏹  Stop"
+        if st.button(stop_label, key=f"btn_{exec_prefix}_cancel",
                      use_container_width=True, disabled=not run_in_progress):
             st.session_state["cancel_requested"] = True
             st.rerun()
@@ -1027,16 +1030,11 @@ def _render_llama_cli_execute(
     st.session_state["_llama_log_placeholder_shell"] = shell_placeholder
     st.session_state["_llama_log_placeholder_llama"] = llama_placeholder
 
-    if run_btn and not run_in_progress:
-        st.session_state["run_logs_setup"]   = []
-        st.session_state["run_logs_validation"]   = []
-        st.session_state["run_completed"]    = False
-        st.session_state["telemetry"]        = {}
+    retry_vmid = st.session_state.pop("_retry_vmid", None)
+    if (run_btn or retry_vmid) and not run_in_progress:
         st.session_state["cancel_requested"] = False
         st.session_state["_run_in_progress"] = True
         st.session_state["_exec_phase"]      = ""
-        shell_placeholder.empty()
-        llama_placeholder.empty()
         
         # Flush config in the main thread before launching background execution
         flush_fn(project)
@@ -1044,17 +1042,34 @@ def _render_llama_cli_execute(
             project.setdefault("config", {})["_proxbatch_concurrency"] = st.session_state.get(f"{exec_prefix}_concurrency", 1)
         
         # Launch in background thread so the UI stays responsive
-        shared_state = {
-            "cancel_requested": False,
-            "phase": "",
-            "logs_setup": [],
-            "logs_validation": [],
-            "completed": False,
-            "telemetry": {},
-        }
-        if on_run_start is not None:
-            on_run_start(project, shared_state)
-        st.session_state["_run_shared"] = shared_state
+        if retry_vmid and "_run_shared" in st.session_state:
+            shared_state = st.session_state["_run_shared"]
+            shared_state["cancel_requested"] = False
+            shared_state["completed"] = False
+            
+            c_state = shared_state["batch"]["containers"][retry_vmid]
+            name = c_state.get("name")
+            c_state.clear()
+            c_state.update({"vmid": retry_vmid, "state": "waiting", "name": name, "percent": 0})
+        else:
+            st.session_state["run_logs_setup"]   = []
+            st.session_state["run_logs_validation"]   = []
+            st.session_state["run_completed"]    = False
+            st.session_state["telemetry"]        = {}
+            shell_placeholder.empty()
+            llama_placeholder.empty()
+            shared_state = {
+                "cancel_requested": False,
+                "phase": "",
+                "logs_setup": [],
+                "logs_validation": [],
+                "completed": False,
+                "telemetry": {},
+            }
+            if on_run_start is not None:
+                on_run_start(project, shared_state)
+            st.session_state["_run_shared"] = shared_state
+
         thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state, bot_type), daemon=True)
         thread.start()
         st.session_state["_run_thread"] = thread
@@ -1326,15 +1341,37 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                 units = f"{units_started}/{state.get('total_units', 0)} steps"
                 st.caption(f"{_proxbatch_phase_label(state)} · {units}")
                 st.caption(f"↳ {state.get('current_step') or 'Waiting to start'}")
+                is_running = state.get("state") == "running"
+                is_finished = state.get("state") in ("completed", "failed", "aborted", "skipped")
                 
-                if st.button(
-                    "Showing Logs" if is_selected else "Focus Logs",
-                    key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
-                    use_container_width=True,
-                    disabled=is_selected,
-                ):
-                    st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
-                    st.rerun()
+                if is_running or is_finished:
+                    c_logs, c_action = st.columns([2.5, 1])
+                    with c_logs:
+                        if st.button(
+                            "Showing Logs" if is_selected else "Focus Logs",
+                            key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
+                            use_container_width=True,
+                        ):
+                            st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
+                            st.rerun()
+                    with c_action:
+                        if is_running:
+                            if st.button("⏹", key=f"{_PROXBATCH_EXEC_PREFIX}_stop_{vmid}", help="Stop container", use_container_width=True):
+                                state["cancel_requested"] = True
+                                st.rerun()
+                        else:
+                            run_in_progress = st.session_state.get("_run_in_progress", False)
+                            if st.button("🔄", key=f"{_PROXBATCH_EXEC_PREFIX}_retry_{vmid}", help="Retry container", use_container_width=True, disabled=run_in_progress):
+                                st.session_state["_retry_vmid"] = vmid
+                                st.rerun()
+                else:
+                    if st.button(
+                        "Showing Logs" if is_selected else "Focus Logs",
+                        key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
+                        st.rerun()
 
     return selected_logs
 

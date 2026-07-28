@@ -146,14 +146,14 @@ def run_pct_batch(
     batch_results: list[dict] = []
 
     def _run_task(vmid: str, state: dict, index: int) -> dict | None:
-        if is_cancelled():
+        if is_cancelled() or state.get("cancel_requested"):
             batch_progress.skip_container(state)
             return None
         batch_progress.start_container(state)
         log(f"[SYS] PCT batch {index}/{total} — VMID {vmid}")
         result = dict(run_one(vmid, state) or {})
         result["pct_vmid"] = vmid
-        batch_progress.finish_container(state, result, cancelled=is_cancelled())
+        batch_progress.finish_container(state, result, cancelled=is_cancelled() or state.get("cancel_requested"))
         log(f"[SYS] VMID {vmid} finished — {state['state']}")
         return result
 
@@ -161,6 +161,8 @@ def run_pct_batch(
 
     if max_workers <= 1:
         for index, (vmid, state) in enumerate(containers.items(), start=1):
+            if state.get("state") not in ("waiting", ""):
+                continue
             res = _run_task(vmid, state, index)
             if res is not None:
                 batch_results.append(res)
@@ -168,7 +170,9 @@ def run_pct_batch(
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for index, (vmid, state) in enumerate(containers.items(), start=1):
-                if is_cancelled():
+                if state.get("state") not in ("waiting", ""):
+                    continue
+                if is_cancelled() or state.get("cancel_requested"):
                     batch_progress.skip_container(state)
                     continue
                 futures.append(executor.submit(_run_task, vmid, state, index))

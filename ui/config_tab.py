@@ -3058,9 +3058,10 @@ def _proxbatch_vmid_names(cfg: dict, containers: object) -> dict[str, str]:
     return {vmid: names.get(vmid, "") for vmid in cfg.get("pct_vmids", [])}
 
 
-def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
+def _scan_proxbatch_lxc_containers(progress_callback=None) -> tuple[list[dict[str, str]], str]:
     """Read the local Proxmox LXC inventory without invoking a shell."""
     import subprocess
+    import concurrent.futures
 
     try:
         completed = subprocess.run(
@@ -3079,7 +3080,9 @@ def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
         (line.lower().find("name") for line in lines if line.lstrip().lower().startswith("vmid")),
         -1,
     )
-    containers: list[dict[str, str]] = []
+    
+    # First pass: parse lines
+    parsed_items = []
     for line in lines:
         fields = line.split(maxsplit=4)
         if not fields or not fields[0].isdigit():
@@ -3087,22 +3090,43 @@ def _scan_proxbatch_lxc_containers() -> tuple[list[dict[str, str]], str]:
             
         vmid = fields[0]
         status = fields[1] if len(fields) > 1 else "unknown"
-        
-        # Verify template status definitively using pct config
+        name = line[name_column:].strip() if name_column >= 0 else fields[-1]
+        parsed_items.append({"vmid": vmid, "status": status, "name": name, "line": line, "fields": fields})
+
+    if progress_callback:
+        progress_callback(0, len(parsed_items))
+
+    def check_template(vmid: str) -> bool:
         try:
             cfg = subprocess.run(["pct", "config", vmid], capture_output=True, text=True, timeout=2)
-            if "template: 1" in cfg.stdout:
-                status = "template"
+            return "template: 1" in cfg.stdout
         except Exception:
-            pass
+            return False
+
+    template_status = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        futures = {executor.submit(check_template, item["vmid"]): item["vmid"] for item in parsed_items}
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            vmid = futures[future]
+            try:
+                template_status[vmid] = future.result()
+            except Exception:
+                template_status[vmid] = False
+            if progress_callback:
+                progress_callback(i + 1, len(parsed_items))
+
+    containers: list[dict[str, str]] = []
+    for item in parsed_items:
+        status = item["status"]
+        if template_status.get(item["vmid"]):
+            status = "template"
             
         containers.append({
-            "vmid": vmid,
+            "vmid": item["vmid"],
             "status": status,
-            # pct list's optional Lock column is blank for most LXCs, so
-            # whitespace-splitting alone cannot reliably locate Name.
-            "name": line[name_column:].strip() if name_column >= 0 else fields[-1],
+            "name": item["name"],
         })
+        
     return containers, ""
 
 
@@ -3203,10 +3227,14 @@ def _render_llama_server_proxbatch_vmid_dialog(project: dict) -> None:
             st.rerun()
     with c_rescan:
         if st.button("Rescan", use_container_width=True):
-            with st.spinner("Scanning LXC containers..."):
-                containers, error = _scan_proxbatch_lxc_containers()
-                st.session_state["llama_server_proxbatch_containers"] = containers
-                st.session_state["llama_server_proxbatch_scan_error"] = error
+            progress_bar = st.progress(0, text="Scanning LXC containers...")
+            def update_progress(current, total):
+                if total > 0:
+                    progress_bar.progress(current / total, text=f"Scanning LXC containers... ({current}/{total})")
+            containers, error = _scan_proxbatch_lxc_containers(progress_callback=update_progress)
+            progress_bar.empty()
+            st.session_state["llama_server_proxbatch_containers"] = containers
+            st.session_state["llama_server_proxbatch_scan_error"] = error
             st.rerun()
 
 
