@@ -783,6 +783,7 @@ def _run_llama_server_proxbatch_bot(project: dict, shared: dict) -> None:
             {"text": message, "tag": "sys"},
         ),
         is_cancelled=lambda: bool(shared.get("cancel_requested")),
+        max_workers=cfg.get("_proxbatch_concurrency", 1),
     )
 
     # Preserve a single, dashboard-visible record for the entire batch as well
@@ -1227,7 +1228,11 @@ def _proxbatch_on_run_start(project: dict, shared_state: dict) -> None:
     )
     shared_state["batch"] = batch
     st.session_state[_proxbatch_state_key(project)] = batch
-    st.session_state.pop(_PROXBATCH_DETAIL_KEY, None)
+    
+    if batch.get("containers"):
+        st.session_state[_PROXBATCH_DETAIL_KEY] = str(list(batch["containers"].keys())[0])
+    else:
+        st.session_state.pop(_PROXBATCH_DETAIL_KEY, None)
 
 
 def _proxbatch_on_clear(project: dict) -> None:
