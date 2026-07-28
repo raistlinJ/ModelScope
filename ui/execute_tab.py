@@ -990,7 +990,7 @@ def _render_llama_cli_execute(
                 min_value=1,
                 max_value=16,
                 step=1,
-                value=1,
+                value=st.session_state.get(f"{exec_prefix}_concurrency", 1),
                 key=f"{exec_prefix}_concurrency",
                 disabled=run_in_progress,
                 label_visibility="collapsed",
@@ -1320,7 +1320,8 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                 
                 percent = int(state.get("percent", 0) or 0)
                 st.progress(percent / 100, text=f"{percent}% — {wording}")
-                units = f"{state.get('units_started', 0)}/{state.get('total_units', 0)} steps"
+                units_started = min(int(state.get('units_started', 0)), int(state.get('total_units', 0)))
+                units = f"{units_started}/{state.get('total_units', 0)} steps"
                 st.caption(f"{_proxbatch_phase_label(state)} · {units}")
                 st.caption(f"↳ {state.get('current_step') or 'Waiting to start'}")
                 
