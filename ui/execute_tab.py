@@ -863,9 +863,6 @@ def _render_llama_cli_execute(
                 timeout_str = f"Timeout: {cfg.get('timeout', 60)}s"
                 st.markdown(f"**Execution Configuration** &nbsp;&nbsp;<span style='color:var(--muted);font-size:0.9em'>|&nbsp;&nbsp; {target_str} &nbsp;&nbsp;|&nbsp;&nbsp; {timeout_str}</span>", unsafe_allow_html=True)
 
-                if render_targets is not None:
-                    render_targets(project)
-
                 # Model info summary
                 backend = cfg.get("backend", "llama-cli")
                 with st.expander("**Model Info**", expanded=True):
@@ -996,7 +993,8 @@ def _render_llama_cli_execute(
                 on_clear(project)
             st.rerun()
 
-    progress_placeholder = st.empty() if render_progress is not None else None
+    if render_targets is not None:
+        render_targets(project)
 
     progress_placeholder = st.empty() if render_progress is not None else None
 
@@ -1050,10 +1048,16 @@ def _render_llama_cli_execute(
         if shared.get("phase"):
             st.session_state["_exec_phase"] = shared["phase"]
 
+        setup_logs = st.session_state.get("run_logs_setup", [])
+        validation_logs = st.session_state.get("run_logs_validation", [])
+
         if render_progress is not None:
-            render_progress(project)
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
+            overrides = render_progress(project)
+            if overrides:
+                setup_logs, validation_logs = overrides
+
+        _render_terminal(shell_placeholder, setup_logs)
+        _render_terminal(llama_placeholder, validation_logs)
         thread = st.session_state.get("_run_thread")
         
         if thread and thread.is_alive():
@@ -1089,11 +1093,17 @@ def _render_llama_cli_execute(
         else:
             _poll_llama_execution()
     else:
+        setup_logs = st.session_state.get("run_logs_setup", [])
+        validation_logs = st.session_state.get("run_logs_validation", [])
+
         if progress_placeholder is not None:
             with progress_placeholder.container():
-                render_progress(project)
-        _render_terminal(shell_placeholder, st.session_state.get("run_logs_setup", []))
-        _render_terminal(llama_placeholder, st.session_state.get("run_logs_validation", []))
+                overrides = render_progress(project)
+                if overrides:
+                    setup_logs, validation_logs = overrides
+
+        _render_terminal(shell_placeholder, setup_logs)
+        _render_terminal(llama_placeholder, validation_logs)
 
     # Show result summary if run just completed
     if st.session_state.get("run_completed") and st.session_state.get("telemetry"):
@@ -1245,13 +1255,13 @@ def _render_proxbatch_targets(project: dict) -> None:
         st.caption("Numbers in the headers are the commands configured for that phase.")
 
 
-def _render_proxbatch_progress(project: dict) -> None:
-    """Live status card per container, each opening a details dialog."""
+def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
+    """Live status card per container, each selectable to filter logs."""
     from core.batch_progress import batch_summary
 
     containers = _proxbatch_containers(project)
     if not containers:
-        return
+        return None
 
     summary = batch_summary(containers)
     heading = f"**📦 Container Progress** — {summary['finished']} of {summary['total']} finished"
@@ -1261,86 +1271,46 @@ def _render_proxbatch_progress(project: dict) -> None:
         heading += f", {summary['failed']} failed or aborted"
     st.markdown(heading)
 
+    selected_vmid = st.session_state.get(_PROXBATCH_DETAIL_KEY, "")
+    selected_logs = None
+
     per_row = 3
     for row_start in range(0, len(containers), per_row):
         row = containers[row_start:row_start + per_row]
         columns = st.columns(per_row)
         for column, state in zip(columns, row):
+            vmid = str(state.get("vmid"))
+            is_selected = (vmid == selected_vmid)
+            if is_selected:
+                selected_logs = (list(state.get("logs_setup", [])), list(state.get("logs_validation", [])))
+
             with column, st.container(border=True):
                 badge, wording = _PROXBATCH_BADGES.get(state.get("state", ""), ("•", "Unknown"))
                 name = state.get("name") or ""
-                st.markdown(f"{badge} **VMID {state['vmid']}**" + (f" · {name}" if name else ""))
+                
+                sel_marker = "🟢 " if is_selected else ""
+                st.markdown(f"{sel_marker}{badge} **VMID {vmid}**" + (f" · {name}" if name else ""))
+                
                 percent = int(state.get("percent", 0) or 0)
                 st.progress(percent / 100, text=f"{percent}% — {wording}")
                 units = f"{state.get('units_started', 0)}/{state.get('total_units', 0)} steps"
                 st.caption(f"{_proxbatch_phase_label(state)} · {units}")
                 st.caption(f"↳ {state.get('current_step') or 'Waiting to start'}")
+                
                 if st.button(
-                    "🔍 Details",
-                    key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{state['vmid']}",
+                    "Showing Logs" if is_selected else "View Logs",
+                    key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
                     use_container_width=True,
+                    disabled=is_selected,
                 ):
-                    st.session_state[_PROXBATCH_DETAIL_KEY] = state["vmid"]
-                    # Full-app rerun: the dialog is opened by the page body, not
-                    # by this fragment, so it survives the 0.5s poll cycle.
-                    st.rerun(scope="app")
+                    st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
+                    st.rerun(scope="fragment")
 
-
-@st.dialog("Container run details", width="large")
-def _render_proxbatch_detail_dialog(project: dict, vmid: str) -> None:
-    """Full log view for one container, during or after its run."""
-    state = _proxbatch_container(project, vmid)
-    if state is None:
-        st.info(f"No run details recorded for VMID {vmid}.")
-        return
-
-    badge, wording = _PROXBATCH_BADGES.get(state.get("state", ""), ("•", "Unknown"))
-    name = state.get("name") or ""
-    st.markdown(f"### {badge} VMID {vmid}" + (f" · {name}" if name else ""))
-    percent = int(state.get("percent", 0) or 0)
-    st.progress(percent / 100, text=f"{percent}% — {wording}")
-
-    telemetry = state.get("telemetry") or {}
-    col_phase, col_steps, col_latency = st.columns(3)
-    col_phase.metric("Phase", _proxbatch_phase_label(state))
-    col_steps.metric("Steps", f"{state.get('units_started', 0)}/{state.get('total_units', 0)}")
-    latency = telemetry.get("total_latency", state.get("total_latency"))
-    col_latency.metric("Latency", f"{latency}s" if latency is not None else "—")
-    st.caption(f"Current step: {state.get('current_step') or 'Waiting to start'}")
-    if telemetry.get("error"):
-        st.error(telemetry["error"])
-
-    setup_logs = list(state.get("logs_setup", []))
-    validation_logs = list(state.get("logs_validation", []))
-    if not setup_logs and not validation_logs and state.get("state") not in ("pending", "skipped"):
-        st.caption(
-            "This run's per-container logs are no longer in memory — the full "
-            "transcript is in `logs/sessions/`."
-        )
-    tab_setup, tab_validation = st.tabs(["Setup/Cleanup Log", "Validation Log"])
-    with tab_setup:
-        _render_terminal(st.empty(), setup_logs)
-    with tab_validation:
-        _render_terminal(st.empty(), validation_logs)
-
-    col_refresh, col_close = st.columns(2)
-    with col_refresh:
-        if st.button("↻ Refresh", use_container_width=True, key=f"{_PROXBATCH_EXEC_PREFIX}_detail_refresh"):
-            st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
-            st.rerun()
-    with col_close:
-        if st.button("Close", type="primary", use_container_width=True,
-                     key=f"{_PROXBATCH_EXEC_PREFIX}_detail_close"):
-            st.rerun()
+    return selected_logs
 
 
 def _render_llama_server_proxbatch_execute(project: dict) -> None:
     """Execute view for the PCT-only batch form of Llama-Server-Bot."""
-    # Popping the key here means a dismissed dialog stays dismissed: only a
-    # fresh Details click (or Refresh) sets it again.
-    detail_vmid = st.session_state.pop(_PROXBATCH_DETAIL_KEY, "")
-    if detail_vmid:
-        _render_proxbatch_detail_dialog(project, detail_vmid)
 
     _render_llama_cli_execute(
         project,
