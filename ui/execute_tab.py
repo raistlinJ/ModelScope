@@ -1299,6 +1299,8 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
     st.markdown(heading)
 
     selected_vmid = st.session_state.get(_PROXBATCH_DETAIL_KEY, "")
+    if not selected_vmid and containers:
+        selected_vmid = str(containers[0].get("vmid", ""))
     selected_logs = None
 
     per_row = 3
