@@ -134,6 +134,20 @@ h3 {
     text-transform: uppercase !important;
     letter-spacing: 1.1px !important;
 }
+/* A section heading sharing a column row with action buttons: its asymmetric
+   default margins (1.25rem top vs 0.6rem bottom) survive vertical centring and
+   drop the title ~13px below the buttons it is meant to sit level with. */
+[data-testid="stHorizontalBlock"] h2 {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+/* Streamlit gives every markdown container a -16px bottom margin to absorb
+   paragraph spacing. A heading block earns none of it, so the column reports
+   ~11px of content for a 27px title and vertical_alignment="center" centres
+   the wrong box. */
+[data-testid="stHorizontalBlock"] [data-testid="stHeading"] [data-testid="stMarkdownContainer"] {
+    margin-bottom: 0 !important;
+}
 
 /* ─ Tabs — underline style ──────────────────────────────────────── */
 [data-testid="stTabs"] [role="tablist"] {
@@ -310,23 +324,57 @@ h3 {
     pointer-events: none !important;
 }
 
-/* ─ Buttons ──────────────────────────────────────────────────────── */
-div.stButton > button {
-    background: var(--button-bg) !important;
-    border: 1px solid var(--border) !important;
+/* ─ Buttons ──────────────────────────────────────────────────────────
+   A `help=` tooltip makes Streamlit wrap the button in stTooltipIcon /
+   stTooltipHoverTarget spans, so the button is no longer a direct child of
+   .stButton. Matching on descendants keeps those buttons the same height and
+   type as their unwrapped neighbours — otherwise they fall back to
+   Streamlit's own 40px / 16px / sentence-case defaults and break the row. */
+/* Popover triggers are sized by their own call sites (some are 22px icon
+   chips), so they keep Streamlit's geometry and are deliberately excluded. */
+[data-testid="stButton"] button,
+[data-testid="stDownloadButton"] button,
+[data-testid="stFormSubmitButton"] button {
     border-radius: 6px !important;
-    color: var(--text) !important;
     font-family: var(--font-sans) !important;
     font-weight: 600 !important;
     font-size: 0.75rem !important;
     letter-spacing: 0.35px;
     text-transform: uppercase;
-    transition: background var(--transition), border-color var(--transition),
-                color var(--transition), box-shadow var(--transition);
     min-height: 34px !important;
     padding: 6px 14px !important;
     white-space: nowrap !important;
 }
+div.stButton > button {
+    background: var(--button-bg) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    transition: background var(--transition), border-color var(--transition),
+                color var(--transition), box-shadow var(--transition);
+}
+
+/* A label must never spill past the button's own border. Buttons are laid out
+   in fixed-ratio columns, so a label that outgrows its column truncates with an
+   ellipsis instead of overrunning the frame. */
+[data-testid="stButton"] button > div,
+[data-testid="stDownloadButton"] button > div,
+[data-testid="stFormSubmitButton"] button > div,
+[data-testid="stButton"] button [data-testid="stMarkdownContainer"],
+[data-testid="stDownloadButton"] button [data-testid="stMarkdownContainer"],
+[data-testid="stFormSubmitButton"] button [data-testid="stMarkdownContainer"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+[data-testid="stButton"] button p,
+[data-testid="stDownloadButton"] button p,
+[data-testid="stFormSubmitButton"] button p {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    max-width: 100% !important;
+}
+
 div.stButton > button:hover {
     background: var(--surface) !important;
     border-color: var(--accent) !important;
@@ -410,7 +458,8 @@ div.stButton > button[kind="secondary"]:hover {
 [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
     border-color: var(--accent) !important;
     background: var(--accent-dim) !important;
-    color: var(--accent) !important;
+    /* --accent over its own tint is only 4.4:1 in light mode. */
+    color: var(--accent-hi) !important;
     font-weight: 600 !important;
 }
 [data-testid="stRadio"] input[type="radio"] {
@@ -585,14 +634,16 @@ div.stButton > button[kind="secondary"]:hover {
     vertical-align: middle;
     margin-right: 6px;
 }
+/* Both badges sit on the neutral --surface2 the other badges use; tinting them
+   with an unrelated hue (command text on an amber wash) held them near 4:1. */
 .step-badge-prompt {
     color: var(--prompt-color);
-    background: var(--accent-dim);
+    background: var(--surface2);
     border-color: var(--prompt-color);
 }
 .step-badge-command {
     color: var(--cmd-color);
-    background: var(--warn-dim);
+    background: var(--surface2);
     border-color: var(--cmd-color);
 }
 
@@ -846,14 +897,28 @@ code {
     color: var(--text) !important;
 }
 
+/* Elevated surfaces float over a page whose background is nearly the same
+   colour (1.06:1 in light mode), so the edge and the shadow are the only cues
+   that they are a separate layer. --border-strong clears the 3:1 non-text
+   minimum against both the card and the page. */
 [data-testid="stPopoverBody"],
 [data-baseweb="popover"],
 [data-baseweb="menu"],
 [role="listbox"] {
     background: var(--popover-bg) !important;
-    border-color: var(--border) !important;
+    border: 1px solid var(--border-strong) !important;
+    border-radius: 8px !important;
     color: var(--text) !important;
-    box-shadow: 0 8px 24px var(--shadow) !important;
+    box-shadow: 0 10px 30px var(--shadow-strong) !important;
+}
+/* BaseWeb nests menu/listbox inside the popover; only the outer layer should
+   carry the frame, or the edge doubles up. */
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] [role="listbox"],
+[data-testid="stPopoverBody"] [data-baseweb="menu"],
+[data-testid="stPopoverBody"] [role="listbox"] {
+    border: none !important;
+    box-shadow: none !important;
 }
 [role="option"],
 [data-baseweb="menu"] li {
@@ -876,9 +941,9 @@ code {
 [data-testid="stDialog"] [data-baseweb="modal"],
 [role="dialog"][aria-modal="true"] {
     background: var(--dialog-bg) !important;
-    border: 1px solid var(--border) !important;
+    border: 1px solid var(--border-strong) !important;
     color: var(--text) !important;
-    box-shadow: 0 16px 48px var(--shadow) !important;
+    box-shadow: 0 16px 48px var(--shadow-strong) !important;
 }
 [data-testid="stDialog"] h1,
 [data-testid="stDialog"] h2,
@@ -991,11 +1056,37 @@ code {
 }
 
 /* The actual tooltip popup portal containing the text.
-   This portal is rendered outside .stApp, so it escapes general colour rules. */
+   This portal is rendered outside .stApp, so it escapes general colour rules.
+   Without a max-width it lays out as one unwrapped line that runs past the
+   viewport edge, so constrain it and let the text wrap. */
 [data-testid="stTooltipContent"],
 [data-baseweb="tooltip"] {
     background-color: var(--tooltip-bg) !important;
     color: var(--tooltip-icon) !important;
+    max-width: 320px !important;
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
+    font-size: 0.76rem !important;
+    line-height: 1.45 !important;
+    border-radius: 6px !important;
+}
+[data-baseweb="tooltip"] {
+    border: 1px solid var(--border-strong) !important;
+    box-shadow: 0 8px 24px var(--shadow-strong) !important;
+    padding: 6px 10px !important;
+}
+/* BaseWeb slots a theme-coloured wrapper between the tooltip frame and the
+   content; left alone it shows as a pale halo around the dark bubble. */
+[data-baseweb="tooltip"] > div {
+    background: transparent !important;
+}
+[data-baseweb="tooltip"] [data-testid="stTooltipContent"] {
+    border: none !important;
+    box-shadow: none !important;
+}
+[data-testid="stTooltipContent"]:not([data-baseweb="tooltip"] *) {
+    border: 1px solid var(--border-strong) !important;
+    box-shadow: 0 8px 24px var(--shadow-strong) !important;
 }
 [data-testid="stTooltipContent"] * {
     color: var(--tooltip-icon) !important;
@@ -1029,7 +1120,9 @@ code {
 input::placeholder,
 textarea::placeholder {
     color: var(--muted) !important;
-    opacity: 0.68 !important;
+    /* 0.68 dropped placeholders to 3.0:1; the italic already distinguishes
+       them from entered text without fading them further. */
+    opacity: 0.85 !important;
     font-style: italic !important;
 }
 

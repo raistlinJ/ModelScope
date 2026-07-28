@@ -166,7 +166,8 @@ def test_polished_input_and_primary_rules_are_token_driven() -> None:
     assert "--input-text" in css_tokens("light")
     assert "--input-text" in css_tokens("dark")
     assert "caret-color: var(--accent) !important" in _CSS
-    assert "opacity: 0.68 !important" in _CSS
+    # Placeholders sit at 0.85: 0.68 dropped them to 3.0:1 on the light input.
+    assert "opacity: 0.85 !important" in _CSS
     assert "background: var(--accent-dim) !important" in _CSS
     assert '[data-testid="stTextInput"] [data-baseweb="input"] button' in _CSS
     assert '[data-testid="stRadio"] > label[data-testid="stWidgetLabel"]' in _CSS

@@ -198,7 +198,9 @@ def _get_active_project() -> dict | None:
 def render() -> None:
     proj = _get_active_project()
     if proj is not None:
-        c_head, c_ren, c_dup, c_exp, c_del = st.columns([3, 0.8, 1, 0.8, 0.6])
+        c_head, c_ren, c_dup, c_exp, c_del = st.columns(
+            [3, 0.8, 1, 0.8, 0.6], vertical_alignment="center"
+        )
         pid = proj["id"]
         with c_head:
             st.header("Configuration", anchor=False)
@@ -236,11 +238,14 @@ def render() -> None:
         }
         /* Accepted Output Checks popover panel — a lighter, clearly bordered
            panel so it reads as a distinct floating layer instead of blending
-           into the (near-identical dark) Validation Set modal behind it. */
+           into the (near-identical dark) Validation Set modal behind it.
+           The accent border carries the edge contrast; the elevation shadow
+           has to be the strong one, since --shadow is only 0.10 alpha in light
+           mode and left the panel looking flat against the page. */
         div[data-testid="stPopoverBody"] {
             background-color: var(--surface2) !important;
             border: 1px solid var(--accent) !important;
-            box-shadow: 0 6px 16px var(--shadow) !important;
+            box-shadow: 0 10px 30px var(--shadow-strong) !important;
             padding: 11px !important;
         }
         </style>

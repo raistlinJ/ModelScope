@@ -337,7 +337,13 @@ with st.sidebar:
     st.markdown(
         "<style>"
         ".project-status-icons{display:flex;justify-content:flex-end;align-items:center;"
-        "gap:4px;flex-wrap:nowrap;min-height:40px;}"
+        "gap:4px;flex-wrap:nowrap;height:40px;}"
+        # Streamlit gives every markdown container a -16px bottom margin to
+        # absorb paragraph spacing. This block holds a bare div, so the
+        # compensation is unearned: the column reports 24px of content for a
+        # 40px strip, and vertical_alignment="center" then centres the wrong
+        # box and drops the icons 8px below the project button.
+        "[data-testid='stMarkdownContainer']:has(.project-status-icons){margin-bottom:0!important;}"
         ".run-indicator{width:22px;height:22px;border-radius:5px;display:inline-flex;"
         "align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:0.67rem;"
         "box-shadow:inset 0 0 0 1px rgba(255,255,255,.32);cursor:help;}"
@@ -346,7 +352,7 @@ with st.sidebar:
         "[class*='st-key-proj_more_'] button,[class*='st-key-proj-more-'] button{"
         "width:22px!important;min-width:22px!important;height:22px!important;min-height:22px!important;"
         "padding:0!important;font-size:0.62rem!important;line-height:1!important;"
-        "margin-left:4px!important;transform:translateY(8px)!important;}"
+        "margin-left:4px!important;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -432,13 +438,13 @@ with st.sidebar:
 
 
 
-    _new_project_col, _import_project_col = st.columns(2, gap="small")
-    with _new_project_col:
-        if st.button("＋  New Project", use_container_width=True):
-            _show_add_project_dialog()
-    with _import_project_col:
-        if st.button("＋  Import Project", use_container_width=True):
-            _show_import_project_dialog()
+    # Side by side, each button gets ~122px of the 300px sidebar — 34px short of
+    # what "Import Project" needs at the uppercase button type. Stacking them
+    # gives both labels the full width instead of truncating them.
+    if st.button("＋  New Project", use_container_width=True, key="btn_new_project"):
+        _show_add_project_dialog()
+    if st.button("＋  Import Project", use_container_width=True, key="btn_import_project"):
+        _show_import_project_dialog()
 
 # ── Brand block ────────────────────────────────────────────────────────────────
 st.markdown(
