@@ -1051,7 +1051,7 @@ def _render_llama_cli_execute(
             c_state = shared_state["batch"]["containers"][retry_vmid]
             name = c_state.get("name")
             c_state.clear()
-            c_state.update({"vmid": retry_vmid, "state": "waiting", "name": name, "percent": 0})
+            c_state.update({"vmid": retry_vmid, "state": "pending", "name": name, "percent": 0})
         else:
             st.session_state["run_logs_setup"]   = []
             st.session_state["run_logs_validation"]   = []

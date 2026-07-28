@@ -161,7 +161,7 @@ def run_pct_batch(
 
     if max_workers <= 1:
         for index, (vmid, state) in enumerate(containers.items(), start=1):
-            if state.get("state") not in ("waiting", ""):
+            if state.get("state") not in ("pending", ""):
                 continue
             res = _run_task(vmid, state, index)
             if res is not None:
@@ -170,7 +170,7 @@ def run_pct_batch(
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for index, (vmid, state) in enumerate(containers.items(), start=1):
-                if state.get("state") not in ("waiting", ""):
+                if state.get("state") not in ("pending", ""):
                     continue
                 if is_cancelled() or state.get("cancel_requested"):
                     batch_progress.skip_container(state)
