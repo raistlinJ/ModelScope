@@ -87,6 +87,32 @@ def _colorize_log_line(msg: str) -> str:
     return msg
 
 
+# ── Bot-type labels ───────────────────────────────────────────────────────────
+
+_BOT_LABELS: dict[str, str] | None = None
+
+
+def _bot_label(telemetry: dict) -> str:
+    """Friendly name of the bot type that produced a run.
+
+    Falls back to the raw type_id, so a session written by a bot type that is
+    no longer installed still identifies itself instead of reading as unknown.
+    Resolved once per invocation: the lookup needs plugin discovery, which the
+    session commands otherwise have no reason to pay for.
+    """
+    global _BOT_LABELS
+    type_id = str(telemetry.get("run_bot_type") or "")
+    if not type_id:
+        return "—"
+    if _BOT_LABELS is None:
+        try:
+            from core.bot_types import iter_bot_plugins
+            _BOT_LABELS = {p.type_id: p.label for p in iter_bot_plugins()}
+        except Exception:
+            _BOT_LABELS = {}
+    return _BOT_LABELS.get(type_id) or type_id
+
+
 # ── Box-drawing summary table ─────────────────────────────────────────────────
 
 def _box_table(rows: list[dict], title: str = "") -> str:
@@ -308,7 +334,7 @@ def _print_run_summary(telemetry: dict) -> None:
         metrics_str = _c("—", _DIM)
 
     rows = [
-        {"Field": "Scenario",         "Value": telemetry.get("run_scenario", "—")},
+        {"Field": "Bot",              "Value": _bot_label(telemetry)},
         {"Field": "Model",            "Value": telemetry.get("run_model", "—")},
         {"Field": "Backend",          "Value": telemetry.get("run_backend", "—")},
         {"Field": "Status",           "Value": status_str},
@@ -581,7 +607,7 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
 
         rows.append({
             "Session":       entry.name,
-            "Scenario":      (tel.get("run_scenario") or "—")[:35],
+            "Bot":           _bot_label(tel)[:28],
             "Model":         (tel.get("run_model") or "—")[:25],
             "Validated":     passed_str,
             "Latency":       latency_str,
@@ -619,7 +645,7 @@ def _cmd_sessions_show(args: argparse.Namespace) -> int:
             pass_str = "—"
 
         summary_rows = [
-            {"Field": "Scenario",        "Value": tel.get("run_scenario", "—")},
+            {"Field": "Bot",             "Value": _bot_label(tel)},
             {"Field": "Model",           "Value": tel.get("run_model", "—")},
             {"Field": "Backend",         "Value": tel.get("run_backend", "—")},
             {"Field": "Timestamp",       "Value": tel.get("run_timestamp", "—")},

@@ -26,8 +26,6 @@ must not be imported from the CLI — see `core/__init__.py` for the exact list.
   dispatch table (`_EVALUATORS`), and `evaluate_metric()` / `make_metric()` /
   `format_criterion()`. This is the Strategy pattern: adding a metric means
   registering one function, never editing an if/elif chain.
-- **scenarios.py** — built-in named presets (`SCENARIOS`) bundling prompts
-  and validation commands.
 
 ### `core/` — framework logic
 Pure / CLI-safe:
@@ -107,10 +105,10 @@ is local or remote.
 
 ## How to extend
 
-**Add a new scenario** — add a key to `SCENARIOS` in `config/scenarios.py`
-(system prompt, sample prompts, validation command, fail patterns, metrics
-matrix). The UI and CLI discover it automatically. Run `validate_scenarios()`
-to sanity-check the shape.
+**Add a new bot type** — drop a `BotTypePlugin` subclass into
+`plugins/bot_types/`; the registry discovers it on start. Reach shared UI via
+`ui.plugin_api`, and override the optional hooks on `BotTypePlugin` rather
+than adding type checks to shared code.
 
 **Add a new metric type** — in `config/metrics.py`: (1) add an entry to
 `METRIC_TYPES` describing its label/category/params, (2) write an

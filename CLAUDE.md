@@ -33,7 +33,6 @@ ModelScope is a research-grade evaluation framework for LLM-powered autonomous a
     - `environment.py`: Abstraction layer (`BaseEnvironment`) for where code executes (`LocalEnvironment` vs. `SSHEnvironment`).
     - `session_log.py`: Manages per-run structured logging.
 - **Configuration (`config/`):**
-    - `scenarios.py`: Registry of built-in evaluation scenarios (prompts, validation commands, metrics).
     - `metrics.py`: Strategy-based metric registry (`METRIC_TYPES`) and evaluation logic.
     - `defaults.py`: Global constants, URLs, and filesystem paths.
 - **MCP Server (`mcp-server/`):** A Node.js/Python hybrid server providing tool schemas and execution for agents.
@@ -44,12 +43,17 @@ ModelScope is a research-grade evaluation framework for LLM-powered autonomous a
 
 ## Development Guidelines
 
-### Adding a New Scenario
-Add a new entry to the `SCENARIOS` dictionary in `config/scenarios.py`. Every scenario must define:
-- `system_prompt`, `user_prompt`
-- `validation_command` (shell command to verify success)
-- `fail_patterns` (strings that indicate failure)
-- `default_metrics` (list of metric objects via `make_metric()`)
+### Adding a New Bot Type
+Create a module under `plugins/bot_types/`; the registry discovers it on start.
+Subclass `BotTypePlugin` (`core/bot_types/base.py`), set `type_id` / `label` /
+`session_defaults` / `state_key_map`, and implement `render_config`,
+`render_execute`, `render_dashboard` and `run_evaluation`.
+
+- Reach shared UI through `ui.plugin_api` — importing `ui` internals directly
+  is rejected by `tests/unit/test_bot_type_plugins.py`.
+- When shared code needs to vary per bot, override an optional hook on
+  `BotTypePlugin` instead of adding a `type_id` check to that shared code.
+  `core/` and `ui/` contain no bot-type-id literals; keep it that way.
 
 ### Adding a New Metric Type
 1. Define the metric in `METRIC_TYPES` in `config/metrics.py` (label, category, description, params).

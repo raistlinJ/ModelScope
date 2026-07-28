@@ -30,8 +30,7 @@ The target audience is security researchers and ML engineers who need reproducib
              v                             v
   LocalEnvironment                  SSHEnvironment        config/
   subprocess                        paramiko + SFTP       - defaults.py  (URLs, paths)
-  (default)                         is_remote_caf=True    - scenarios.py (19 scenarios)
-                                                          - metrics.py   (45 metric types)
+  (default)                         is_remote_caf=True    - metrics.py   (45 metric types)
              |
              v
   LLM Backend
@@ -55,7 +54,7 @@ The target audience is security researchers and ML engineers who need reproducib
 | Python | 3.10+ | Required by pyproject.toml |
 | Node.js | 18+ | MCP server only; not required for CLI-only use |
 | llama.cpp server or Ollama | any recent build | One backend must be reachable before running an evaluation |
-| nmap | any | Required by Scenario 2 and scenarios that use nmap validation |
+| nmap | any | Only if a project's commands or validation use it |
 
 **Operating system:** developed and tested on Linux (Kali, Ubuntu). The local execution path works on macOS. Windows is untested.
 
@@ -179,31 +178,25 @@ The full command-line interface documentation has been moved to [CLI_README.md](
 
 ---
 
-## Scenarios
+## Bot types
 
-ModelScope ships with 19 built-in scenarios across 7 workflow types.
+A project's **bot type** decides how a run is driven. Each one is a plugin that
+owns its own configuration UI, execution and dashboard.
 
-### Tool-use (MCP agent)
+| Bot type | What it runs |
+|----------|--------------|
+| Bash-Bot | Shell commands with no LLM in the loop |
+| Llama-CLI-Bot | A `llama-cli` binary invoked per prompt |
+| Llama-Server-Bot | A ModelScope-managed `llama-server`, with its Prometheus metrics collected |
+| Llama-Server-ProxBatch | The managed-server workflow once per selected Proxmox LXC, rolled up into one record |
+| CAF Standard | A CyberAgentFlow CLI installation, locally or over SSH |
+| CAF + llama.cpp | CyberAgentFlow against a ModelScope-managed `llama-server` |
 
-| Name | Tool Focus | Validation |
-|------|------------|------------|
-| Scenario 1 – File Creation | `file_creator` | `cat /tmp/test` |
-| Scenario 2 – Network Scan | `run_nmap_scan` | `nmap -F 127.0.0.1` |
-| Custom | configurable | configurable |
+Built-in types live in `core/bot_types/`; the rest are plugins under
+`plugins/bot_types/`. Adding one is described in [CLAUDE.md](CLAUDE.md).
 
-### AI Workflow
-
-| Name | Type | Key Metrics |
-|------|------|-------------|
-| RAG – Document QA | `rag` | Retrieval Precision@5, Recall@5, Answer Faithfulness, Context Utilization |
-| Prompt Evaluation – Template Testing | `prompt_eval` | Task Completion, Latency, Token Limit, Goal Achievement |
-| Classification – Label Assignment | `classification` | Accuracy >= 0.8, F1 >= 0.75 |
-| Summarization – Quality Assessment | `summarization` | ROUGE-L >= 0.3, Factual Faithfulness |
-| Structured Output – JSON Extraction | `structured_output` | Schema Conformance, Field Completeness |
-| Multi-Agent – Coordination Test | `multiagent` | Consensus Accuracy >= 0.7, No Repeated Calls |
-
-
-The scenario registry is validated at import time by `validate_scenarios()`, which raises `ValueError` immediately if any required key is missing.
+Prompts, commands and validation are configured per project in the
+Configuration tab, then exported to JSON to run headlessly.
 
 ---
 
@@ -492,16 +485,20 @@ python3 -m pytest -v tests/unit/test_metrics.py
 
 The **Platform Verification** subtab in the GUI Configuration tab provides a visual dashboard of the same test suite: per-test pass/fail badges, run times, and failure details.
 
-### Adding a scenario
+### Adding a bot type
 
-1. Open `config/scenarios.py`.
-2. Add a new key to the `SCENARIOS` dict. Every scenario must include:
-   - `system_prompt` (str)
-   - `user_prompt` (str)
-   - `validation_command` (str — shell command; empty string disables validation)
-   - `fail_patterns` (list of str)
-   - `default_metrics` (list of metric objects from `make_metric()`)
-4. `validate_scenarios()` runs at import time and raises `ValueError` immediately if any required key is missing.
+1. Create a module under `plugins/bot_types/`. The registry discovers it on
+   start — no wiring needed.
+2. Subclass `BotTypePlugin` from `core.bot_types.base` and set `type_id`,
+   `label`, `session_defaults` and `state_key_map`.
+3. Implement `render_config`, `render_execute`, `render_dashboard` and
+   `run_evaluation`. Reach the app's shared widgets through `ui.plugin_api`,
+   never by importing `ui` internals directly.
+4. Where shared code needs to behave differently for your bot, override one of
+   the optional hooks on `BotTypePlugin` rather than adding a type check to
+   that shared code.
+
+`plugins/bot_types/caf_cli_run.py` is a full worked example.
 
 ### Adding a metric
 
@@ -527,7 +524,6 @@ ModelScope/
 │   ├── defaults.py            # All URLs, binary paths, context limits, external presets
 │   ├── metrics.py             # METRIC_TYPES registry (45 types), make_metric(),
 │   │                          #   evaluate_metric(), MCPMetricPresets (5 presets)
-│   └── scenarios.py           # SCENARIOS registry (19 scenarios), validate_scenarios()
 │
 ├── core/
 │   ├── __init__.py
