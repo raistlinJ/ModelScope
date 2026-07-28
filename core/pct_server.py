@@ -192,6 +192,9 @@ def start_pct_managed_llama_server(
     )
     on_log(f"[SERVER] Starting inside LXC {vmid} ({address}): {server_command}")
     
+    # Ensure no orphaned servers from previous cancelled runs are holding the port
+    env.execute(f"killall -9 llama-server 2>/dev/null || true", timeout=5)
+    
     result = env.execute(launch_sysd, timeout=20)
     if result.get("exit_code") == 0:
         for _ in range(10):  # Wait up to ~5 seconds for systemd to schedule it
