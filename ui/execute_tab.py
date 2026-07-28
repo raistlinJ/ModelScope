@@ -722,6 +722,7 @@ class _ProxBatchItem(dict):
     def __init__(self, batch_shared: dict, container_state: dict, vmid: str):
         super().__init__()
         self._batch_shared = batch_shared
+        self._container_state = container_state
         self["phase"] = ""
         for key in ("logs_setup", "logs_validation"):
             stream = _ProxBatchLog(
@@ -732,7 +733,7 @@ class _ProxBatchItem(dict):
 
     def get(self, key, default=None):
         if key == "cancel_requested":
-            if self._state.get("cancel_requested"):
+            if getattr(self, "_container_state", {}).get("cancel_requested"):
                 return True
             return self._batch_shared.get("cancel_requested", False)
         return super().get(key, default)
@@ -1352,6 +1353,7 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                             "Showing Logs" if is_selected else "Focus Logs",
                             key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
                             use_container_width=True,
+                            disabled=is_selected,
                         ):
                             st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
                             st.rerun()
@@ -1370,6 +1372,7 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                         "Showing Logs" if is_selected else "Focus Logs",
                         key=f"{_PROXBATCH_EXEC_PREFIX}_detail_{vmid}",
                         use_container_width=True,
+                        disabled=is_selected,
                     ):
                         st.session_state[_PROXBATCH_DETAIL_KEY] = vmid
                         st.rerun()
