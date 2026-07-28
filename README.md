@@ -168,33 +168,13 @@ modelscope project --file my_project.json --ssh-key-path ~/.ssh/kali_vm
 The exit code carries the verdict: `0` when validation passed or none was
 configured, `1` when validation failed or the run aborted.
 
-### Path 3 — CLI batch
-
-```bash
-# Create a jobs file
-cat > jobs.json << 'EOF'
-[
-  {"scenario": "Scenario 1 – File Creation", "model": "qwen2.5", "backend": "ollama"},
-  {"scenario": "Scenario 2 – Network Scan",  "model": "qwen2.5", "backend": "ollama"},
-  {"scenario": "Scenario 1 – File Creation", "model": "llama3.2", "backend": "ollama"}
-]
-EOF
-
-# Run batch (sequential)
-modelscope batch --jobs-file jobs.json
-
-# Run batch (2 parallel workers), custom output directory
-modelscope batch --jobs-file jobs.json --parallel 2 --output-dir ./results
-```
-
 ---
 
 ## CLI Reference
 
 The full command-line interface documentation has been moved to [CLI_README.md](CLI_README.md). It includes instructions for:
-- Running exported project JSON files via the `project` subcommand.
-- Single evaluations via the `run` subcommand.
-- Batch queue execution via the `batch` subcommand.
+- Running exported project JSON files via the `project` subcommand — the
+  headless path for every bot type.
 - Inspecting session logs via the `sessions` subcommand.
 
 ---
@@ -368,7 +348,6 @@ In the Streamlit UI:
 
 `SSHEnvironment` uses `paramiko.AutoAddPolicy`, which trusts unknown host keys on first contact. This provides no MITM protection and is intentional for trusted lab/VM networks. Do not use this against hosts over untrusted networks.
 
-SSH jobs are not supported in batch mode. A job spec containing `ssh_host` will be warned about and skipped.
 
 ---
 
@@ -466,63 +445,21 @@ print(json.dumps(data, indent=2))
 
 ---
 
-## CLI Batch Runs
+## Running many projects
 
-Batch evaluation is available from the CLI.
-
-> **Note:** `batch` predates the bot-type plugins. It runs the generic evaluator
-> against a list of job specs and executes locally only, so it does not reproduce
-> what a bot type does — use `project` for that. Batch a set of bots by running
-> `project` once per exported file.
-
-The `--jobs-file` argument accepts a JSON array. Each object supports these fields:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `scenario` | no | Free-form label recorded in the run's telemetry (also accepted as `scenario_key`; defaults to `"manual"`) |
-| `model` | yes | Model name or ID |
-| `backend` | no | `"llama.cpp"` or `"ollama"` (default: `"llama.cpp"`) |
-| `llm_url` | no | LLM server URL (defaults to the backend's standard local URL) |
-| `context_size` | no | Context window size in tokens (default: `4096`) |
-| `mcp_url` | no | MCP server URL |
-| `priority` | no | Integer job priority; lower numbers run first (default: `5`) |
-
-Note: `user_prompt` and `system_prompt` overrides are not read from the CLI jobs file. The scenario's default prompts are used.
-
-Example `jobs.json`:
-
-```json
-[
-  {
-    "scenario": "Scenario 1 – File Creation",
-    "model": "qwen2.5",
-    "backend": "ollama"
-  },
-  {
-    "scenario": "Scenario 2 – Network Scan",
-    "model": "qwen2.5",
-    "backend": "ollama",
-    "llm_url": "http://localhost:11434",
-    "context_size": 8192
-  },
-  {
-    "scenario": "Classification – Label Assignment",
-    "model": "llama3.2",
-    "backend": "ollama",
-    "priority": 1
-  }
-]
-```
+There is no batch subcommand. `project` runs one exported project, so a set of
+them is a shell loop — which also means each keeps its own exit code and
+session log:
 
 ```bash
-modelscope batch --jobs-file jobs.json --parallel 2 --output-dir ./results
+for p in projects/*.json; do
+    modelscope project --file "$p" || echo "FAILED: $p"
+done
 ```
 
-Output files written to `./results/`:
-- `batch_results.csv` — one row per job with columns: job_id, label, scenario, model, status, latency, total_tokens, passed_metrics, failed_metrics, error
-- `batch_results.json` — summary rows and total duration (does not include full telemetry dicts)
-
-`BatchRunner` uses `ThreadPoolExecutor` for parallelism and `LocalEnvironment` exclusively. SSH targets are not supported.
+For one bot type that inherently runs many targets, use **Llama-Server-ProxBatch**:
+it runs the same workflow once per selected Proxmox LXC and rolls the results up
+into a single record, from the UI or the CLI alike.
 
 ---
 
@@ -580,7 +517,7 @@ The **Platform Verification** subtab in the GUI Configuration tab provides a vis
 ```
 ModelScope/
 ├── app.py                     # Streamlit entry point; 7-tab layout; loads settings on start
-├── cli.py                     # CLI entry point; subcommands: run, batch, sessions, scenarios
+├── cli.py                     # CLI entry point; subcommands: project, sessions
 ├── requirements.txt           # Runtime Python dependencies (3 packages)
 ├── pyproject.toml             # Package metadata; version 2.0.0; entry point: modelscope = "cli:main"
 ├── pytest.ini                 # pytest configuration
@@ -598,8 +535,6 @@ ModelScope/
 │   │                          #   tool call parsing (native JSON + <tool_call> fallback);
 │   ├── environment.py         # BaseEnvironment (ABC); LocalEnvironment (subprocess);
 │   │                          #   SSHEnvironment (paramiko + SFTP; execute_streaming; cancel())
-│   ├── batch_runner.py        # BatchJob; BatchReport; BatchRunner (ThreadPoolExecutor);
-│   │                          #   export_csv(); LocalEnvironment only
 │   ├── session_log.py         # SessionLog; lazy dir creation; strips sensitive keys before write
 │   ├── mcp_manager.py         # start_mcp(); stop_mcp(); load_tools_from_json()
 │   ├── llama_server.py        # llama-server process management; GGUF model scanning

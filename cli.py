@@ -3,7 +3,6 @@
 
 Entry points:
     python cli.py project --file proj.json           # run an exported project
-    python cli.py batch --jobs-file jobs.json        # batch queue
     python cli.py sessions list                      # browse past sessions
     python cli.py sessions show <id-or-dir>          # inspect a session
 
@@ -15,7 +14,6 @@ to get the file.
 Examples:
     python cli.py project --file bash_project.json
     python cli.py project --file caf_standard.json --dry-run
-    python cli.py batch --jobs-file jobs.json --parallel 2
     python cli.py sessions list
     python cli.py sessions show 828cc8a1
 
@@ -89,8 +87,6 @@ def _colorize_log_line(msg: str) -> str:
     return msg
 
 
-# ── Config file support ───────────────────────────────────────────────────────
-
 # ── Box-drawing summary table ─────────────────────────────────────────────────
 
 def _box_table(rows: list[dict], title: str = "") -> str:
@@ -132,11 +128,6 @@ def _box_table(rows: list[dict], title: str = "") -> str:
 
 # ── Imports from ModelScope core ──────────────────────────────────────────────
 
-from config.defaults import (
-    DEFAULT_CONTEXT_SIZE,
-    LLAMA_CPP_DEFAULT_URL,
-    OLLAMA_DEFAULT_URL,
-)
 from core.logsetup import configure_logging, logged_on_log
 
 
@@ -149,14 +140,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         description="ModelScope — LLM cyber-agent evaluation framework.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""subcommands:
-  run        Run a single evaluation (default when --model is given)
-  batch      Execute a queue of jobs from a JSON file
+  project    Run an exported project, for any bot type
   sessions   Browse past session logs
 
 examples:
-  modelscope --model qwen2.5
-  modelscope run --model qwen2.5 --dry-run
-  modelscope batch --jobs-file jobs.json --parallel 2
+  modelscope project --file my_project.json
+  modelscope project --file my_project.json --dry-run
   modelscope sessions list
   modelscope sessions show 828cc8a1
 """,
@@ -224,42 +213,6 @@ examples:
         default=None,
         help="Override the LLM Judge / prompt-helper API key "
              "(also reads MODELSCOPE_LLM_HELPER_API_KEY).",
-    )
-
-    # ── batch subcommand ──────────────────────────────────────────────────────
-    batch_p = subparsers.add_parser(
-        "batch",
-        help="Execute a queue of evaluation jobs from a JSON file.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    batch_p.add_argument(
-        "--jobs-file",
-        dest="jobs_file",
-        required=True,
-        metavar="PATH",
-        help=(
-            "Path to a JSON file containing a list of job specs. "
-            'Example: [{"scenario": "Scenario 1 – File Creation", '
-            '"model": "qwen2.5", "backend": "ollama"}]'
-        ),
-    )
-    batch_p.add_argument(
-        "--parallel",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of jobs to run concurrently.",
-    )
-    batch_p.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        default="./batch_results",
-        help="Directory for batch results (CSV + JSON summary).",
-    )
-    batch_p.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable DEBUG-level logging.",
     )
 
     # ── sessions subcommand ───────────────────────────────────────────────────
@@ -380,8 +333,11 @@ _BATCH_STATE_COLOURS = {
 
 
 def _print_batch_summary(telemetry: dict) -> None:
-    """Break a batch run down per container; the roll-up alone hides which
-    targets actually ran."""
+    """Break a ProxBatch run down per container.
+
+    ProxBatch runs one workflow per selected LXC and reports a roll-up; that
+    alone hides which targets actually ran.
+    """
     containers = telemetry.get("batch_containers")
     if not isinstance(containers, list) or not containers:
         return
@@ -559,144 +515,6 @@ def _cmd_project(args: argparse.Namespace) -> int:
 
 # ── `batch` subcommand ────────────────────────────────────────────────────────
 
-def _cmd_batch(args: argparse.Namespace) -> int:
-    """Execute a queue of evaluation jobs from a JSON jobs file."""
-    from core.batch_runner import BatchJob, BatchRunner
-
-    configure_logging(level=logging.DEBUG if args.verbose else logging.INFO)
-    logger = logging.getLogger("modelscope")
-
-    # Load jobs file
-    jobs_path = pathlib.Path(args.jobs_file)
-    if not jobs_path.exists():
-        print(_c(f"error: jobs file not found: {jobs_path}", _RED), file=sys.stderr)
-        return 2
-    try:
-        with open(jobs_path, encoding="utf-8") as fh:
-            job_specs: list[dict] = json.load(fh)
-    except Exception as exc:
-        print(_c(f"error: failed to parse jobs file: {exc}", _RED), file=sys.stderr)
-        return 2
-
-    if not isinstance(job_specs, list):
-        print(_c("error: jobs file must contain a JSON array.", _RED), file=sys.stderr)
-        return 2
-
-    runner = BatchRunner(max_parallel=args.parallel, output_dir=args.output_dir)
-
-    # Enqueue jobs — BatchRunner._run_single uses LocalEnvironment only.
-    # SSH jobs are not supported by BatchRunner (it hardcodes LocalEnvironment).
-    # We warn and skip them rather than silently misfiring.
-    enqueued = 0
-    for i, spec in enumerate(job_specs):
-        if not isinstance(spec, dict):
-            logger.warning("Job #%d is not a dict — skipping.", i)
-            continue
-
-        # scenario_key is no longer validated against SCENARIOS
-        # Using "manual" as the default if not specified
-        scenario = spec.get("scenario") or spec.get("scenario_key", "manual")
-
-        # Warn about SSH jobs — BatchRunner only supports local execution
-        if spec.get("ssh_host"):
-            logger.warning(
-                "Job #%d (%r): ssh_host is not supported in batch mode "
-                "(BatchRunner uses LocalEnvironment). Skipping SSH job.",
-                i, scenario,
-            )
-            continue
-
-        default_url = (
-            LLAMA_CPP_DEFAULT_URL if spec.get("backend", "llama.cpp") == "llama.cpp"
-            else OLLAMA_DEFAULT_URL
-        )
-
-        model_config = {
-            "backend_type":   spec.get("backend", "llama.cpp"),
-            "llm_url":        spec.get("llm_url", default_url),
-            "selected_model": spec.get("model", ""),
-            "context_size":   spec.get("context_size", DEFAULT_CONTEXT_SIZE),
-            "mcp_url":        spec.get("mcp_url", ""),
-            "mcp_server_url": spec.get("mcp_server_url", ""),
-            "mcp_tools":      spec.get("mcp_tools", {}),
-            "mcp_running":    bool(spec.get("mcp_url", "")),
-        }
-
-        job = BatchJob(
-            scenario_key=scenario,
-            model_config=model_config,
-            priority=spec.get("priority", 5),
-        )
-        runner.enqueue(job)
-        enqueued += 1
-
-    if enqueued == 0:
-        print(_c("No valid jobs to run.", _YELLOW))
-        return 0
-
-    print(_c(f"Queued {enqueued} job(s). Starting batch run...", _CYAN))
-    if args.parallel > 1:
-        print(_c(f"Running up to {args.parallel} jobs in parallel.", _DIM))
-
-    report = runner.run(on_log=logger.info)
-
-    # Print progress table
-    if report.summary_rows:
-        table_rows = []
-        for row in report.summary_rows:
-            status_cell = row["status"]
-            if _use_color():
-                if row["status"] == "done":
-                    status_cell = _c("done", _GREEN)
-                elif row["status"] == "failed":
-                    status_cell = _c("failed", _RED)
-            table_rows.append({
-                "ID":       row["job_id"],
-                "Label":    row["label"][:32],
-                "Status":   status_cell,
-                "Latency":  f"{row['latency']}s",
-                "Tokens":   str(row["total_tokens"]),
-                "Pass":     str(row["passed_metrics"]),
-                "Fail":     str(row["failed_metrics"]),
-                "Error":    row["error"][:30] if row["error"] else "",
-            })
-        print(_box_table(table_rows, title="Batch Results"))
-
-    print(
-        f"\nTotal: {report.total_jobs}  "
-        + _c(f"Done: {report.completed}", _GREEN)
-        + "  "
-        + (_c(f"Failed: {report.failed}", _RED) if report.failed else f"Failed: {report.failed}")
-        + f"  Duration: {report.duration_seconds}s"
-    )
-
-    # Save outputs
-    out_dir = pathlib.Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    csv_data = runner.export_csv(report)
-    if csv_data:
-        csv_path = out_dir / "batch_results.csv"
-        csv_path.write_text(csv_data, encoding="utf-8")
-        print(f"CSV saved: {csv_path}")
-
-    json_path = out_dir / "batch_results.json"
-    json_path.write_text(
-        json.dumps(
-            {"summary": report.summary_rows, "duration_seconds": report.duration_seconds},
-            indent=2, default=str,
-        ),
-        encoding="utf-8",
-    )
-    print(f"JSON saved: {json_path}")
-
-    # Exit 1 if any jobs crashed or any job had metric failures
-    any_fail = report.failed > 0 or any(
-        r.get("failed_metrics", 0) > 0 for r in report.summary_rows
-    )
-    return 1 if any_fail else 0
-
-
 # ── `sessions` subcommand ─────────────────────────────────────────────────────
 
 def _session_repo(args: argparse.Namespace):
@@ -844,9 +662,6 @@ def main(argv: list[str] | None = None) -> int:
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if args.subcommand == "project":
         return _cmd_project(args)
-
-    elif args.subcommand == "batch":
-        return _cmd_batch(args)
 
     elif args.subcommand == "sessions":
         action = getattr(args, "sessions_action", None)

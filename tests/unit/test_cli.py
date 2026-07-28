@@ -1,20 +1,12 @@
 """
-Comprehensive unit tests for cli.py.
+Unit tests for cli.py.
 
 Covers:
   - _use_color, _c, _colorize_log_line
-  - _load_config_file (JSON, YAML, missing)
-  - _box_table
-  - _build_config
-  - _make_env
-  - _apply_config_file_defaults (config file + env-var tiers)
-  - _print_run_summary
-  - _maybe_inject_run_subcommand
-  - main() dispatch: run, batch, sessions list/show, scenarios, --list-scenarios
-  - _cmd_run: --dry-run, --json, --model missing, SSH params
-  - _cmd_batch: missing file, parse error, non-list, SSH jobs skipped, unknown scenario
+  - _box_table, _print_run_summary
+  - main() dispatch: project, sessions list/show
+  - _cmd_project: dry-run, secret redaction, plugin dispatch, exit codes
   - _cmd_sessions_list, _cmd_sessions_show
-  - _cmd_scenarios: list all, --describe, unknown
   - _find_session, _read_telemetry
 """
 from __future__ import annotations
@@ -113,7 +105,6 @@ class TestBoxTable:
         assert "┘" in table
 
 
-# ── _build_config ──────────────────────────────────────────────────────────────
 
 # ── _make_env ──────────────────────────────────────────────────────────────────
 
@@ -242,38 +233,7 @@ class TestMainDispatch:
         assert ret == 0
 
 
-# ── _cmd_run ──────────────────────────────────────────────────────────────────
 
-# ── _cmd_batch ─────────────────────────────────────────────────────────────────
-
-class TestCmdBatch:
-    def test_missing_jobs_file_returns_2(self, tmp_path, capsys):
-        ret = cli.main(["batch", "--jobs-file", str(tmp_path / "nonexistent.json")])
-        assert ret == 2
-
-    def test_invalid_json_returns_2(self, tmp_path, capsys):
-        p = tmp_path / "jobs.json"
-        p.write_text("NOT JSON")
-        ret = cli.main(["batch", "--jobs-file", str(p)])
-        assert ret == 2
-
-    def test_non_list_json_returns_2(self, tmp_path, capsys):
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps({"not": "a list"}))
-        ret = cli.main(["batch", "--jobs-file", str(p)])
-        assert ret == 2
-
-    def test_empty_list_returns_0(self, tmp_path, capsys):
-        p = tmp_path / "jobs.json"
-        p.write_text("[]")
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 0
-
-    def test_non_dict_entry_skipped(self, tmp_path, capsys):
-        p = tmp_path / "jobs.json"
-        p.write_text(json.dumps(["not_a_dict"]))
-        ret = cli.main(["batch", "--jobs-file", str(p), "--output-dir", str(tmp_path / "out")])
-        assert ret == 0
 
     # Scenario tests removed - scenarios concept deleted
 

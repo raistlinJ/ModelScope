@@ -3,7 +3,6 @@ Extended CLI tests covering previously untested branches:
   - _c() with color enabled (line 57)
   - _load_config_file YAML ImportError path (line 124-127)
   - _apply_config_file_defaults short flag path (line 526) and float type (line 555-558)
-  - _cmd_run color formatter path (lines 630-643)
   - sessions_show no run.log path (line 968-969)
   - sessions_show run.log read exception (line 939)
   - sessions list with PASSED/FAILED badges

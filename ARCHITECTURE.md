@@ -64,7 +64,6 @@ UI-coupled (import Streamlit — UI path only):
 - **state.py** — session-state defaults and scenario sync.
 - **llama_server.py** — local llama-server process lifecycle.
 - **mcp_manager.py** — MCP tool-server lifecycle + tool invocation.
-- **batch_runner.py** — CLI batch evaluation runner.
 
 ### `ui/` — Streamlit tabs and components
 One module per tab (`config_tab`, `target_tab`, `execute_tab`, `caf_tab`,

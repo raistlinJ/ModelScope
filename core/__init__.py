@@ -28,7 +28,6 @@ Module responsibilities (one line each):
     state            — session_state defaults and scenario sync
     llama_server     — local llama-server process lifecycle
     mcp_manager      — MCP tool-server lifecycle + tool invocation
-    batch_runner     — batch evaluation runner (CLI)
 
   * evaluator imports mcp_manager, which imports streamlit, so evaluator is not
     strictly Streamlit-free today. This is a pre-existing coupling, documented
@@ -56,5 +55,4 @@ __all__ = [
     "state",
     "llama_server",
     "mcp_manager",
-    "batch_runner",
 ]

@@ -46,20 +46,20 @@ the per-container results up into one record. Each non-dry run writes
 
 ---
 
-## `batch` — queue of jobs
+## Running several projects
+
+`project` runs one file, so a set of them is a shell loop. Each run keeps its
+own exit code and its own session log:
 
 ```bash
-modelscope batch --jobs-file PATH [options]
+for p in projects/*.json; do
+    modelscope project --file "$p" || echo "FAILED: $p"
+done
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--jobs-file PATH` | _(required)_ | Path to a JSON array of job spec objects |
-| `--parallel N` | `1` | Number of concurrent jobs |
-| `--output-dir PATH` | `./batch_results` | Directory for CSV + JSON summary output |
-| `-v`, `--verbose` | off | Enable DEBUG-level logging |
-
-SSH jobs are not supported in batch mode. If a job spec contains `ssh_host`, the CLI prints a warning and skips that job.
+For a bot type that inherently targets many machines, use
+**Llama-Server-ProxBatch**: it runs one workflow per selected Proxmox LXC and
+rolls the per-container results into a single record.
 
 ---
 

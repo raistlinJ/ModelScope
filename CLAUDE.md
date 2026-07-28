@@ -12,7 +12,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Running the Application
 - **Launch Streamlit GUI:** `streamlit run app.py`
 - **CLI Single Run:** `python cli.py project --file <exported_project.json>`
-- **CLI Batch Run:** `modelscope batch --jobs-file jobs.json`
 - **Browse Sessions:** `modelscope sessions list`
 
 ### Testing
@@ -27,7 +26,7 @@ ModelScope is a research-grade evaluation framework for LLM-powered autonomous a
 ### High-Level Structure
 - **Frontends:**
     - `app.py`: Streamlit GUI with 7 tabs for configuration, execution, and analysis.
-    - `cli.py`: Command-line interface for automated runs, batching, and session management.
+    - `cli.py`: Command-line interface for headless project runs and session management.
 - **Core Logic (`core/`):**
     - `evaluator.py`: Manages the local LLM agent loop (prompt $\rightarrow$ tool call $\rightarrow$ telemetry).
     - `caf_runner.py`: Handles remote execution of CyberAgentFlow (CAF) via SSH, pulling artifacts and streaming output.

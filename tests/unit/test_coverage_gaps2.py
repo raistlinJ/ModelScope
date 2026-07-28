@@ -3,7 +3,6 @@ Second pass at coverage gaps:
   - config/metrics.py: Speed violation in tempo, session efficiency tool,
     Broad scope guardrail bypass, structured output JSON extraction fallback,
     invalid schema_json branch, completeness empty-response and non-dict
-  - core/batch_runner.py: get_jobs(), prompt_variant, env.close(), parallel exception
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -161,7 +160,6 @@ class TestStructuredOutputCompletenessEdgeCases:
         assert evaluate_metric(m, tel) is False
 
 
-# ── BatchRunner: remaining uncovered lines ────────────────────────────────────
 
 # ── Scope guardrails: list-form empty subnets (line 973) ─────────────────────
 
@@ -187,103 +185,3 @@ class TestRagRetrievalRecallEmpty:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestBatchRunnerGetJobs:
-    def test_get_jobs_returns_copy(self):
-        from core.batch_runner import BatchRunner, BatchJob
-        runner = BatchRunner()
-        job = BatchJob("Scenario 1 – File Creation", {"selected_model": "m1"})
-        runner.enqueue(job)
-        jobs = runner.get_jobs()
-        assert len(jobs) == 1
-        assert jobs[0] is job
-        # Modifying the returned list does not affect the queue
-        jobs.clear()
-        assert len(runner.queue) == 1
-
-
-class TestBatchRunnerPromptVariant:
-    def test_prompt_variant_overrides_sys_and_user(self):
-        from core.batch_runner import BatchRunner, BatchJob
-        runner = BatchRunner()
-        job = BatchJob(
-            "Scenario 1 – File Creation",
-            {"selected_model": "m1", "backend_type": "llama.cpp",
-             "llm_url": "http://localhost:8080", "context_size": 4096,
-             "mcp_url": "", "mcp_tools": {}, "mcp_running": False},
-            prompt_variant={"sys_prompt": "CUSTOM SYS", "user_prompt": "CUSTOM USER"},
-        )
-        config = runner._build_config(job)
-        assert config["sys_prompt"] == "CUSTOM SYS"
-        assert config["user_prompt"] == "CUSTOM USER"
-
-    def test_prompt_variant_partial_override(self):
-        from core.batch_runner import BatchRunner, BatchJob
-        runner = BatchRunner()
-        job = BatchJob(
-            "Scenario 1 – File Creation",
-            {"selected_model": "m1", "backend_type": "llama.cpp",
-             "llm_url": "http://localhost:8080", "context_size": 4096,
-             "mcp_url": "", "mcp_tools": {}, "mcp_running": False},
-            prompt_variant={"sys_prompt": "ONLY SYS OVERRIDDEN"},
-        )
-        config = runner._build_config(job)
-        assert config["sys_prompt"] == "ONLY SYS OVERRIDDEN"
-        # user_prompt falls back to scenario default (not the variant)
-        assert config["user_prompt"] != "ONLY SYS OVERRIDDEN"
-
-
-class TestBatchRunnerEnvClose:
-    """Cover env.close() call in _run_single (line 116).
-
-    LocalEnvironment has no .close() method; the batch runner uses hasattr().
-    We test by injecting a mock env that has a close() attribute via
-    patching the LocalEnvironment constructor to return a mock.
-    """
-
-    @patch("core.batch_runner.run_evaluation")
-    @patch("core.batch_runner.LocalEnvironment")
-    def test_env_close_called_after_run(self, mock_env_cls, mock_eval):
-        from core.batch_runner import BatchRunner, BatchJob
-        fake_tel = {
-            "run_timestamp": "2025-01-01", "run_scenario": "s", "run_model": "m",
-            "run_backend": "llama.cpp", "run_tool_focus": "", "total_latency": 0.1,
-            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "tokens_per_second": 0, "llm_rounds": 1, "tool_calls": [],
-            "validation_stdout": "", "validation_stderr": "", "validation_exit_code": 0,
-            "validation_passed": True, "inefficiencies": [], "llm_response": "",
-            "run_aborted": False, "metrics_matrix": [], "caf_trajectory": [], "caf_config": {},
-        }
-        mock_eval.return_value = fake_tel
-        fake_env = MagicMock()
-        mock_env_cls.return_value = fake_env
-
-        runner = BatchRunner()
-        job = BatchJob(
-            "Scenario 1 – File Creation",
-            {"selected_model": "m1", "backend_type": "llama.cpp",
-             "llm_url": "http://localhost:8080", "context_size": 4096,
-             "mcp_url": "", "mcp_tools": {}, "mcp_running": False},
-        )
-        runner.enqueue(job)
-        runner.run()
-        fake_env.close.assert_called_once()
-
-
-class TestBatchRunnerParallelException:
-    """Cover the parallel executor exception handler (lines 153-154)."""
-
-    @patch("core.batch_runner.run_evaluation", side_effect=RuntimeError("worker crash"))
-    def test_parallel_exception_does_not_propagate(self, mock_eval):
-        from core.batch_runner import BatchRunner, BatchJob
-        runner = BatchRunner(max_parallel=2)
-        for i in range(2):
-            runner.enqueue(BatchJob(
-                "Scenario 1 – File Creation",
-                {"selected_model": f"m{i}", "backend_type": "llama.cpp",
-                 "llm_url": "http://localhost:8080", "context_size": 4096,
-                 "mcp_url": "", "mcp_tools": {}, "mcp_running": False},
-            ))
-        report = runner.run()
-        assert report.total_jobs == 2
-        assert report.failed == 2
-        assert report.completed == 0
