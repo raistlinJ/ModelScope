@@ -546,13 +546,19 @@ def _run_llama_cli_bot(project: dict, shared: dict, bot_type: str = "llama_cli_b
 
     cfg = project["config"]
 
-    cancel_ref: list[bool] = [False]
+    class DynamicCancelRef:
+        def __init__(self, s: dict):
+            self.s = s
+        def __getitem__(self, idx):
+            return bool(self.s.get("cancel_requested"))
+        def __setitem__(self, idx, val):
+            if val:
+                self.s["cancel_requested"] = True
 
+    cancel_ref = DynamicCancelRef(shared)
     session_log = SessionLog()
 
     def on_log(msg: str, source: str = "llama") -> None:
-        if shared.get("cancel_requested"):
-            cancel_ref[0] = True
         # Track execution phase from log prefixes
         if msg.startswith("[RUN]") or msg.startswith("[DELAY] Step"):
             shared["phase"] = "startup"
@@ -1359,7 +1365,7 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                             st.rerun()
                     with c_action:
                         if is_running:
-                            if st.button("⏹", key=f"{_PROXBATCH_EXEC_PREFIX}_stop_{vmid}", help="Stop container", use_container_width=True):
+                            if st.button("⏹", key=f"{_PROXBATCH_EXEC_PREFIX}_stop_{vmid}", help="Stop Processing", use_container_width=True):
                                 state["cancel_requested"] = True
                                 st.rerun()
                         else:
