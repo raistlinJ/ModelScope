@@ -842,6 +842,7 @@ def _render_llama_cli_execute(
     per-target status above the logs, and ``on_run_start(project, shared)`` /
     ``on_clear(project)`` set up and tear down that per-target state.
     """
+    is_proxbatch = bot_type == "llama_server_proxbatch_bot"
     cfg = project.get("config", {})
 
     st.markdown(f"### {project['name']}")
