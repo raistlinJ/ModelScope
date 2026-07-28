@@ -380,7 +380,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
             )
 
             st.markdown("**Sampling & performance**")
-            from ui.optional_param_card import render_flag_card, render_optional_param_card
+            from ui.plugin_api import render_flag_card, render_optional_param_card
 
             def _adv_opt(col, label, key_suffix, min_v, max_v, step, help_text, is_float=False, value_key_suffix=None, default_value=None):
                 render_optional_param_card(

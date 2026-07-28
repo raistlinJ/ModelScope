@@ -30,7 +30,8 @@ def _telemetry(config, **overrides):
 
 def test_sidebar_indicators_show_validation_and_configured_metric_bands():
     config = _config()
-    indicators = sidebar_status_indicators(_telemetry(config), config)
+    # Fewer tokens is better, so 20 clears the hard_pass bar of 25.
+    indicators = sidebar_status_indicators(_telemetry(config, total_tokens=20), config)
 
     assert [(item["key"], item["level"]) for item in indicators] == [
         ("validation", "hard_pass"),
@@ -51,7 +52,9 @@ def test_sidebar_indicators_clear_when_validation_or_metrics_change():
 
 def test_sidebar_indicators_hide_unclassified_and_missing_metrics():
     config = _config(metric_thresholds={"total_tokens": {"hard_pass": 100}})
-    indicators = sidebar_status_indicators(_telemetry(config, total_tokens=25), config)
+    # 150 misses the only configured band (hard_pass at <= 100), so the metric
+    # has no verdict to show and is left out rather than shown as neutral.
+    indicators = sidebar_status_indicators(_telemetry(config, total_tokens=150), config)
 
     assert [item["key"] for item in indicators] == ["validation"]
 

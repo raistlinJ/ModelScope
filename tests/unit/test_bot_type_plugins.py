@@ -48,6 +48,45 @@ def test_discovered_plugins_load_as_one_module_not_two():
         assert getattr(module, type(plugin).__name__) is type(plugin)
 
 
+def test_plugins_reach_ui_only_through_the_documented_api():
+    """A plugin may import ui.plugin_api and nothing else from ui.
+
+    Everything else in ui is private implementation: the names are
+    underscore-prefixed and carry no stability promise, so a plugin binding to
+    one breaks silently the next time that module is reorganised. If a plugin
+    needs something new, add it to ui/plugin_api.py (and keep it working) or
+    give BotTypePlugin a hook.
+    """
+    import ast
+    import pathlib
+
+    plugin_dir = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "bot_types"
+    offenders: list[str] = []
+    for path in sorted(plugin_dir.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "ui" or (module.startswith("ui.") and module != "ui.plugin_api"):
+                    offenders.append(f"{path.name}:{node.lineno} imports {module}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "ui" or (
+                        alias.name.startswith("ui.") and alias.name != "ui.plugin_api"
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno} imports {alias.name}")
+
+    assert not offenders, "plugins must import ui only via ui.plugin_api:\n  " + "\n  ".join(offenders)
+
+
+def test_documented_plugin_api_names_all_resolve():
+    """Every name promised by ui.plugin_api must actually be reachable."""
+    import ui.plugin_api as plugin_api
+
+    missing = [name for name in plugin_api.__all__ if not callable(getattr(plugin_api, name, None))]
+    assert not missing, f"ui.plugin_api promises names it cannot supply: {missing}"
+
+
 def test_plugin_bot_types_are_not_imported_from_core():
     """core must not carry a module for any plugin-owned bot type."""
     import importlib

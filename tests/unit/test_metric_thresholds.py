@@ -27,10 +27,61 @@ def test_thresholds_ignore_blank_values_and_unknown_metrics():
     assert configured_thresholds({"total_tokens": {"hard_fail": "nan"}}) == {}
 
 
+def _by_metric(results):
+    """Index an assessment by metric name.
+
+    assess_metric_thresholds iterates the union of configured and observed
+    metrics, which is a set — so positional indexing is not stable.
+    """
+    return {item["metric"]: item for item in results}
+
+
 def test_threshold_bands_follow_configured_comparisons():
-    for value, expected in ((100, "hard_fail"), (76, "soft_fail"), (75, "soft_pass"), (26, "hard_pass"), (25, "unclassified")):
-        result = assess_token_thresholds({"total_tokens": value}, _thresholds())
-        assert result[0]["level"] == expected
+    # Lower is better: hard_fail 100, soft_fail 75, soft_pass 50, hard_pass 25.
+    cases = (
+        (100, "hard_fail"),     # >= hard_fail
+        (99, "soft_fail"),
+        (76, "soft_fail"),
+        (75, "soft_fail"),      # >= soft_fail: sitting on the bar is a fail
+        (50, "soft_pass"),      # <= soft_pass
+        (26, "soft_pass"),      # still within the soft-pass band
+        (25, "hard_pass"),      # <= hard_pass wins over soft_pass
+        (24, "hard_pass"),
+    )
+    for value, expected in cases:
+        result = _by_metric(assess_token_thresholds({"total_tokens": value}, _thresholds()))
+        assert result["total_tokens"]["level"] == expected, value
+
+
+def test_a_value_on_a_threshold_lands_in_that_threshold_s_band():
+    """Every comparison is inclusive, in both directions.
+
+    Naming a number as the soft-fail bar and then scoring exactly it should
+    read as a soft fail, not as an unclassified near-miss.
+    """
+    lower = _thresholds()
+    higher = {"total_tokens": {
+        "direction": "higher", "hard_fail": 25, "soft_fail": 50,
+        "soft_pass": 75, "hard_pass": 100,
+    }}
+    for thresholds, expected in ((lower, {100: "hard_fail", 75: "soft_fail",
+                                          50: "soft_pass", 25: "hard_pass"}),
+                                 (higher, {25: "hard_fail", 50: "soft_fail",
+                                           75: "soft_pass", 100: "hard_pass"})):
+        for value, level in expected.items():
+            result = _by_metric(assess_metric_thresholds({"total_tokens": value}, thresholds))
+            assert result["total_tokens"]["level"] == level, (value, thresholds)
+
+
+def test_values_between_the_pass_and_fail_bands_are_unclassified():
+    """Four independent thresholds leave a neutral zone in the middle.
+
+    Nothing is configured for the span between soft_pass and soft_fail, so a
+    run landing there has no verdict to report.
+    """
+    for value in (51, 74):
+        result = _by_metric(assess_token_thresholds({"total_tokens": value}, _thresholds()))
+        assert result["total_tokens"]["level"] == "unclassified", value
 
 
 def test_higher_is_better_threshold_bands_reverse_the_comparisons():
@@ -44,23 +95,34 @@ def test_higher_is_better_threshold_bands_reverse_the_comparisons():
         }
     }
 
-    for value, expected in ((25, "hard_fail"), (49, "soft_fail"), (50, "soft_pass"), (99, "hard_pass"), (100, "unclassified")):
-        result = assess_metric_thresholds({"total_tokens": value}, thresholds)
-        assert result[0]["level"] == expected
-    assert result[0]["direction"] == "higher"
-    assert result[0]["operator"] is None
+    cases = (
+        (25, "hard_fail"),       # <= hard_fail
+        (49, "soft_fail"),       # <= soft_fail
+        (50, "soft_fail"),       # sitting on the bar is still a fail
+        (51, "unclassified"),    # neutral zone between the bands
+        (75, "soft_pass"),       # >= soft_pass
+        (99, "soft_pass"),
+        (100, "hard_pass"),      # >= hard_pass wins over soft_pass
+    )
+    for value, expected in cases:
+        result = _by_metric(assess_metric_thresholds({"total_tokens": value}, thresholds))
+        assert result["total_tokens"]["level"] == expected, value
 
-    hard_pass = assess_metric_thresholds({"total_tokens": 99}, thresholds)[0]
-    assert hard_pass["operator"] == "<"
+    top = _by_metric(assess_metric_thresholds({"total_tokens": 100}, thresholds))["total_tokens"]
+    assert top["direction"] == "higher"
+    assert top["operator"] == ">="
 
 
 def test_server_token_metrics_are_sourced_from_metrics_endpoint():
-    server = assess_token_thresholds(
+    server = _by_metric(assess_token_thresholds(
         {"llama_server_metrics": {"available": True, "prompt_tokens": 10, "completion_tokens": 20}},
         {"total_tokens": {"hard_pass": 25}},
-    )
-    assert server[0]["value"] == 30
-    assert server[0]["source"] == "llama-server /metrics"
+    ))
+    # total_tokens is not reported by /metrics; it is derived from the two parts.
+    assert server["total_tokens"]["value"] == 30
+    assert server["total_tokens"]["source"] == "llama-server /metrics"
+    assert server["prompt_tokens"]["value"] == 10
+    assert server["completion_tokens"]["value"] == 20
 
 def test_metrics_config_includes_every_dashboard_card_for_each_llama_bot():
     cli_metrics = {key for key, _ in metrics_for_bot("llama_cli")}
@@ -89,9 +151,10 @@ def test_server_only_dashboard_metrics_can_receive_threshold_bands():
         },
         {
             "decode_calls": {"hard_fail": 100},
-            "busy_slots_per_decode": {"soft_pass": 2},
+            "busy_slots_per_decode": {"soft_pass": 4},
         },
     )
-    by_metric = {item["metric"]: item for item in result}
-    assert by_metric["decode_calls"]["level"] == "hard_fail"
-    assert by_metric["busy_slots_per_decode"]["level"] == "soft_pass"
+    by_metric = _by_metric(result)
+    assert by_metric["decode_calls"]["level"] == "hard_fail"      # 120 >= 100
+    assert by_metric["busy_slots_per_decode"]["level"] == "soft_pass"  # 2.25 <= 4
+    assert by_metric["decode_calls"]["source"] == "llama-server /metrics"

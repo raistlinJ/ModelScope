@@ -41,9 +41,13 @@ def metric_spec(metric: str) -> Mapping[str, str] | None:
 
 
 # Order matters: the first matching configured band wins.
+#
+# Every comparison is inclusive, so a value sitting exactly on a threshold
+# lands in the band the user named it for: setting "soft fail at 75" makes a
+# run scoring exactly 75 a soft fail, not an unclassified near-miss.
 THRESHOLD_LEVELS: tuple[tuple[str, str, str], ...] = (
     ("hard_fail", "Hard Fail", ">="),
-    ("soft_fail", "Soft Fail", ">"),
+    ("soft_fail", "Soft Fail", ">="),
     ("soft_pass", "Soft Pass", "<="),
     ("hard_pass", "Hard Pass", "<="),
 )
@@ -61,7 +65,7 @@ def threshold_levels(direction: str = "lower") -> tuple[tuple[str, str, str], ..
     if direction == "higher":
         return (
             ("hard_fail", "Hard Fail", "<="),
-            ("soft_fail", "Soft Fail", "<"),
+            ("soft_fail", "Soft Fail", "<="),
             ("soft_pass", "Soft Pass", ">="),
             ("hard_pass", "Hard Pass", ">="),
         )
