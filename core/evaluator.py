@@ -1021,10 +1021,13 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         system_prompt = ""
         user_prompt = cmd_obj
         preserve = False
+        timeout_val = 120
     else:
         system_prompt = cmd_obj.get("system_prompt", "")
         user_prompt = cmd_obj.get("user_prompt", "")
         preserve = cmd_obj.get("preserve_context", True)
+        timeout_val = 3600 if cmd_obj.get("long_running") else int(cmd_obj.get("timeout_seconds", 120))
+        
         
     messages = []
     if preserve and context_list:
@@ -1118,7 +1121,7 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
 
         on_log(f"[PROMPT HELPER] Sending to {url}/v1/chat/completions", "llama")
         try:
-            resp = requests.post(f"{url}/v1/chat/completions", json=payload, headers=headers, verify=verify_ssl, timeout=120)
+            resp = requests.post(f"{url}/v1/chat/completions", json=payload, headers=headers, verify=verify_ssl, timeout=timeout_val)
             resp.raise_for_status()
             data = resp.json()
             response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -1153,7 +1156,7 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
         }
         on_log(f"[PROMPT HELPER] Sending to {url}/api/chat", "llama")
         try:
-            resp = requests.post(f"{url}/api/chat", json=payload, timeout=120)
+            resp = requests.post(f"{url}/api/chat", json=payload, timeout=timeout_val)
             resp.raise_for_status()
             data = resp.json()
             response_text = data.get("message", {}).get("content", "")
