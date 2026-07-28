@@ -746,11 +746,32 @@ def _render_proxbatch_dashboard(
             is_selected = (vmid == selected_vmid)
             
             # Validation icon logic
-            val_passed = res.get("validation_passed")
-            icon = "🟢" if val_passed else ("🔴" if val_passed is False else "⚪")
+            assessments = _configured_metric_assessments(project, res)
+            if assessments:
+                badge_html = ""
+                _metric_icons = {
+                    "total_latency": "L", "prompts_run": "R", "commands_run": "C",
+                    "prompt_tokens": "PT", "completion_tokens": "CT", "total_tokens": "TT",
+                    "prompt_tokens_per_second": "P/s", "completion_tokens_per_second": "C/s",
+                    "prompt_seconds": "Ps", "completion_seconds": "Cs", "cli_invocations": "I",
+                    "requests_processing": "A", "requests_deferred": "D", "context_high_watermark": "W",
+                    "decode_calls": "DC", "busy_slots_per_decode": "BS",
+                }
+                for metric, assessment in assessments.items():
+                    level = assessment.get("level", "not_available")
+                    color = _THRESHOLD_STYLE.get(level, ("", "var(--muted)"))[1]
+                    title = f"{metric}: {level.replace('_', ' ').title()}"
+                    abbr = _metric_icons.get(metric, metric[:1].upper())
+                    badge_html += f'<span class="run-indicator" title="{title}" style="background:{color};">{abbr}</span>'
+            else:
+                val_passed = res.get("validation_passed")
+                color = "var(--success)" if val_passed else ("var(--error)" if val_passed is False else "var(--muted)")
+                title = "Validation Passed" if val_passed else ("Validation Failed" if val_passed is False else "No Validation")
+                icon = "✓" if val_passed else ("✕" if val_passed is False else "?")
+                badge_html = f'<span class="run-indicator" title="{title}" style="background:{color};">{icon}</span>'
             
             with column, st.container(border=True):
-                st.markdown(f"{icon} **VMID {vmid}**")
+                st.markdown(f"{badge_html} **VMID {vmid}**", unsafe_allow_html=True)
                 if st.button("View Analytics" if not is_selected else "Viewing Analytics", 
                              key=f"dash_btn_{pid}_{vmid}", disabled=is_selected, use_container_width=True):
                     st.session_state[f"_dash_sel_vmid_{pid}"] = vmid
