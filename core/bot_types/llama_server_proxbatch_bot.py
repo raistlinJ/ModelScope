@@ -175,8 +175,7 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
                 on_log(f"[ERROR] VMID {vmid} failed: {exc}")
                 return {"run_aborted": True, "error": str(exc)}
 
-        import streamlit as st
-        concurrency = st.session_state.get("llama_server_proxbatch_exec_concurrency", 1)
+        concurrency = config.get("_proxbatch_concurrency", 1)
 
         return run_pct_batch(
             containers,

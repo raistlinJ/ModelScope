@@ -1037,6 +1037,8 @@ def _render_llama_cli_execute(
         
         # Flush config in the main thread before launching background execution
         flush_fn(project)
+        if allow_concurrency:
+            project.setdefault("config", {})["_proxbatch_concurrency"] = st.session_state.get(f"{exec_prefix}_concurrency", 1)
         
         # Launch in background thread so the UI stays responsive
         shared_state = {
