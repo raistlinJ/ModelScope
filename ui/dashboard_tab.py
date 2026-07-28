@@ -759,11 +759,14 @@ def _render_proxbatch_dashboard(
                 }
                 for metric, assessment in assessments.items():
                     level = assessment.get("level", "not_available")
+                    if level in ("unclassified", "not_available"):
+                        continue
                     color = _THRESHOLD_STYLE.get(level, ("", "var(--muted)"))[1]
                     title = f"{metric}: {level.replace('_', ' ').title()}"
                     abbr = _metric_icons.get(metric, metric[:1].upper())
                     badge_html += f'<span class="run-indicator" title="{title}" style="background:{color};">{abbr}</span>'
-            else:
+            
+            if not badge_html:
                 val_passed = res.get("validation_passed")
                 color = "var(--success)" if val_passed else ("var(--error)" if val_passed is False else "var(--muted)")
                 title = "Validation Passed" if val_passed else ("Validation Failed" if val_passed is False else "No Validation")
