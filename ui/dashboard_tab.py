@@ -693,9 +693,91 @@ def _render_llama_cli_dashboard(
     else:
         tel: dict = history[-1]
 
+    _render_llama_cli_dashboard_core(project, tel, bot_type, metrics_key)
+
+
+def _render_proxbatch_dashboard(
+    project: dict,
+    bot_type: str = "llama_server_proxbatch_bot",
+    metrics_key: str = "llama_server_metrics_matrix",
+) -> None:
+    """ProxBatch dashboard — per-container telemetry selection."""
+    _hydrate_project_history_if_empty(project)
+    pid = project["id"]
+    history_key = f"run_history_{pid}"
+    history: list = st.session_state.get(history_key, [])
+    history = [h for h in history if h.get("run_bot_type") == bot_type]
+
+    if not history:
+        st.info("No runs yet for this project — go to **Execute** and run it.")
+        return
+
+    if len(history) > 1:
+        labels = []
+        for i, h in enumerate(reversed(history)):
+            ts  = h.get("run_timestamp", "")
+            lbl = f"Run {len(history) - i}  —  {ts}"
+            labels.append(lbl)
+        sel_label = st.selectbox(
+            "Select run", options=labels, index=0,
+            key=f"{bot_type}_dash_sel_{pid}_{len(history)}",
+        )
+        tel = list(reversed(history))[labels.index(sel_label)]
+    else:
+        tel: dict = history[-1]
+
+    batch_results = tel.get("batch_results", [])
+    if not batch_results:
+        st.info("No container-level telemetry available for this batch run.")
+        return
+
+    st.markdown("### Container Results")
+    st.caption("Select a container below to view its specific analytics and outputs.")
+    
+    # Default to the first container
+    selected_vmid = st.session_state.get(f"_dash_sel_vmid_{pid}", batch_results[0].get("pct_vmid"))
+    
+    per_row = 4
+    for row_start in range(0, len(batch_results), per_row):
+        row = batch_results[row_start:row_start + per_row]
+        columns = st.columns(per_row)
+        for column, res in zip(columns, row):
+            vmid = res.get("pct_vmid")
+            is_selected = (vmid == selected_vmid)
+            
+            # Validation icon logic
+            val_passed = res.get("validation_passed")
+            icon = "🟢" if val_passed else ("🔴" if val_passed is False else "⚪")
+            
+            with column, st.container(border=True):
+                st.markdown(f"{icon} **VMID {vmid}**")
+                if st.button("View Analytics" if not is_selected else "Viewing Analytics", 
+                             key=f"dash_btn_{pid}_{vmid}", disabled=is_selected, use_container_width=True):
+                    st.session_state[f"_dash_sel_vmid_{pid}"] = vmid
+                    st.rerun()
+                    
+    st.divider()
+    
+    # Find the telemetry for the selected container
+    selected_res = next((r for r in batch_results if r.get("pct_vmid") == selected_vmid), batch_results[0])
+    
+    # Render the specific container's dashboard
+    _render_llama_cli_dashboard_core(project, selected_res, bot_type, metrics_key)
+
+
+def _render_llama_cli_dashboard_core(
+    project: dict,
+    tel: dict,
+    bot_type: str,
+    metrics_key: str,
+) -> None:
+    """Core rendering logic for a single telemetry record (used by single-target bots and ProxBatch container views)."""
+    pid = project["id"]
+    
     # Per-run token so text_area keys change when the selected run changes,
     # preventing Streamlit from retaining stale widget state across selections.
     _run_tok = (tel.get("run_timestamp", "") or "latest").replace(" ", "_").replace(":", "-")
+    _run_tok = f"{_run_tok}_{tel.get('pct_vmid', 'agg')}"
 
     ts = tel.get("run_timestamp", "")
     if ts:
@@ -877,7 +959,7 @@ def render() -> None:
         )
         return
     if _proj and _proj.get("type") == "llama_server_proxbatch_bot":
-        _render_llama_cli_dashboard(
+        _render_proxbatch_dashboard(
             _proj,
             bot_type="llama_server_proxbatch_bot",
             metrics_key="llama_server_metrics_matrix",
