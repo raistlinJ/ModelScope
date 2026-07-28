@@ -391,7 +391,7 @@ def render_template_selector(project: dict, selected: list[str]) -> None:
         return
     # Correct the stored value only when it can no longer be selected, and only
     # here — before the widget exists. Once the selectbox is instantiated
-    # Streamlit rejects any write to its key (see _flush_llama_server_config).
+    # Streamlit rejects any write to its key (see flush_llama_server_config).
     current = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
     if current not in selected:
         st.session_state["llama_server_pct_template_vmid"] = normalize_template_vmid(
@@ -411,13 +411,13 @@ def render_template_selector(project: dict, selected: list[str]) -> None:
 
 
 def _vmid_dialog_body(project: dict) -> None:
-    from ui.config_tab import _flush_llama_server_config, _normalise_pct_vmids
+    from ui.plugin_api import flush_llama_server_config, normalise_pct_vmids
 
     containers = st.session_state.get("llama_server_proxbatch_containers", [])
     if not containers:
         st.info("No LXC containers were found. Scan again after creating or starting containers.")
     else:
-        selected = set(_normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
+        selected = set(normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", [])))
         vmids = [item["vmid"] for item in containers]
 
         def _is_template(c: dict) -> bool:
@@ -480,7 +480,7 @@ def _vmid_dialog_body(project: dict) -> None:
     c_close, c_rescan = st.columns(2)
     with c_close:
         if st.button("Done", type="primary", use_container_width=True):
-            _flush_llama_server_config(project)
+            flush_llama_server_config(project)
             st.session_state["llama_server_proxbatch_dialog_open"] = False
             st.rerun()
     with c_rescan:
@@ -517,9 +517,9 @@ def template_env(project: dict):
     reuses that configuration for every selected LXC.
     """
     from core.environment import create_environment
-    from ui.config_tab import _flush_llama_server_config
+    from ui.plugin_api import flush_llama_server_config
 
-    _flush_llama_server_config(project)
+    flush_llama_server_config(project)
     template = str(project["config"].get("pct_template_vmid", "") or "").strip()
     if not template:
         st.warning("Select LXC containers and a template LXC first.")
@@ -535,7 +535,7 @@ def template_env(project: dict):
 class _ProxBatchLog(list):
     """One container's log list, wired into progress and the batch-wide stream.
 
-    ``_run_llama_cli_bot`` appends to whatever list it finds under
+    ``run_llama_backed_bot`` appends to whatever list it finds under
     ``logs_setup`` / ``logs_validation``, so seeding those keys with this list
     is enough to track a container without the runner knowing about batches.
     """
@@ -594,7 +594,7 @@ def run_batch(project: dict, shared: dict) -> None:
     own session log.
     """
     from core.session_log import SessionLog
-    from ui.execute_tab import _run_llama_cli_bot
+    from ui.plugin_api import run_llama_backed_bot
 
     cfg = project.get("config", {})
 
@@ -622,7 +622,7 @@ def run_batch(project: dict, shared: dict) -> None:
         item_project["type"] = "llama_server_bot"
         item_project["config"] = container_config(item_project["config"], vmid)
         item_shared = _ProxBatchItem(shared, container_state, vmid)
-        _run_llama_cli_bot(item_project, item_shared, "llama_server_bot")
+        run_llama_backed_bot(item_project, item_shared, "llama_server_bot")
         return copy.deepcopy(item_shared.get("telemetry", {}))
 
     concurrency = int(cfg.get(CONCURRENCY_CONFIG_KEY, 1))
@@ -694,11 +694,11 @@ def _on_run_start(project: dict, shared_state: dict) -> None:
     on which validation sets are ticked in this tab. The state dict is shared
     by reference, so the worker's updates land straight in what we render.
     """
-    from ui.execute_tab import _get_llama_selected_validation_sets
+    from ui.plugin_api import selected_validation_sets
 
     cfg = project.get("config", {})
     batch = new_batch_state(
-        cfg, _get_llama_selected_validation_sets(cfg, EXEC_PREFIX),
+        cfg, selected_validation_sets(cfg, EXEC_PREFIX),
     )
     shared_state["batch"] = batch
     st.session_state[_state_key(project)] = batch
@@ -718,13 +718,13 @@ def _on_clear(project: dict) -> None:
 def _render_targets(project: dict) -> None:
     """List the containers each phase will run in, before anything runs."""
     from core.batch_progress import plan_unit_total
-    from ui.execute_tab import _clean_steps, _get_llama_selected_validation_sets
+    from ui.plugin_api import clean_steps, selected_validation_sets
 
     cfg = project.get("config", {})
     vmids = selected_vmids(cfg)
     names = cfg.get("pct_vmid_names", {})
     names = names if isinstance(names, dict) else {}
-    val_sets = _get_llama_selected_validation_sets(cfg, EXEC_PREFIX)
+    val_sets = selected_validation_sets(cfg, EXEC_PREFIX)
 
     with st.expander(f"**🎯 Batch Targets** — {len(vmids)} LXC container(s)", expanded=True):
         if not vmids:
@@ -742,9 +742,9 @@ def _render_targets(project: dict) -> None:
                if template else "")
         )
         counts = {
-            "Startup": plan_unit_total(_clean_steps(cfg.get("startup_commands", [])), [], []),
+            "Startup": plan_unit_total(clean_steps(cfg.get("startup_commands", [])), [], []),
             "Validation": plan_unit_total([], val_sets, []),
-            "Completion": plan_unit_total([], [], _clean_steps(cfg.get("completion_commands", []))),
+            "Completion": plan_unit_total([], [], clean_steps(cfg.get("completion_commands", []))),
         }
         header = "| # | VMID | Name | " + " | ".join(f"{k} ({v})" for k, v in counts.items()) + " |"
         rows = [header, "|---|---|---|:---:|:---:|:---:|"]
@@ -861,14 +861,14 @@ def render_dashboard(
     metrics_key: str = "llama_server_metrics_matrix",
 ) -> None:
     """ProxBatch dashboard — per-container telemetry selection."""
-    from ui.dashboard_tab import (
-        _THRESHOLD_STYLE,
-        _configured_metric_assessments,
-        _hydrate_project_history_if_empty,
-        _render_llama_cli_dashboard_core,
+    from ui.plugin_api import (
+        configured_metric_assessments,
+        hydrate_project_history,
+        render_run_dashboard,
+        threshold_style,
     )
 
-    _hydrate_project_history_if_empty(project)
+    hydrate_project_history(project)
     pid = project["id"]
     history_key = f"run_history_{pid}"
     history: list = st.session_state.get(history_key, [])
@@ -912,14 +912,14 @@ def render_dashboard(
             is_selected = (vmid == selected_vmid)
 
             # Validation icon logic
-            assessments = _configured_metric_assessments(project, res)
+            assessments = configured_metric_assessments(project, res)
             badge_html = ""
             if assessments:
                 for metric, assessment in assessments.items():
                     level = assessment.get("level", "not_available")
                     if level in ("unclassified", "not_available"):
                         continue
-                    color = _THRESHOLD_STYLE.get(level, ("", "var(--muted)"))[1]
+                    color = threshold_style().get(level, ("", "var(--muted)"))[1]
                     title = f"{metric}: {level.replace('_', ' ').title()}"
                     abbr = _METRIC_ICONS.get(metric, metric[:1].upper())
                     badge_html += f'<span class="run-indicator" title="{title}" style="background:{color};">{abbr}</span>'
@@ -944,7 +944,7 @@ def render_dashboard(
     selected_res = next((r for r in batch_results if r.get("pct_vmid") == selected_vmid), batch_results[0])
 
     # Render the specific container's dashboard
-    _render_llama_cli_dashboard_core(project, selected_res, bot_type, metrics_key)
+    render_run_dashboard(project, selected_res, bot_type, metrics_key)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1039,11 +1039,11 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
     def flush_ui_config(self, project: dict[str, Any], cfg: dict[str, Any]) -> None:
         """Derive this bot's PCT keys during the shared llama-server flush."""
         from core.pct_server import CONTAINER_BIND_HOST
-        from ui.config_tab import _normalise_pct_vmids
+        from ui.plugin_api import normalise_pct_vmids
 
         cfg["execution_target"] = "pct"
         cfg["server_in_container"] = True
-        cfg["pct_vmids"] = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+        cfg["pct_vmids"] = normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
         cfg["pct_vmid_names"] = vmid_names(
             cfg, st.session_state.get("llama_server_proxbatch_containers", []),
         )
@@ -1138,14 +1138,14 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
 
     def render_execution_target(self, project: dict[str, Any]) -> str | None:
         """PCT-only: a container picker replaces the local/ssh/pct mode radio."""
-        from ui.config_tab import _normalise_pct_vmids
+        from ui.plugin_api import normalise_pct_vmids
 
         st.session_state["llama_server_execution_target"] = "pct"
         st.caption(
             "PCT-only batch execution. Each selected LXC runs the same workflow "
             "sequentially, with its own llama-server started inside it."
         )
-        selected = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+        selected = normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
         c_scan, c_selected = st.columns([1, 3])
         with c_scan:
             if st.button("Scan LXCs", key="btn_llama_server_proxbatch_scan_lxcs", use_container_width=True):
@@ -1170,9 +1170,9 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
         return True
 
     def render_server_setup_notice(self, project: dict[str, Any]) -> bool:
-        from ui.config_tab import _normalise_pct_vmids
+        from ui.plugin_api import normalise_pct_vmids
 
-        selected = _normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
+        selected = normalise_pct_vmids(st.session_state.get("llama_server_pct_vmids", []))
         render_template_selector(project, selected)
         template = str(st.session_state.get("llama_server_pct_template_vmid", "") or "")
         st.info(
@@ -1237,11 +1237,11 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
         render_dashboard(project)
 
     def render_config(self, project: dict[str, Any]) -> None:
-        from ui.config_tab import (
-            _flush_llama_server_config,
-            _render_llama_server_runtime,
-            _render_llama_server_validation,
-            _render_metric_thresholds_config,
+        from ui.plugin_api import (
+            flush_llama_server_config,
+            render_llama_server_runtime,
+            render_llama_server_validation,
+            render_metric_thresholds_config,
         )
 
         st.divider()
@@ -1249,22 +1249,21 @@ class LlamaServerProxBatchBotPlugin(LlamaServerBotPlugin):
             ["🖥  Runtime", "✅  Validation", "📊  Metrics Config"]
         )
         with sub_runtime:
-            _render_llama_server_runtime(project)
+            render_llama_server_runtime(project)
         with sub_val:
-            _render_llama_server_validation(project)
+            render_llama_server_validation(project)
         with sub_metrics:
-            _render_metric_thresholds_config(project, "llama_server", _flush_llama_server_config)
+            render_metric_thresholds_config(project, "llama_server", flush_llama_server_config)
 
     def render_execute(self, project: dict[str, Any]) -> None:
-        from ui.config_tab import _flush_llama_server_config
-        from ui.execute_tab import _render_llama_cli_execute
+        from ui.plugin_api import flush_llama_server_config, render_llama_execute_view
 
-        _render_llama_cli_execute(
+        render_llama_execute_view(
             project,
             bot_type=self.type_id,
             llm_label="LLAMA-SERVER",
             exec_prefix=EXEC_PREFIX,
-            flush_fn=_flush_llama_server_config,
+            flush_fn=flush_llama_server_config,
             render_targets=_render_targets,
             render_progress=_render_progress,
             on_run_start=_on_run_start,

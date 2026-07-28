@@ -2697,9 +2697,9 @@ class CafCliRunPlugin(BotTypePlugin):
     })
 
     def render_dashboard(self, project: dict[str, Any]) -> None:
-        from ui.dashboard_tab import _render_llama_cli_dashboard
+        from ui.plugin_api import render_llama_dashboard
 
-        _render_llama_cli_dashboard(
+        render_llama_dashboard(
             project, bot_type=self.type_id, metrics_key=self.dashboard_metrics_key,
         )
 
@@ -2710,7 +2710,7 @@ class CafCliRunPlugin(BotTypePlugin):
         so this replaces it whenever a transcript was actually recorded.
         """
         import streamlit as st
-        from ui.dashboard_tab import _render_scrollable_output
+        from ui.plugin_api import render_scrollable_output
 
         responses, tool_output, turns = _caf_transcript_sections(
             telemetry.get("caf_transcript_events")
@@ -2721,12 +2721,12 @@ class CafCliRunPlugin(BotTypePlugin):
         st.subheader(f"CAF Transcript  ({turns} assistant turn{'s' if turns != 1 else ''})")
         response_col, tool_col = st.columns(2)
         with response_col:
-            _render_scrollable_output(
+            render_scrollable_output(
                 "Assistant Responses", responses,
                 key=f"caf_transcript_responses_{pid}_{run_token}", height=420,
             )
         with tool_col:
-            _render_scrollable_output(
+            render_scrollable_output(
                 "Tool Output", tool_output,
                 key=f"caf_transcript_tools_{pid}_{run_token}", height=420,
             )
@@ -2800,17 +2800,17 @@ class CafCliRunPlugin(BotTypePlugin):
 
     def render_config(self, project: dict[str, Any]) -> None:
         import streamlit as st
-        from ui.config_tab import _render_metric_thresholds_config
+        from ui.plugin_api import render_metric_thresholds_config
 
         st.divider()
         runtime_tab, validation_tab, metrics_tab = st.tabs(["🖥  Runtime", "✅  Validation", "📊  Metrics Config"])
         with runtime_tab:
             self._render_runtime()
         with validation_tab:
-            from ui.config_tab import _render_validation_sets_ui
-            _render_validation_sets_ui(project, "caf_cli", self.flush_config)
+            from ui.plugin_api import render_validation_sets_ui
+            render_validation_sets_ui(project, "caf_cli", self.flush_config)
         with metrics_tab:
-            _render_metric_thresholds_config(project, self.type_id, self.flush_config)
+            render_metric_thresholds_config(project, self.type_id, self.flush_config)
         self.flush_config(project)
 
     def _execution_target_intro(self) -> str | None:
@@ -2929,18 +2929,18 @@ class CafCliRunPlugin(BotTypePlugin):
                 st.checkbox("Auto-approve dangerous commands", key="caf_cli_dangerous_no_prompt")
 
         with st.expander("Commands", expanded=True):
-            from ui.config_tab import _render_command_steps, _render_llm_prompt_helper_tab
+            from ui.plugin_api import render_command_steps, render_llm_prompt_helper_tab
 
             judge_tab, startup_tab, completion_tab = st.tabs(["🤖 LLM Judge", "▶  Startup", "⏹  Completion"])
             with judge_tab:
                 st.caption("The judge request runs from the selected execution target, outside CyberAgentFlow.")
-                _render_llm_prompt_helper_tab("caf_cli")
+                render_llm_prompt_helper_tab("caf_cli")
             with startup_tab:
                 st.caption("Commands run on the execution target before validation begins.")
-                _render_command_steps("caf_cli_startup_commands", "caf_cli_startup", "e.g. /bin/bash setup.sh")
+                render_command_steps("caf_cli_startup_commands", "caf_cli_startup", "e.g. /bin/bash setup.sh")
             with completion_tab:
                 st.caption("Cleanup commands run on the execution target after validation finishes.")
-                _render_command_steps("caf_cli_completion_commands", "caf_cli_completion", "e.g. rm -rf /tmp/test_workdir")
+                render_command_steps("caf_cli_completion_commands", "caf_cli_completion", "e.g. rm -rf /tmp/test_workdir")
 
     def _render_connection_fields(self) -> None:
         import streamlit as st
@@ -3007,7 +3007,7 @@ class CafCliRunPlugin(BotTypePlugin):
 
     def render_execute(self, project: dict[str, Any]) -> None:
         import streamlit as st
-        from ui.terminal import render_terminal
+        from ui.plugin_api import render_terminal
 
         self.flush_config(project)
         config = project["config"]
