@@ -81,53 +81,6 @@ class TestColorizeLogLine:
 
 # ── _load_config_file ──────────────────────────────────────────────────────────
 
-class TestLoadConfigFile:
-    def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        result = cli._load_config_file()
-        assert result == {}
-
-    def test_loads_json_config(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        config_dir = tmp_path / ".modelscope"
-        config_dir.mkdir()
-        (config_dir / "cli.json").write_text(
-            json.dumps({"model": "mymodel", "backend": "ollama"}),
-            encoding="utf-8"
-        )
-        result = cli._load_config_file()
-        assert result["model"] == "mymodel"
-
-    def test_ignores_invalid_json(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        config_dir = tmp_path / ".modelscope"
-        config_dir.mkdir()
-        (config_dir / "cli.json").write_text("NOT VALID JSON", encoding="utf-8")
-        result = cli._load_config_file()
-        assert result == {}
-
-    def test_ignores_non_dict_json(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        config_dir = tmp_path / ".modelscope"
-        config_dir.mkdir()
-        (config_dir / "cli.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-        result = cli._load_config_file()
-        assert result == {}
-
-    def test_loads_yaml_when_available(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        config_dir = tmp_path / ".modelscope"
-        config_dir.mkdir()
-        # Write a YAML file (no JSON present)
-        (config_dir / "cli.yaml").write_text("model: yaml_model\n", encoding="utf-8")
-        try:
-            import yaml  # noqa
-            result = cli._load_config_file()
-            assert result.get("model") == "yaml_model"
-        except ImportError:
-            pytest.skip("pyyaml not installed")
-
-
 # ── _box_table ─────────────────────────────────────────────────────────────────
 
 class TestBoxTable:
@@ -162,184 +115,9 @@ class TestBoxTable:
 
 # ── _build_config ──────────────────────────────────────────────────────────────
 
-class TestBuildConfig:
-    def _args(self, **overrides):
-        args = argparse.Namespace(
-            model="testmodel",
-            backend="llama.cpp",
-            llm_url=None,
-            context_size=4096,
-            system_prompt=None,
-            user_prompt=None,
-            mcp_url="",
-            ssh_host=None,
-            ssh_port=22,
-            ssh_user="root",
-            ssh_password=None,
-            ssh_key_path=None,
-        )
-        for k, v in overrides.items():
-            setattr(args, k, v)
-        return args
-
-    def test_basic_config_keys(self):
-        cfg = cli._build_config(self._args())
-        assert cfg["selected_model"] == "testmodel"
-        assert cfg["backend_type"] == "llama.cpp"
-        assert cfg["execution_mode"] == "local"
-
-    def test_ssh_host_sets_ssh_mode(self):
-        cfg = cli._build_config(self._args(ssh_host="10.0.0.1"))
-        assert cfg["execution_mode"] == "ssh"
-
-    def test_system_prompt_override(self):
-        cfg = cli._build_config(self._args(system_prompt="custom sys"))
-        assert cfg["sys_prompt"] == "custom sys"
-
-    def test_user_prompt_override(self):
-        cfg = cli._build_config(self._args(user_prompt="custom user"))
-        assert cfg["user_prompt"] == "custom user"
-
-    def test_default_url_llama_cpp(self):
-        from config.defaults import LLAMA_CPP_DEFAULT_URL
-        cfg = cli._build_config(self._args(backend="llama.cpp"))
-        assert cfg["llm_url"] == LLAMA_CPP_DEFAULT_URL
-
-    def test_default_url_ollama(self):
-        from config.defaults import OLLAMA_DEFAULT_URL
-        cfg = cli._build_config(self._args(backend="ollama"))
-        assert cfg["llm_url"] == OLLAMA_DEFAULT_URL
-
-    def test_llm_url_override(self):
-        cfg = cli._build_config(self._args(llm_url="http://custom:9999"))
-        assert "custom" in cfg["llm_url"]
-
-    def test_cancel_requested_ref_is_list(self):
-        cfg = cli._build_config(self._args())
-        assert isinstance(cfg["cancel_requested_ref"], list)
-        assert cfg["cancel_requested_ref"] == [False]
-
-    def test_mcp_running_when_url_provided(self):
-        cfg = cli._build_config(self._args(mcp_url="http://localhost:3000"))
-        assert cfg["mcp_running"] is True
-
-    def test_mcp_not_running_when_no_url(self):
-        cfg = cli._build_config(self._args(mcp_url=""))
-        assert cfg["mcp_running"] is False
-
-
 # ── _make_env ──────────────────────────────────────────────────────────────────
 
-class TestMakeEnv:
-    def _args(self, ssh_host=None, ssh_port=22, ssh_user="root",
-               ssh_password=None, ssh_key_path=None, ssh_caf_dir="~/modelscope"):
-        return argparse.Namespace(
-            ssh_host=ssh_host,
-            ssh_port=ssh_port,
-            ssh_user=ssh_user,
-            ssh_password=ssh_password,
-            ssh_key_path=ssh_key_path,
-            ssh_caf_dir=ssh_caf_dir,
-        )
-
-    def test_returns_local_environment_without_ssh(self):
-        from core.environment import LocalEnvironment
-        logs = []
-        env = cli._make_env(self._args(), lambda m: logs.append(m))
-        assert isinstance(env, LocalEnvironment)
-        assert any("[INIT]" in l for l in logs)
-
-    def test_returns_ssh_environment_with_ssh_host(self):
-        from core.environment import SSHEnvironment
-        logs = []
-        env = cli._make_env(self._args(ssh_host="10.0.0.1"), lambda m: logs.append(m))
-        assert isinstance(env, SSHEnvironment)
-        assert any("SSH" in l for l in logs)
-
-    def test_ssh_env_has_correct_host(self):
-        from core.environment import SSHEnvironment
-        env = cli._make_env(self._args(ssh_host="192.168.1.10"), lambda _: None)
-        assert env.host == "192.168.1.10"
-
-    def test_ssh_env_has_correct_username(self):
-        from core.environment import SSHEnvironment
-        env = cli._make_env(self._args(ssh_host="10.0.0.1", ssh_user="kali"), lambda _: None)
-        assert env.username == "kali"
-
-
 # ── _apply_config_file_defaults ───────────────────────────────────────────────
-
-class TestApplyConfigFileDefaults:
-    def _args(self, **kw):
-        a = argparse.Namespace(
-            model=None,
-            backend="llama.cpp",
-            verbose=False,
-            dry_run=False,
-            context_size=4096,
-        )
-        for k, v in kw.items():
-            setattr(a, k, v)
-        return a
-
-    def test_config_file_sets_unset_key(self):
-        args = self._args()
-        cli._apply_config_file_defaults(args, {"model": "from_file"}, [])
-        assert args.model == "from_file"
-
-    def test_explicit_cli_flag_wins_over_config_file(self):
-        args = self._args(model="cli_model")
-        cli._apply_config_file_defaults(args, {"model": "from_file"}, ["--model", "cli_model"])
-        assert args.model == "cli_model"
-
-    def test_env_var_overrides_config_file(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_MODEL", "from_env")
-        args = self._args()
-        cli._apply_config_file_defaults(args, {"model": "from_file"}, [])
-        assert args.model == "from_env"
-
-    def test_explicit_cli_wins_over_env_var(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_MODEL", "from_env")
-        args = self._args(model="cli_model")
-        cli._apply_config_file_defaults(args, {}, ["--model", "cli_model"])
-        assert args.model == "cli_model"
-
-    def test_bool_env_var_true_values(self, monkeypatch):
-        for val in ("1", "true", "yes"):
-            monkeypatch.setenv("MODELSCOPE_VERBOSE", val)
-            args = self._args(verbose=False)
-            cli._apply_config_file_defaults(args, {}, [])
-            assert args.verbose is True
-
-    def test_bool_env_var_false_value(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_VERBOSE", "false")
-        args = self._args(verbose=True)
-        cli._apply_config_file_defaults(args, {}, [])
-        assert args.verbose is False
-
-    def test_int_env_var(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_CONTEXT_SIZE", "8192")
-        args = self._args()
-        cli._apply_config_file_defaults(args, {}, [])
-        assert args.context_size == 8192
-
-    def test_int_env_var_invalid_ignored(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_CONTEXT_SIZE", "notanint")
-        args = self._args()
-        cli._apply_config_file_defaults(args, {}, [])
-        assert args.context_size == 4096  # unchanged
-
-    def test_unknown_config_file_key_ignored(self):
-        args = self._args()
-        # 'unknown_key' not in args namespace — should not crash
-        cli._apply_config_file_defaults(args, {"unknown_key": "val"}, [])
-
-    def test_hyphen_config_key_normalised(self):
-        args = self._args()
-        args.dry_run = False
-        cli._apply_config_file_defaults(args, {"dry-run": True}, [])
-        assert args.dry_run is True
-
 
 # ── _print_run_summary ─────────────────────────────────────────────────────────
 
@@ -392,50 +170,6 @@ class TestPrintRunSummary:
 
 
 # ── _maybe_inject_run_subcommand ───────────────────────────────────────────────
-
-class TestMaybeInjectRunSubcommand:
-    def test_no_args_unchanged(self):
-        assert cli._maybe_inject_run_subcommand([]) == []
-
-    def test_run_subcommand_unchanged(self):
-        argv = ["run", "--model", "x"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
-
-    def test_batch_subcommand_unchanged(self):
-        argv = ["batch", "--jobs-file", "j.json"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
-
-    def test_sessions_subcommand_unchanged(self):
-        argv = ["sessions", "list"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
-
-    # Scenario tests removed - scenarios concept deleted
-
-    def test_list_scenarios_flag_unchanged(self):
-        argv = ["--list-scenarios"]
-        assert cli._maybe_inject_run_subcommand(argv) == argv
-
-    def test_flat_model_arg_injects_run(self):
-        argv = ["--model", "mymodel"]
-        result = cli._maybe_inject_run_subcommand(argv)
-        assert result[0] == "run"
-
-    def test_flat_dry_run_injects_run(self):
-        argv = ["--model", "x", "--dry-run"]
-        result = cli._maybe_inject_run_subcommand(argv)
-        assert result[0] == "run"
-
-    def test_flag_equal_value_skipped(self):
-        argv = ["--model=mymodel", "--dry-run"]
-        result = cli._maybe_inject_run_subcommand(argv)
-        assert result[0] == "run"
-
-    def test_bare_positional_not_subcommand(self):
-        # A bare positional that isn't a subcommand name — leave unchanged
-        argv = ["some_file.py"]
-        result = cli._maybe_inject_run_subcommand(argv)
-        assert result == argv
-
 
 # ── main() dispatch ────────────────────────────────────────────────────────────
 
@@ -510,146 +244,6 @@ class TestMainDispatch:
 
 # ── _cmd_run ──────────────────────────────────────────────────────────────────
 
-class TestCmdRun:
-    def _run_args(self, **kw):
-        """Parse a minimal 'run' invocation through the real arg parser."""
-        argv = ["run", "--model", "test-model"] + [
-            item for k, v in kw.items()
-            for item in ([f"--{k.replace('_', '-')}"] + ([str(v)] if not isinstance(v, bool) else []))
-        ]
-        return argv
-
-    def test_missing_model_returns_2(self, capsys):
-        ret = cli.main(["run"])
-        assert ret == 2
-
-    def test_dry_run_prints_config_and_exits_0(self, capsys):
-        ret = cli.main(["run", "--model", "mymodel", "--dry-run"])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert "mymodel" in out
-
-    def test_dry_run_redacts_password(self, capsys):
-        ret = cli.main(["run", "--model", "m", "--dry-run",
-                         "--ssh-host", "10.0.0.1", "--ssh-password", "secret"])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert "secret" not in out
-        assert "REDACTED" in out
-
-    def test_dry_run_with_ssh_shows_params(self, capsys):
-        ret = cli.main(["run", "--model", "m", "--dry-run",
-                         "--ssh-host", "10.0.0.1", "--ssh-user", "kali"])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert "ssh" in out.lower() or "_ssh_params" in out
-
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_run_calls_run_evaluation(self, mock_make_env, mock_run_eval, tmp_path):
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": True,
-            "run_aborted": False,
-            "total_latency": 1.0,
-            "run_scenario": "s",
-            "run_model": "m",
-            "run_backend": "llama.cpp",
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "llm_rounds": 0,
-            "tool_calls": [],
-            "metrics_matrix": [],
-        }
-        ret = cli.main(["run", "--model", "mymodel", "--session-dir", str(tmp_path)])
-        mock_run_eval.assert_called_once()
-        assert ret == 0
-
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_run_returns_1_when_validation_fails(self, mock_make_env, mock_run_eval, tmp_path):
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": False,
-            "run_aborted": False,
-            "total_latency": 1.0,
-            "run_scenario": "s",
-            "run_model": "m",
-            "run_backend": "llama.cpp",
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "llm_rounds": 0,
-            "tool_calls": [],
-            "metrics_matrix": [],
-        }
-        ret = cli.main(["run", "--model", "m", "--session-dir", str(tmp_path)])
-        assert ret == 1
-
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_run_json_flag_prints_telemetry(self, mock_make_env, mock_run_eval, capsys, tmp_path):
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        tel = {
-            "validation_passed": True,
-            "run_aborted": False,
-            "total_latency": 1.0,
-            "run_scenario": "s",
-            "run_model": "m",
-            "run_backend": "llama.cpp",
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-            "llm_rounds": 1,
-            "tool_calls": [],
-            "metrics_matrix": [],
-        }
-        mock_run_eval.return_value = tel
-        ret = cli.main(["run", "--model", "m", "--json", "--session-dir", str(tmp_path)])
-        out = capsys.readouterr().out
-        assert ret == 0
-        assert '"run_model"' in out
-
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_env_close_called_even_on_success(self, mock_make_env, mock_run_eval, tmp_path):
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": True, "run_aborted": False, "total_latency": 0.1,
-            "run_scenario": "s", "run_model": "m", "run_backend": "b",
-            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "llm_rounds": 0, "tool_calls": [], "metrics_matrix": [],
-        }
-        cli.main(["run", "--model", "m", "--session-dir", str(tmp_path)])
-        mock_env.close.assert_called_once()
-
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_config_file_defaults_applied_before_run(self, mock_make_env, mock_run_eval, tmp_path, monkeypatch):
-        """Config file model overrides empty --model when not explicitly set."""
-        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-        config_dir = tmp_path / ".modelscope"
-        config_dir.mkdir()
-        (config_dir / "cli.json").write_text(json.dumps({"backend": "ollama"}), encoding="utf-8")
-
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": True, "run_aborted": False, "total_latency": 0.1,
-            "run_scenario": "s", "run_model": "m", "run_backend": "ollama",
-            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "llm_rounds": 0, "tool_calls": [], "metrics_matrix": [],
-        }
-        # Pass backend explicitly — config file provides ollama
-        ret = cli.main(["run", "--model", "m", "--session-dir", str(tmp_path)])
-        assert ret == 0
-
-
 # ── _cmd_batch ─────────────────────────────────────────────────────────────────
 
 class TestCmdBatch:
@@ -697,36 +291,89 @@ class TestDefaultSessionsDir:
 
 # ── backward-compat flat invocation ───────────────────────────────────────────
 
-class TestBackwardCompatInvocation:
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_flat_invocation_works(self, mock_make_env, mock_run_eval, tmp_path):
-        """cli.py --model m should work via run injection."""
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": True, "run_aborted": False, "total_latency": 0.1,
-            "run_scenario": "s", "run_model": "m", "run_backend": "llama.cpp",
-            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "llm_rounds": 0, "tool_calls": [], "metrics_matrix": [],
-        }
-        ret = cli.main(["--model", "m", "--session-dir", str(tmp_path)])
-        assert ret == 0
 
-    @patch("cli.run_evaluation")
-    @patch("cli._make_env")
-    def test_env_var_model_default(self, mock_make_env, mock_run_eval, tmp_path, monkeypatch):
-        """MODELSCOPE_MODEL env var fills in missing --model."""
-        monkeypatch.setenv("MODELSCOPE_MODEL", "env_model")
-        mock_env = MagicMock()
-        mock_make_env.return_value = mock_env
-        mock_run_eval.return_value = {
-            "validation_passed": True, "run_aborted": False, "total_latency": 0.1,
-            "run_scenario": "s", "run_model": "env_model", "run_backend": "llama.cpp",
-            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "llm_rounds": 0, "tool_calls": [], "metrics_matrix": [],
-        }
-        ret = cli.main(["run", "--session-dir", str(tmp_path)])
-        mock_run_eval.assert_called_once()
-        cfg = mock_run_eval.call_args[0][1]
-        assert cfg["selected_model"] == "env_model"
+
+# ── project subcommand ────────────────────────────────────────────────────────
+
+class TestCmdProject:
+    """`project` is the only CLI path that runs a bot type.
+
+    It resolves the project's `type` through the bot-type registry and hands
+    the run to that plugin, so unlike the removed `run` subcommand it produces
+    the same behaviour as the Execute tab.
+    """
+
+    def _project_file(self, tmp_path, bot_type="bash_bot", **config):
+        from core.bot_types import require_bot_plugin
+
+        plugin = require_bot_plugin(bot_type)
+        proj = plugin.make_project(f"p-{bot_type}", f"Test {bot_type}")
+        proj["config"].update(config)
+        path = tmp_path / f"{bot_type}.json"
+        path.write_text(json.dumps(proj, default=str))
+        return str(path)
+
+    def test_dry_run_prints_config_without_running(self, tmp_path, capsys):
+        with patch("core.evaluator.run_evaluation") as ran:
+            ret = cli.main(["project", "-f", self._project_file(tmp_path), "--dry-run"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "Dry-run config" in out
+        ran.assert_not_called()
+
+    def test_dry_run_redacts_secrets(self, tmp_path, capsys):
+        path = self._project_file(tmp_path, ssh_password="hunter2", openai_api_key="sk-secret")
+        ret = cli.main(["project", "-f", path, "--dry-run"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "hunter2" not in out
+        assert "sk-secret" not in out
+        assert "REDACTED" in out
+
+    def test_a_missing_file_is_reported(self, tmp_path, capsys):
+        ret = cli.main(["project", "-f", str(tmp_path / "nope.json"), "--dry-run"])
+        assert ret != 0
+
+    def test_the_run_is_handed_to_that_bot_s_plugin(self, tmp_path):
+        """Every bot type reaches its own plugin, not the generic evaluator."""
+        from core.bot_types import iter_bot_plugins
+
+        for plugin in iter_bot_plugins():
+            path = self._project_file(tmp_path, bot_type=plugin.type_id)
+            with patch.object(type(plugin), "run_evaluation", return_value={
+                "validation_passed": True, "run_aborted": False, "total_latency": 0.0,
+            }) as ran:
+                ret = cli.main(["project", "-f", path])
+            assert ran.called, f"{plugin.type_id} did not reach its plugin"
+            assert ret == 0, f"{plugin.type_id} exited {ret}"
+
+    def _exit_code_for(self, tmp_path, telemetry):
+        from core.bot_types import require_bot_plugin
+
+        path = self._project_file(tmp_path)
+        plugin = require_bot_plugin("bash_bot")
+        with patch.object(type(plugin), "run_evaluation", return_value=telemetry):
+            return cli.main(["project", "-f", path])
+
+    def test_the_exit_code_carries_the_verdict(self, tmp_path):
+        """So a project run can gate a script or a CI step."""
+        base = {"run_aborted": False, "total_latency": 0.0}
+        assert self._exit_code_for(tmp_path, {**base, "validation_passed": True}) == 0
+        assert self._exit_code_for(tmp_path, {**base, "validation_passed": False}) == 1
+        assert self._exit_code_for(tmp_path, {**base, "run_aborted": True}) == 1
+
+    def test_no_validation_configured_is_not_a_failure(self, tmp_path):
+        """validation_passed is None when a project configures no checks."""
+        assert self._exit_code_for(
+            tmp_path, {"validation_passed": None, "run_aborted": False, "total_latency": 0.0},
+        ) == 0
+
+    def test_a_secret_can_come_from_the_environment(self, tmp_path, monkeypatch, capsys):
+        """Exported projects carry no secrets, so the env supplies them."""
+        monkeypatch.setenv("MODELSCOPE_SSH_PASSWORD", "from-env")
+        path = self._project_file(tmp_path, execution_target="ssh", ssh_host="10.0.0.1")
+        ret = cli.main(["project", "-f", path, "--dry-run"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "from-env" not in out   # redacted, but it was resolved
+        assert "REDACTED" in out

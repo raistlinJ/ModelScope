@@ -3,21 +3,18 @@
 
 Entry points:
     python cli.py project --file proj.json           # run an exported project
-    python cli.py scenarios                          # list scenarios
-    python cli.py run --model qwen --scenario "..."  # single run
     python cli.py batch --jobs-file jobs.json        # batch queue
     python cli.py sessions list                      # browse past sessions
     python cli.py sessions show <id-or-dir>          # inspect a session
 
-Backward compat:
-    python cli.py --list-scenarios                   # still works
-    python cli.py --model qwen ...                   # auto-inserts 'run'
+`project` is the way to run a bot type. It reads the project's `type`,
+resolves that bot's plugin through the registry and hands the run to it, so a
+CLI run does exactly what the Execute tab does. Export a project from the UI
+to get the file.
 
 Examples:
     python cli.py project --file bash_project.json
-    python cli.py --list-scenarios
-    python cli.py --backend llama.cpp --model my-model --scenario "Scenario 1 – File Creation"
-    python cli.py run --model qwen2.5 --scenario "Scenario 1 – File Creation" --dry-run
+    python cli.py project --file caf_standard.json --dry-run
     python cli.py batch --jobs-file jobs.json --parallel 2
     python cli.py sessions list
     python cli.py sessions show 828cc8a1
@@ -34,7 +31,6 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Any
 
 # ── ANSI color support ────────────────────────────────────────────────────────
 
@@ -95,44 +91,6 @@ def _colorize_log_line(msg: str) -> str:
 
 # ── Config file support ───────────────────────────────────────────────────────
 
-def _load_config_file() -> dict[str, Any]:
-    """Load ~/.modelscope/cli.json (or cli.yaml if yaml is available).
-
-    Merge order: config file < env vars < CLI flags.
-    Returns an empty dict if no config file is found.
-    """
-    config_dir = pathlib.Path.home() / ".modelscope"
-    result: dict[str, Any] = {}
-
-    # Try JSON first
-    json_path = config_dir / "cli.json"
-    if json_path.exists():
-        try:
-            with open(json_path, encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
-                result.update(data)
-            return result
-        except Exception:
-            pass
-
-    # Try YAML if available
-    yaml_path = config_dir / "cli.yaml"
-    if yaml_path.exists():
-        try:
-            import yaml  # type: ignore
-            with open(yaml_path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
-            if isinstance(data, dict):
-                result.update(data)
-        except ImportError:
-            pass  # yaml not installed, silently skip
-        except Exception:
-            pass
-
-    return result
-
-
 # ── Box-drawing summary table ─────────────────────────────────────────────────
 
 def _box_table(rows: list[dict], title: str = "") -> str:
@@ -179,98 +137,10 @@ from config.defaults import (
     LLAMA_CPP_DEFAULT_URL,
     OLLAMA_DEFAULT_URL,
 )
-from core.evaluator import run_evaluation
 from core.logsetup import configure_logging, logged_on_log
-from core.session_log import SessionLog
 
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
-
-def _add_run_args(parser: argparse.ArgumentParser) -> None:
-    """Add all flags that apply to a single evaluation run."""
-    # ── Model / backend ───────────────────────────────────────────────────────
-    parser.add_argument("--model", help="Model name/id to evaluate.")
-    parser.add_argument(
-        "--backend",
-        choices=["llama.cpp", "ollama"],
-        default="llama.cpp",
-        help="Inference backend.",
-    )
-    parser.add_argument(
-        "--llm-url",
-        dest="llm_url",
-        default=None,
-        help="LLM server URL. Defaults to the backend's standard local URL.",
-    )
-    parser.add_argument(
-        "--context-size",
-        dest="context_size",
-        type=int,
-        default=DEFAULT_CONTEXT_SIZE,
-        help="Context window size in tokens.",
-    )
-
-    # ── System/User prompts ───────────────────────────────────────────────────
-    parser.add_argument(
-        "--system-prompt",
-        dest="system_prompt",
-        default=None,
-        help="Override the system prompt.",
-    )
-    parser.add_argument(
-        "--user-prompt",
-        dest="user_prompt",
-        default=None,
-        help="Override the user prompt.",
-    )
-
-    # ── MCP ───────────────────────────────────────────────────────────────────
-    parser.add_argument("--mcp-url", dest="mcp_url", default="", help="MCP tool server URL.")
-
-    # ── SSH / remote target ───────────────────────────────────────────────
-    parser.add_argument("--ssh-host", dest="ssh_host", default=None,
-                        help="Remote SSH host (enables SSH execution).")
-    parser.add_argument("--ssh-port", dest="ssh_port", type=int, default=22,
-                        help="Remote SSH port.")
-    parser.add_argument("--ssh-user", dest="ssh_user", default="root",
-                        help="Remote SSH username.")
-    parser.add_argument("--ssh-password", dest="ssh_password", default=None,
-                        help="Remote SSH password.")
-    parser.add_argument("--ssh-key-path", dest="ssh_key_path", default=None,
-                        help="Path to SSH private key.")
-    parser.add_argument("--pct-vmid", dest="pct_vmid", default=None,
-                        help="Proxmox container VMID (enables PCT execution mode).")
-
-
-    # ── Output / control ──────────────────────────────────────────────────────
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print the full telemetry dict as JSON at the end.",
-    )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable DEBUG-level logging.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        action="store_true",
-        help="Print assembled config (redacting password) and exit without running.",
-    )
-    parser.add_argument(
-        "--session-dir",
-        dest="session_dir",
-        default=None,
-        help=(
-            "Root directory for session logs "
-            "(default: ModelScope/logs/sessions/). "
-            "Each run creates a timestamped sub-directory containing "
-            "run.log, telemetry.json, and config.json."
-        ),
-    )
-
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with subcommands."""
@@ -292,8 +162,6 @@ examples:
 """,
     )
 
-    # ── Legacy top-level flags (backward compat) ──────────────────────────────
-    # --list-scenarios removed - scenarios concept deleted
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -301,14 +169,6 @@ examples:
     )
 
     subparsers = parser.add_subparsers(dest="subcommand", metavar="subcommand")
-
-    # ── run subcommand ────────────────────────────────────────────────────────
-    run_p = subparsers.add_parser(
-        "run",
-        help="Run a single evaluation.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    _add_run_args(run_p)
 
     # ── project subcommand ──────────────────────────────────────────────────────
     project_p = subparsers.add_parser(
@@ -447,133 +307,10 @@ examples:
         help="Override the sessions root directory.",
     )
 
-    # --scenarios subcommand removed - scenarios concept deleted
-
     return parser
 
 
 # ── Config dict assembly ──────────────────────────────────────────────────────
-
-def _build_config(args: argparse.Namespace) -> dict:
-    """Assemble the evaluator config dict from parsed args."""
-    default_url = LLAMA_CPP_DEFAULT_URL if args.backend == "llama.cpp" else OLLAMA_DEFAULT_URL
-    llm_url = (args.llm_url or default_url).strip()
-
-    sys_prompt = args.system_prompt or ""
-    user_prompt = args.user_prompt or ""
-
-    is_ssh = bool(args.ssh_host)
-
-    config: dict = {
-        "backend_type":        args.backend,
-        "llm_url":             llm_url,
-        "selected_model":      args.model,
-        "context_size":        args.context_size,
-        "sys_prompt":          sys_prompt,
-        "user_prompt":         user_prompt,
-        "mcp_url":             args.mcp_url,
-        "mcp_server_url":      "",
-        "mcp_tools":           {},
-        "mcp_running":         bool(args.mcp_url),
-        "validation_command":  "",
-        "fail_patterns":       [],
-        "active_scenario":     "",
-        "tool_focus":          "",
-        "metrics_matrix":      [],
-        "expected_stdout":     "",
-        "pre_run_cleanup":     [],
-        "cancel_requested_ref": [False],
-        "execution_mode":      "ssh" if is_ssh else "local",
-    }
-    return config
-
-
-def _make_env(args: argparse.Namespace, on_log):
-    """Instantiate the execution environment via the central factory."""
-    from core.environment import create_environment
-
-    if args.ssh_host:
-        env = create_environment(
-            ssh=True,
-            host=args.ssh_host,
-            port=args.ssh_port,
-            username=args.ssh_user,
-            password=args.ssh_password,
-            key_path=args.ssh_key_path,
-            remote_cwd=None,
-            project_id=getattr(args, "project", {}).get("id") if hasattr(args, "project") else None,
-        )
-        on_log(f"[INIT] Target: SSH ({args.ssh_user}@{args.ssh_host})")
-        return env
-
-    env = create_environment(ssh=False)
-    on_log("[INIT] Target: Local")
-    return env
-
-
-def _apply_config_file_defaults(
-    args: argparse.Namespace,
-    file_cfg: dict[str, Any],
-    argv_used: list[str],
-) -> None:
-    """Apply config-file and environment-variable defaults.
-
-    Merge order (lowest to highest priority):
-      1. argparse built-in defaults
-      2. Config file  (~/.modelscope/cli.json)
-      3. Environment variables  MODELSCOPE_<DEST>  (e.g. MODELSCOPE_MODEL)
-      4. Explicit CLI flags (these are never overwritten)
-
-    Config file keys use the long-form flag names with underscores
-    (e.g. 'llm_url', 'context_size').  Environment variables follow
-    the same convention uppercased with a MODELSCOPE_ prefix
-    (e.g. MODELSCOPE_LLM_URL, MODELSCOPE_CONTEXT_SIZE).
-    """
-    # Build the set of dest names that were explicitly passed on the CLI
-    explicitly_set: set[str] = set()
-    for token in argv_used:
-        if token.startswith("--"):
-            flag = token.split("=")[0]           # strip =value if present
-            dest = flag.lstrip("-").replace("-", "_")
-            explicitly_set.add(dest)
-        elif token.startswith("-") and len(token) == 2:
-            # Short flag like -v
-            explicitly_set.add(token[1:])
-
-    # Tier 2: config file — apply only where CLI was silent
-    for key, value in file_cfg.items():
-        dest = key.replace("-", "_")
-        if not hasattr(args, dest):
-            continue
-        if dest not in explicitly_set:
-            setattr(args, dest, value)
-
-    # Tier 3: environment variables — apply only where CLI was silent.
-    # An env var overrides the config file but not an explicit CLI flag.
-    # Boolean flags (store_true) are set when the env var is "1", "true", or "yes".
-    for dest in vars(args):
-        if dest in explicitly_set:
-            continue  # CLI flag wins; skip
-        env_key = "MODELSCOPE_" + dest.upper()
-        raw = os.environ.get(env_key)
-        if raw is None:
-            continue
-        current = getattr(args, dest)
-        if isinstance(current, bool):
-            setattr(args, dest, raw.lower() in ("1", "true", "yes"))
-        elif isinstance(current, int):
-            try:
-                setattr(args, dest, int(raw))
-            except ValueError:
-                pass
-        elif isinstance(current, float):
-            try:
-                setattr(args, dest, float(raw))
-            except ValueError:
-                pass
-        else:
-            setattr(args, dest, raw)
-
 
 # ── Terminal summary table ────────────────────────────────────────────────────
 
@@ -807,85 +544,18 @@ def _cmd_project(args: argparse.Namespace) -> int:
         _print_run_summary(telemetry)
 
     session_log.close()
-    return 0
+
+    # Exit code carries the verdict so a project can be scripted, which is
+    # what `run` used to provide. Unlike `run` — which treated any falsy
+    # validation_passed as a failure — a project with no validation configured
+    # reports None and is not a failure; only an explicit False or an aborted
+    # run is.
+    if telemetry.get("run_aborted"):
+        return 1
+    return 1 if telemetry.get("validation_passed") is False else 0
 
 
 # ── `run` subcommand ──────────────────────────────────────────────────────────
-
-def _cmd_run(args: argparse.Namespace) -> int:
-    """Execute a single evaluation run."""
-    configure_logging(level=logging.DEBUG if args.verbose else logging.INFO)
-
-    # Attach colorizing formatter if terminal supports it
-    if _use_color():
-        logger = logging.getLogger("modelscope")
-        for handler in logger.handlers:
-            if getattr(handler, "_modelscope_handler", False):
-                original_fmt = handler.formatter
-                class _ColorFormatter(logging.Formatter):
-                    def format(self, record: logging.LogRecord) -> str:
-                        line = super().format(record)
-                        return _colorize_log_line(line)
-                color_fmt = _ColorFormatter(
-                    "%(asctime)s %(levelname)-7s [modelscope] %(message)s",
-                    datefmt="%H:%M:%S",
-                )
-                handler.setFormatter(color_fmt)
-                break
-
-    if not args.model:
-        print(_c("error: --model is required.", _RED), file=sys.stderr)
-        return 2
-
-    # Dry-run: print config and exit
-    if getattr(args, "dry_run", False):
-        config = _build_config(args)
-        safe_config = {
-            k: ("***REDACTED***"
-                if ("password" in k.lower() or "api_key" in k.lower() or "apikey" in k.lower())
-                else v)
-            for k, v in config.items()
-        }
-        # Also surface SSH connection params (they go to the env, not config dict)
-        if args.ssh_host:
-            safe_config["_ssh_params"] = {
-                "host":     args.ssh_host,
-                "port":     args.ssh_port,
-                "user":     args.ssh_user,
-                "password": "***REDACTED***" if args.ssh_password else None,
-                "key_path": args.ssh_key_path,
-            }
-        print(_c("Dry-run config (no evaluation will run):", _BOLD))
-        print(json.dumps(safe_config, indent=2, default=str))
-        return 0
-
-    session_log = SessionLog(base_dir=args.session_dir)
-
-    def _base_on_log(msg: str, *args, **kwargs) -> None:
-        session_log.log(msg)
-
-    on_log = logged_on_log(inner=_base_on_log)
-
-    config = _build_config(args)
-    env = _make_env(args, on_log)
-
-    try:
-        telemetry = run_evaluation(env, config, on_log)
-    finally:
-        if env is not None and hasattr(env, "close"):
-            env.close()
-
-    session_log.save_telemetry(telemetry)
-    session_log.save_config(config)
-    session_log.close()
-
-    _print_run_summary(telemetry)
-
-    if args.json:
-        print(json.dumps(telemetry, indent=2, default=str))
-
-    return 0 if telemetry.get("validation_passed") else 1
-
 
 # ── `batch` subcommand ────────────────────────────────────────────────────────
 
@@ -1163,119 +833,20 @@ def _cmd_sessions_show(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── `scenarios` subcommand ────────────────────────────────────────────────────
-
-def _cmd_scenarios(args: argparse.Namespace) -> int:
-    """List or describe scenarios (DEPRECATED)."""
-    print("Error: 'scenarios' command has been removed. The scenarios concept is no longer supported.")
-    print("Please configure evaluations directly using the Configuration tab.")
-    return 1
-
-
-# ── Argument dispatch + backward compat ──────────────────────────────────────
-
-def _maybe_inject_run_subcommand(argv: list[str]) -> list[str]:
-    """If no recognized subcommand is present, inject 'run' for backward compat.
-
-    Handles: cli.py --model qwen ...  => cli.py run --model qwen ...
-    Does not touch: cli.py -h/--help, cli.py run/batch/...
-
-    The walk correctly skips flag values (--model VALUE) so VALUE is not
-    mistaken for an unrecognized positional subcommand.
-    """
-    subcommands = {"run", "batch", "sessions"}
-    help_flags  = {"-h", "--help"}
-
-    # Flags that consume the next token as a value (so skip VALUE).
-    # These are the long-form run-subcommand flags that take arguments.
-    value_flags = {
-        "--model", "--backend", "--llm-url", "--context-size",
-        "--system-prompt", "--user-prompt", "--mcp-url",
-        "--ssh-host", "--ssh-port", "--ssh-user", "--ssh-password",
-        "--ssh-key-path", "--session-dir",
-        # short forms
-        "-v",
-    }
-
-    if not argv:
-        return argv
-
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-
-        # Passthrough for help / legacy flags
-        if arg in help_flags:
-            return argv
-
-        # Already has a recognized subcommand
-        if arg in subcommands:
-            return argv
-
-        if arg.startswith("-"):
-            # Flags that look like --flag=value embed value, skip entirely
-            if "=" in arg:
-                i += 1
-                continue
-            # Flags that consume the next token
-            if arg in value_flags:
-                i += 2  # skip flag and its value
-                continue
-            # Boolean/store_true flags (--json, --dry-run, --verbose, etc.)
-            i += 1
-            continue
-
-        # First bare positional that is NOT a known subcommand — let parser
-        # handle it naturally (will likely error or mean something).
-        return argv
-
-    # Reached the end: every token was a flag or its value.
-    # Looks like the old flat invocation style — inject 'run'.
-    run_indicators = {"--model", "--backend", "--llm-url",
-                      "--ssh-host", "--dry-run", "--json"}
-    if any(a.split("=")[0] in run_indicators for a in argv):
-        return ["run"] + list(argv)
-
-    return argv
-
+# ── Argument dispatch ─────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
 
-    # ── Legacy --list-scenarios flag removed - scenarios concept deleted ──────
-    if "--list-scenarios" in raw_argv:
-        print("Error: --list-scenarios has been removed.")
-        print("The scenarios concept is no longer supported.")
-        return 1
-
-    # ── Inject 'run' for backward compat ──────────────────────────────────────
-    raw_argv = _maybe_inject_run_subcommand(raw_argv)
-
     parser = _build_arg_parser()
     args = parser.parse_args(raw_argv)
-
-    # ── Config file + env-var defaults: apply before dispatch ────────────────
-    # Always call for the 'run' subcommand so that env-var defaults (tier 3)
-    # are applied even when there is no config file on disk.
-    file_cfg = _load_config_file()
-    if args.subcommand == "run":
-        _apply_config_file_defaults(args, file_cfg, raw_argv)
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if args.subcommand == "project":
         return _cmd_project(args)
 
-    if args.subcommand == "run":
-        return _cmd_run(args)
-
     elif args.subcommand == "batch":
         return _cmd_batch(args)
-
-    elif args.subcommand == "scenarios":
-        # --scenarios command removed - provide helpful error
-        print("Error: 'scenarios' command has been removed. The scenarios concept is no longer supported.")
-        print("Please configure evaluations directly using the Configuration tab.")
-        return 1
 
     elif args.subcommand == "sessions":
         action = getattr(args, "sessions_action", None)

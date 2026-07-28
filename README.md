@@ -141,22 +141,32 @@ node mcp-server/index.js   # listens on http://localhost:9191
 
 ### Path 2 — CLI single run
 
+Export a project from the UI (**Configuration → Export**), then run that file.
+`project` resolves the project's bot type through the plugin registry, so a CLI
+run does exactly what the Execute tab does — for every bot type, including
+CAF Standard and Llama-Server-ProxBatch.
+
 ```bash
 # Using python directly (no install required)
-python cli.py run --model qwen2.5 --backend ollama \
-    --scenario "Scenario 1 – File Creation"
+python cli.py project --file my_project.json
 
 # Using the installed entry point (after pip install -e .)
-modelscope run --model qwen2.5 --backend ollama \
-    --scenario "Scenario 1 – File Creation"
+modelscope project --file my_project.json
 
-# Dry run: print assembled config without executing
-modelscope run --model qwen2.5 --dry-run
-
-# With JSON telemetry output
-modelscope run --model qwen2.5 \
-    --scenario "Scenario 2 – Network Scan" --json
+# Dry run: print the assembled config (secrets redacted) without executing
+modelscope project --file my_project.json --dry-run
 ```
+
+Exported projects never contain credentials. Supply them per run, either as
+flags or through the matching environment variables:
+
+```bash
+MODELSCOPE_SSH_PASSWORD=... modelscope project --file my_project.json
+modelscope project --file my_project.json --ssh-key-path ~/.ssh/kali_vm
+```
+
+The exit code carries the verdict: `0` when validation passed or none was
+configured, `1` when validation failed or the run aborted.
 
 ### Path 3 — CLI batch
 
@@ -339,14 +349,9 @@ When `--ssh-host` is provided on the CLI (or the SSH target is configured in the
 ### CLI example
 
 ```bash
-modelscope run \
-    --ssh-host 10.0.0.100 \
-    --ssh-user kali \
-    --ssh-key-path ~/.ssh/kali_vm \
-    --ssh-caf-dir ~/cyber-agent-flow \
-    --backend ollama \
-    --llm-url http://10.0.0.100:11434 \
-    --model qwen2.5
+# Configure the SSH target and CAF directory in the project, export it, then:
+modelscope project --file caf_standard.json \
+    --ssh-key-path ~/.ssh/kali_vm
 ```
 
 ### GUI example
@@ -465,11 +470,16 @@ print(json.dumps(data, indent=2))
 
 Batch evaluation is available from the CLI.
 
+> **Note:** `batch` predates the bot-type plugins. It runs the generic evaluator
+> against a list of job specs and executes locally only, so it does not reproduce
+> what a bot type does — use `project` for that. Batch a set of bots by running
+> `project` once per exported file.
+
 The `--jobs-file` argument accepts a JSON array. Each object supports these fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `scenario` | yes | Scenario name exactly as shown by `modelscope scenarios` (also accepted as `scenario_key`) |
+| `scenario` | no | Free-form label recorded in the run's telemetry (also accepted as `scenario_key`; defaults to `"manual"`) |
 | `model` | yes | Model name or ID |
 | `backend` | no | `"llama.cpp"` or `"ollama"` (default: `"llama.cpp"`) |
 | `llm_url` | no | LLM server URL (defaults to the backend's standard local URL) |

@@ -16,11 +16,18 @@ Otherwise, if you are running it directly from the repository, be sure to use th
 
 You can export a bot's configuration from the ModelScope UI as a JSON file and run it entirely headlessly via the CLI. The CLI will automatically create the correct environment (Local, SSH, PCT) and run the evaluation logic.
 
-This is the headless entry point for **Bash-Bot**, **Llama-CLI-Bot**, and
-**Llama-Server-Bot** projects. Managed Llama-Server projects start the configured
-`llama-server` binary, wait for `/health`, collect its Prometheus metrics, and
-stop it when the evaluation completes. Each non-dry run writes `run.log`,
-`telemetry.json`, and a credential-sanitized `config.json` under `logs/sessions/`.
+`project` is the headless entry point for **every** bot type — Bash-Bot,
+Llama-CLI-Bot, Llama-Server-Bot, Llama-Server-ProxBatch, CAF Standard and
+CAF + llama.cpp. It reads the project's `type`, resolves that bot's plugin
+through the bot-type registry and hands the run to it, so a CLI run behaves
+exactly like the Execute tab.
+
+Managed Llama-Server projects start the configured `llama-server` binary, wait
+for `/health`, collect its Prometheus metrics, and stop it when the evaluation
+completes. ProxBatch projects run the workflow once per selected LXC and roll
+the per-container results up into one record. Each non-dry run writes
+`run.log`, `telemetry.json`, and a credential-sanitized `config.json` under
+`logs/sessions/`.
 
 | Flag | Description |
 |------|-------------|
@@ -36,34 +43,6 @@ stop it when the evaluation completes. Each non-dry run writes `run.log`,
 
 > **Note on Credentials:** Passwords (like SSH and OpenAI keys) are automatically stripped from the JSON when exported from the UI for security. You can either manually edit the JSON file, or pass them securely at runtime via the override flags above or their corresponding environment variables (e.g. `MODELSCOPE_SSH_PASSWORD`, `MODELSCOPE_LLM_HELPER_API_KEY`).
 > **If both a password and an SSH key path are provided, the SSH key is preferred.**
-
----
-
-## `run` — single evaluation
-
-```bash
-modelscope run [options]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--model MODEL` | _(none)_ | Model name or ID to pass to the backend |
-| `--backend {llama.cpp,ollama}` | `llama.cpp` | Inference backend |
-| `--llm-url URL` | backend default | LLM server URL (overrides backend default) |
-| `--context-size N` | `4096` | Context window size in tokens |
-| `--scenario NAME` | `"Scenario 1 – File Creation"` | Scenario name (see `modelscope scenarios`) |
-| `--system-prompt TEXT` | scenario default | Override the scenario's system prompt |
-| `--user-prompt TEXT` | scenario default | Override the scenario's user prompt |
-| `--mcp-url URL` | _(empty)_ | MCP tool server URL |
-| `--ssh-host HOST` | _(none)_ | Remote SSH host; enables remote SSH execution |
-| `--ssh-port PORT` | `22` | Remote SSH port |
-| `--ssh-user USER` | `root` | Remote SSH username |
-| `--ssh-password PASS` | _(none)_ | Remote SSH password |
-| `--ssh-key-path PATH` | _(none)_ | Path to SSH private key file |
-| `--json` | off | Print full telemetry dict as JSON on completion |
-| `-v`, `--verbose` | off | Enable DEBUG-level logging |
-| `--dry-run` | off | Print assembled config (redacting password) and exit |
-| `--session-dir PATH` | `logs/sessions/` | Override root directory for session logs |
 
 ---
 
@@ -99,51 +78,13 @@ modelscope sessions show SESSION [--sessions-dir PATH]
 
 ---
 
-## `scenarios` — list and inspect scenarios
-
-```bash
-modelscope scenarios [--describe NAME]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--describe NAME` | Print the full config for the named scenario |
-
----
-
-## Legacy flags (backward compatible)
-
-```bash
-modelscope --list-scenarios          # same as: modelscope scenarios
-modelscope --model qwen2.5 ...       # auto-inserts 'run' subcommand
-```
-
----
-
-## Config file overrides
-
-Persistent defaults can be set in `~/.modelscope/cli.json`. Keys use the long-form flag names with underscores.
-
-```json
-{
-  "backend": "ollama",
-  "llm_url": "http://localhost:11434",
-  "context_size": 8192
-}
-```
-
-If `cli.json` is absent and `pyyaml` is installed, `~/.modelscope/cli.yaml` is tried instead.
-
-**Merge order (lowest to highest priority):**
-
-1. argparse built-in defaults
-2. `~/.modelscope/cli.json`
-3. Environment variables: `MODELSCOPE_<DEST>` (e.g. `MODELSCOPE_MODEL`, `MODELSCOPE_LLM_URL`, `MODELSCOPE_SSH_PASSWORD`)
-4. Explicit CLI flags
-
 ## Exit codes
+
+Returned by `project`, so a run can gate a script or a CI step.
 
 | Code | Meaning |
 |------|---------|
-| `0` | Evaluation passed (validation command succeeded) |
-| `1` | Evaluation failed or validation returned non-zero |
+| `0` | Validation passed, or the project configures no validation |
+| `1` | Validation failed, or the run was aborted |
+| `2` | Bad arguments (argparse) |
+| `130` | Interrupted with Ctrl+C |

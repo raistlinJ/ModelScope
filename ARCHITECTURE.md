@@ -75,7 +75,7 @@ widgets and presentation only — they call into `core/` for any actual work.
 ## Data flow: how a run happens
 
 ```
-  UI Execute tab / cli.py run
+  UI Execute tab / cli.py project
         │  builds a `config` dict (prompts, backend, validation, CAF settings)
         │  builds an environment via core.environment.create_environment(...)
         ▼

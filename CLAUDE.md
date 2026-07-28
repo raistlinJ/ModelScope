@@ -11,9 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running the Application
 - **Launch Streamlit GUI:** `streamlit run app.py`
-- **CLI Single Run:** `python cli.py run --model <model> --backend <backend> --scenario "<scenario_name>"`
+- **CLI Single Run:** `python cli.py project --file <exported_project.json>`
 - **CLI Batch Run:** `modelscope batch --jobs-file jobs.json`
-- **List Scenarios:** `modelscope scenarios`
 - **Browse Sessions:** `modelscope sessions list`
 
 ### Testing
