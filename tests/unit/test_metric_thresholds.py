@@ -40,24 +40,46 @@ def test_threshold_bands_follow_configured_comparisons():
     # Lower is better: hard_fail 100, soft_fail 75, soft_pass 50, hard_pass 25.
     cases = (
         (100, "hard_fail"),     # >= hard_fail
-        (76, "soft_fail"),      # > soft_fail
+        (99, "soft_fail"),
+        (76, "soft_fail"),
+        (75, "soft_fail"),      # >= soft_fail: sitting on the bar is a fail
         (50, "soft_pass"),      # <= soft_pass
         (26, "soft_pass"),      # still within the soft-pass band
         (25, "hard_pass"),      # <= hard_pass wins over soft_pass
+        (24, "hard_pass"),
     )
     for value, expected in cases:
         result = _by_metric(assess_token_thresholds({"total_tokens": value}, _thresholds()))
         assert result["total_tokens"]["level"] == expected, value
 
 
+def test_a_value_on_a_threshold_lands_in_that_threshold_s_band():
+    """Every comparison is inclusive, in both directions.
+
+    Naming a number as the soft-fail bar and then scoring exactly it should
+    read as a soft fail, not as an unclassified near-miss.
+    """
+    lower = _thresholds()
+    higher = {"total_tokens": {
+        "direction": "higher", "hard_fail": 25, "soft_fail": 50,
+        "soft_pass": 75, "hard_pass": 100,
+    }}
+    for thresholds, expected in ((lower, {100: "hard_fail", 75: "soft_fail",
+                                          50: "soft_pass", 25: "hard_pass"}),
+                                 (higher, {25: "hard_fail", 50: "soft_fail",
+                                           75: "soft_pass", 100: "hard_pass"})):
+        for value, level in expected.items():
+            result = _by_metric(assess_metric_thresholds({"total_tokens": value}, thresholds))
+            assert result["total_tokens"]["level"] == level, (value, thresholds)
+
+
 def test_values_between_the_pass_and_fail_bands_are_unclassified():
     """Four independent thresholds leave a neutral zone in the middle.
 
-    Note the boundary asymmetry: hard_fail matches with >= but soft_fail with
-    >, so a value equal to the soft_fail threshold lands in this zone rather
-    than in soft_fail.
+    Nothing is configured for the span between soft_pass and soft_fail, so a
+    run landing there has no verdict to report.
     """
-    for value in (51, 74, 75):
+    for value in (51, 74):
         result = _by_metric(assess_token_thresholds({"total_tokens": value}, _thresholds()))
         assert result["total_tokens"]["level"] == "unclassified", value
 
@@ -75,8 +97,9 @@ def test_higher_is_better_threshold_bands_reverse_the_comparisons():
 
     cases = (
         (25, "hard_fail"),       # <= hard_fail
-        (49, "soft_fail"),       # < soft_fail
-        (50, "unclassified"),    # neutral zone between the bands
+        (49, "soft_fail"),       # <= soft_fail
+        (50, "soft_fail"),       # sitting on the bar is still a fail
+        (51, "unclassified"),    # neutral zone between the bands
         (75, "soft_pass"),       # >= soft_pass
         (99, "soft_pass"),
         (100, "hard_pass"),      # >= hard_pass wins over soft_pass
