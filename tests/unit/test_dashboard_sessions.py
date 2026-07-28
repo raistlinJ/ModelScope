@@ -144,7 +144,7 @@ class TestValidationOutputHighlighting:
 
 class TestCafTranscriptSections:
     def test_keeps_every_assistant_turn_and_deduplicates_tool_result(self):
-        from ui.dashboard_tab import _caf_transcript_sections
+        from plugins.bot_types.caf_cli_run import _caf_transcript_sections
 
         responses, tool_output, turns = _caf_transcript_sections([
             {"type": "response", "text": "I will inspect the target."},

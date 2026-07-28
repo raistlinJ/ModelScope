@@ -359,17 +359,11 @@ def sync_project(project_id: str) -> None:
         for state_key, cfg_key in plugin.state_key_map.items():
             if cfg_key in cfg:
                 value = cfg[cfg_key]
-                # CAF's corrected connection/cache defaults apply to missing
-                # and blank fields, while every other plugin retains its
-                # existing hydration semantics.
-                use_caf_fallback = (
-                    bot_type in {"caf_cli_run_bot", "caf_llama_bot"}
-                    and cfg_key in {
-                        "ssh_port", "caf_cli_directory",
-                        "caf_cli_tools_config", "model_dir",
-                    }
-                )
-                if use_caf_fallback and (
+                # Some plugins correct connection/cache defaults for missing
+                # and blank fields; every other key retains the existing
+                # hydration semantics.
+                use_fallback = cfg_key in plugin.blank_hydration_fallback_keys
+                if use_fallback and (
                     value is None or (isinstance(value, str) and not value.strip())
                 ):
                     fallback = plugin.session_defaults.get(state_key)

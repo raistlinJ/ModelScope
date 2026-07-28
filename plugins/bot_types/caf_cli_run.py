@@ -2643,6 +2643,41 @@ def _collect_remote_job_output(config: dict[str, Any], shared: dict[str, Any], j
             env.close()
 
 
+def _caf_transcript_sections(events: object) -> tuple[str, str, int]:
+    """Format durable CAF events for the dashboard's two transcript panes."""
+    if not isinstance(events, list):
+        return "", "", 0
+    responses: list[str] = []
+    tool_output: list[str] = []
+    seen_results: set[tuple[str, str]] = set()
+    turn = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "")
+        if event_type == "response":
+            text = str(event.get("text") or event.get("content") or "").strip()
+            if text:
+                turn += 1
+                responses.append(f"Assistant — turn {turn}\n{text}")
+        elif event_type == "error":
+            message = str(event.get("message") or "CAF reported an unknown error.").strip()
+            if message:
+                responses.append(f"CAF error\n{message}")
+        elif event_type == "tool_result":
+            tool = str(event.get("tool") or "tool")
+            result = str(event.get("result") or event.get("output") or "").strip()
+            fingerprint = (tool, result)
+            if not result or fingerprint in seen_results:
+                continue
+            seen_results.add(fingerprint)
+            exit_code = event.get("exit_code", "?")
+            duration = event.get("duration_ms")
+            suffix = f" · {duration} ms" if duration is not None else ""
+            tool_output.append(f"[{tool}] exit={exit_code}{suffix}\n{result}")
+    return "\n\n".join(responses), "\n\n".join(tool_output), turn
+
+
 class CafCliRunPlugin(BotTypePlugin):
     """Run CAF validation prompts locally or over a standard SSH shell."""
 
@@ -2655,6 +2690,11 @@ class CafCliRunPlugin(BotTypePlugin):
     owned_prefixes = ("caf_cli_val_", "_caf_cli_val_", "caf_cli_tool_en_", "caf_cli_llm_helper_", "caf_cli_is_fetching_", "_caf_cli_run_bot_metric_threshold_", "_sc_caf_cli_")
     metric_specs = COMMON_DASHBOARD_METRIC_SPECS
     dashboard_metrics_key = "caf_cli_metrics_matrix"
+    # A stored blank here means "never configured", not "deliberately
+    # empty", so hydration falls back to the corrected default.
+    blank_hydration_fallback_keys = frozenset({
+        "ssh_port", "caf_cli_directory", "caf_cli_tools_config", "model_dir",
+    })
 
     def render_dashboard(self, project: dict[str, Any]) -> None:
         from ui.dashboard_tab import _render_llama_cli_dashboard
@@ -2662,6 +2702,35 @@ class CafCliRunPlugin(BotTypePlugin):
         _render_llama_cli_dashboard(
             project, bot_type=self.type_id, metrics_key=self.dashboard_metrics_key,
         )
+
+    def render_run_transcript(self, project, telemetry, run_token: str) -> bool:
+        """Durable CAF jobs keep every assistant turn and tool artifact.
+
+        The shared dashboard's per-prompt summary is intentionally aggregated,
+        so this replaces it whenever a transcript was actually recorded.
+        """
+        import streamlit as st
+        from ui.dashboard_tab import _render_scrollable_output
+
+        responses, tool_output, turns = _caf_transcript_sections(
+            telemetry.get("caf_transcript_events")
+        )
+        if not (responses or tool_output):
+            return False
+        pid = project["id"]
+        st.subheader(f"CAF Transcript  ({turns} assistant turn{'s' if turns != 1 else ''})")
+        response_col, tool_col = st.columns(2)
+        with response_col:
+            _render_scrollable_output(
+                "Assistant Responses", responses,
+                key=f"caf_transcript_responses_{pid}_{run_token}", height=420,
+            )
+        with tool_col:
+            _render_scrollable_output(
+                "Tool Output", tool_output,
+                key=f"caf_transcript_tools_{pid}_{run_token}", height=420,
+            )
+        return True
 
     def default_config(self, template_key: str = "blank") -> dict[str, Any]:
         return {

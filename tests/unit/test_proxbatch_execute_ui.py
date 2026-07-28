@@ -6,19 +6,11 @@ dialog through a recording double — enough to catch a broken layout call or a
 mis-keyed widget without a browser.
 """
 
-import sys
-
 import pytest
 
+import plugins.bot_types.llama_server_proxbatch_bot as proxbatch
 from core.batch_progress import observe_log, start_container
-from core.bot_types import get_bot_plugin
-
-# The ProxBatch panels live in the plugin. The registry loads plugin files
-# under a synthetic module name, so bind to the module it actually registered —
-# importing plugins.bot_types.* directly would give a second copy that the app
-# never calls.
-proxbatch = sys.modules[type(get_bot_plugin("llama_server_proxbatch_bot")).__module__]
-new_batch_state = proxbatch.new_batch_state
+from plugins.bot_types.llama_server_proxbatch_bot import new_batch_state
 
 
 class _Recorder:

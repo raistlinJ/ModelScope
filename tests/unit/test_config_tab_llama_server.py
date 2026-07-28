@@ -9,31 +9,17 @@ Unit tests for the Llama-Server-Bot pieces of ui.config_tab:
 All process/network calls are mocked — no real llama-server binary or port
 is touched.
 """
-import sys
 import streamlit as st
 from unittest.mock import MagicMock, patch
 
-from core.bot_types import get_bot_plugin
+from plugins.bot_types.llama_server_proxbatch_bot import (
+    render_template_selector as _render_proxbatch_template_selector,
+    scan_lxc_containers as _scan_proxbatch_lxc_containers,
+)
 
 # The ProxBatch bot owns its own rendering, so its Streamlit calls are patched
-# on the plugin module rather than on ui.config_tab. The registry loads plugin
-# files under a synthetic (but path-stable) module name; importing
-# plugins.bot_types.* directly would give a second copy that the app never
-# calls. refresh_bot_plugins() re-executes the file and replaces the module
-# object, so resolve it per call rather than binding it once at import.
-_PROXBATCH_ST = f"{type(get_bot_plugin('llama_server_proxbatch_bot')).__module__}.st"
-
-
-def _proxbatch_mod():
-    return sys.modules[type(get_bot_plugin("llama_server_proxbatch_bot")).__module__]
-
-
-def _render_proxbatch_template_selector(*args, **kwargs):
-    return _proxbatch_mod().render_template_selector(*args, **kwargs)
-
-
-def _scan_proxbatch_lxc_containers(*args, **kwargs):
-    return _proxbatch_mod().scan_lxc_containers(*args, **kwargs)
+# on the plugin module rather than on ui.config_tab.
+_PROXBATCH_ST = "plugins.bot_types.llama_server_proxbatch_bot.st"
 from ui.config_tab import (
     _state_prefix_from_test_result_key,
     _flush_llama_server_config,

@@ -240,6 +240,20 @@ class BotTypePlugin:
         """
         return False
 
+    def render_run_transcript(
+        self, project: dict[str, Any], telemetry: Mapping[str, Any], run_token: str,
+    ) -> bool:
+        """Draw a conversation transcript for one run on the dashboard.
+
+        True when rendered, which also suppresses the generic per-prompt
+        summary the shared dashboard would otherwise show.
+        """
+        return False
+
+    # Config keys whose stored blank/None value should fall back to this
+    # plugin's session default rather than hydrating as blank.
+    blank_hydration_fallback_keys: frozenset[str] = frozenset()
+
     def flush_mapped_config(
         self, project: dict[str, Any], session_state: Mapping[str, Any] | None = None
     ) -> None:
