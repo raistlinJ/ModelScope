@@ -990,6 +990,17 @@ code {
     color: var(--tooltip-icon) !important;
 }
 
+/* The actual tooltip popup portal containing the text.
+   This portal is rendered outside .stApp, so it escapes general colour rules. */
+[data-testid="stTooltipContent"],
+[data-baseweb="tooltip"] {
+    background-color: var(--tooltip-bg) !important;
+    color: var(--tooltip-icon) !important;
+}
+[data-testid="stTooltipContent"] * {
+    color: var(--tooltip-icon) !important;
+}
+
 /* Current Streamlit input shells, including controls rendered in portals. */
 [data-testid="stTextInput"] [data-baseweb="input"],
 [data-testid="stNumberInput"] [data-baseweb="input"],
