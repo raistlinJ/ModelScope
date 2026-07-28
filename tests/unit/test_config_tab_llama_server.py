@@ -103,14 +103,37 @@ class TestProxBatchLxcScan:
 
         containers, error = _scan_proxbatch_lxc_containers()
 
-        mock_run.assert_called_once_with(
-            ["pct", "list"], capture_output=True, text=True, timeout=15, check=False,
-        )
+        issued = [call.args[0] for call in mock_run.call_args_list]
+        # The inventory comes from `pct list`; each row is then probed with
+        # `pct config` because a template cannot be a batch target.
+        assert issued[0] == ["pct", "list"]
+        assert issued[1:] == [["pct", "config", "100"], ["pct", "config", "101"]]
         assert error == ""
         assert containers == [
             {"vmid": "100", "status": "running", "name": "api"},
             {"vmid": "101", "status": "stopped", "name": "worker one"},
         ]
+
+    @patch("subprocess.run")
+    def test_marks_containers_their_config_reports_as_templates(self, mock_run):
+        def fake_run(argv, **kwargs):
+            if argv[:2] == ["pct", "list"]:
+                return MagicMock(returncode=0, stderr="", stdout=(
+                    "VMID       Status     Lock         Name\n"
+                    "100        running                 api\n"
+                    "101        stopped                 golden\n"
+                ))
+            return MagicMock(returncode=0, stderr="",
+                             stdout="template: 1\n" if argv[2] == "101" else "cores: 2\n")
+
+        mock_run.side_effect = fake_run
+
+        containers, error = _scan_proxbatch_lxc_containers()
+
+        assert error == ""
+        assert {c["vmid"]: c["status"] for c in containers} == {
+            "100": "running", "101": "template",
+        }
 
 
 # ── _flush_llama_server_config ────────────────────────────────────────────────

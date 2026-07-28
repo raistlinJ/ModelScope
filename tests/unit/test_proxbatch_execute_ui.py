@@ -1,9 +1,9 @@
 """Render tests for the Llama-Server-ProxBatch execute panels.
 
 The suite runs against a stub Streamlit (see tests/conftest.py), so these
-exercise the target listing, the per-container progress cards and the details
-dialog through a recording double — enough to catch a broken layout call or a
-mis-keyed widget without a browser.
+exercise the target listing, the per-container progress cards and the focused
+container's log streams through a recording double — enough to catch a broken
+layout call or a mis-keyed widget without a browser.
 """
 
 import pytest
@@ -159,8 +159,10 @@ def test_progress_cards_show_percent_phase_and_current_step(page):
     assert "↳ echo start" in body
     assert page.progress_calls[0] == (0.5, "50% — Running")
     assert page.progress_calls[1] == (0.0, "0% — Not started")
+    # Every card offers log focus; a running container also offers a stop.
     assert page.button_keys == [
         "llama_server_proxbatch_exec_detail_100",
+        "llama_server_proxbatch_exec_stop_100",
         "llama_server_proxbatch_exec_detail_101",
     ]
 
@@ -201,37 +203,59 @@ def test_progress_falls_back_to_saved_telemetry_after_a_restart(page):
     assert any("1 of 1 finished" in line for line in page.text)
 
 
-# ── Details dialog ────────────────────────────────────────────────────────────
+# ── Focused container logs ────────────────────────────────────────────────────
+#
+# Selecting a container used to open a modal; it now filters the shared
+# terminals instead, so _render_progress hands back the focused container's
+# own log streams.
 
-def test_details_dialog_shows_that_container_s_own_logs(page):
+def test_focused_container_supplies_its_own_logs(page):
     project = _project()
     batch = _seed_batch(page, project)
     state = batch["containers"]["100"]
     state["logs_setup"].append({"text": "[STARTUP] echo start", "tag": "cmd"})
-    state["telemetry"] = {"total_latency": 4.25}
+    batch["containers"]["101"]["logs_setup"].append({"text": "[STARTUP] other", "tag": "cmd"})
     start_container(state)
+    page.session_state[proxbatch.DETAIL_KEY] = "100"
 
-    proxbatch._render_detail_dialog(project, "100")
+    setup_logs, validation_logs = proxbatch._render_progress(project)
 
-    body = "\n".join(page.text)
-    assert "VMID 100 · kali-one" in body
-    assert "Latency: 4.25s" in body
-    assert "echo start" in body
-    assert page.tabs_drawn == ["Setup/Cleanup Log", "Validation Log"]
+    assert [entry["text"] for entry in setup_logs] == ["[STARTUP] echo start"]
+    assert validation_logs == []
 
 
-def test_details_dialog_explains_when_logs_were_not_retained(page):
+def test_focus_defaults_to_the_first_container_when_none_is_chosen(page):
+    project = _project()
+    batch = _seed_batch(page, project)
+    batch["containers"]["100"]["logs_setup"].append({"text": "first", "tag": "cmd"})
+    page.session_state.pop(proxbatch.DETAIL_KEY, None)
+
+    setup_logs, _ = proxbatch._render_progress(project)
+
+    assert [entry["text"] for entry in setup_logs] == ["first"]
+
+
+def test_focus_on_an_unknown_container_falls_back_instead_of_failing(page):
+    project = _project()
+    batch = _seed_batch(page, project)
+    batch["containers"]["100"]["logs_setup"].append({"text": "first", "tag": "cmd"})
+    page.session_state[proxbatch.DETAIL_KEY] = "999"
+
+    # A stale selection (its run was cleared) must not blank the panel.
+    result = proxbatch._render_progress(project)
+
+    assert result is None or result[0] == []
+
+
+def test_logs_are_not_retained_after_a_restart(page):
+    """Saved telemetry keeps each container's status but not its log lines."""
     project = _project()
     page.session_state["telemetry"] = {
         "batch_containers": [{"vmid": "100", "state": "passed", "percent": 100}],
     }
+    page.session_state[proxbatch.DETAIL_KEY] = "100"
 
-    proxbatch._render_detail_dialog(project, "100")
+    setup_logs, validation_logs = proxbatch._render_progress(project)
 
-    assert any("no longer in memory" in line for line in page.text)
-
-
-def test_details_dialog_handles_an_unknown_container(page):
-    proxbatch._render_detail_dialog(_project(), "999")
-
-    assert any("No run details recorded for VMID 999" in line for line in page.text)
+    assert setup_logs == []
+    assert validation_logs == []

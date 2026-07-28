@@ -492,7 +492,9 @@ def _step_commands_preview(commands: list, max_len: int = 35) -> str:
             text = cmd.strip()
         elif isinstance(cmd, dict) and cmd.get("type", "command") == "prompt":
             text = (cmd.get("user_prompt") or cmd.get("system_prompt") or "").strip()
-            text = f"Prompt: {text}" if text else "Prompt"
+            # "LLM Judge" is what this step is called everywhere else it is
+            # shown — the add button, the step header, the Execute preview.
+            text = f"LLM Judge: {text}" if text else "LLM Judge"
         elif isinstance(cmd, dict):
             text = cmd.get("command", "").strip()
         else:

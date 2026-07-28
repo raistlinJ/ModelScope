@@ -32,9 +32,10 @@ class TestQuoteRemotePath:
 
     def test_tilde_prefixed_path_lets_shell_expand_home(self):
         result = _quote_remote_path("~/models/m.gguf")
-        assert result.startswith('"$HOME/"')
+        # The ~ is left bare so the remote shell expands it; only the rest of
+        # the path is quoted. Quoting the ~ too would defeat the expansion.
+        assert result.startswith("~/")
         assert "models/m.gguf" in result
-        assert not result.startswith("~")  # a literal ~ would NOT expand once quoted
 
 
 def _fake_env(execute_results, host="example.com"):
@@ -195,7 +196,8 @@ class TestStartRemoteManagedMCPServer:
             )
         try:
             launch_cmd = env.execute.call_args_list[0].args[0]
-            assert "$HOME" in launch_cmd
+            # Unquoted ~/ so the remote shell resolves it to the SSH user's home.
+            assert "-m ~/models/m.gguf" in launch_cmd
         finally:
             handle.kill()
 
