@@ -4,6 +4,9 @@ from core.bot_types import get_bot_plugin
 from ui.terminal import render_terminal
 from ui.config_tab import _flush_bash_config, _flush_llama_cli_config, _flush_llama_server_config
 
+_ACTIVE_RUNS: dict[str, dict] = {}
+_ACTIVE_THREADS: dict[str, threading.Thread] = {}
+
 
 _LOG_TAG_MAP = {
     "[INIT]":         "init",
@@ -978,6 +981,13 @@ def _render_llama_cli_execute(
     # details remain read-only in the configured validation summary above.
     flush_fn(project)
 
+    # ── Restore Orphaned Runs on Page Refresh ──
+    project_id = project.get("id")
+    if project_id in _ACTIVE_RUNS and "_run_shared" not in st.session_state:
+        st.session_state["_run_shared"] = _ACTIVE_RUNS[project_id]
+        st.session_state["_run_thread"] = _ACTIVE_THREADS.get(project_id)
+        st.session_state["_run_in_progress"] = True
+
     # Run / Cancel / Clear buttons
     run_in_progress = st.session_state.get("_run_in_progress", False)
     if allow_concurrency:
@@ -1081,6 +1091,12 @@ def _render_llama_cli_execute(
         thread = threading.Thread(target=_run_llama_cli_bot, args=(project, shared_state, bot_type), daemon=True)
         thread.start()
         st.session_state["_run_thread"] = thread
+        
+        project_id = project.get("id")
+        if project_id:
+            _ACTIVE_RUNS[project_id] = shared_state
+            _ACTIVE_THREADS[project_id] = thread
+            
         st.rerun()
 
     # Polling: if a run is in progress, refresh the UI periodically without flickering
@@ -1114,6 +1130,11 @@ def _render_llama_cli_execute(
             # Thread finished — ensure state is clean
             st.session_state["_run_in_progress"] = False
             st.session_state.pop("_run_thread", None)
+            
+            project_id = project.get("id")
+            if project_id:
+                _ACTIVE_RUNS.pop(project_id, None)
+                _ACTIVE_THREADS.pop(project_id, None)
             
             # Save telemetry to history if completed
             if shared.get("completed"):
