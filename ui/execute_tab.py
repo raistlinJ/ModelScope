@@ -1370,8 +1370,13 @@ def _render_proxbatch_progress(project: dict) -> tuple[list, list] | None:
                                 st.rerun()
                         else:
                             run_in_progress = st.session_state.get("_run_in_progress", False)
-                            if st.button("🔄", key=f"{_PROXBATCH_EXEC_PREFIX}_retry_{vmid}", help="Retry container", use_container_width=True, disabled=run_in_progress):
-                                st.session_state["_retry_vmid"] = vmid
+                            if st.button("🔄", key=f"{_PROXBATCH_EXEC_PREFIX}_retry_{vmid}", help="Retry container", use_container_width=True):
+                                if run_in_progress:
+                                    from core.batch_progress import new_container_state
+                                    state.clear()
+                                    state.update(new_container_state(vmid))
+                                else:
+                                    st.session_state["_retry_vmid"] = vmid
                                 st.rerun()
                 else:
                     if st.button(

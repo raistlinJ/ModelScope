@@ -160,27 +160,59 @@ def run_pct_batch(
     import concurrent.futures
 
     if max_workers <= 1:
-        for index, (vmid, state) in enumerate(containers.items(), start=1):
-            if state.get("state") not in ("pending", ""):
-                continue
-            res = _run_task(vmid, state, index)
-            if res is not None:
-                batch_results.append(res)
+        _idx = 1
+        while True:
+            did_work = False
+            for vmid, state in list(containers.items()):
+                if state.get("state") in ("pending", ""):
+                    if is_cancelled() or state.get("cancel_requested"):
+                        batch_progress.skip_container(state)
+                        continue
+                        
+                    state["state"] = "starting"
+                    state["cancel_requested"] = False
+                    res = _run_task(vmid, state, _idx)
+                    if res is not None:
+                        batch_results.append(res)
+                    did_work = True
+                    _idx += 1
+            if not did_work:
+                break
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for index, (vmid, state) in enumerate(containers.items(), start=1):
-                if state.get("state") not in ("pending", ""):
-                    continue
-                if is_cancelled() or state.get("cancel_requested"):
-                    batch_progress.skip_container(state)
-                    continue
-                futures.append(executor.submit(_run_task, vmid, state, index))
-
-            for future in concurrent.futures.as_completed(futures):
-                res = future.result()
-                if res is not None:
-                    batch_results.append(res)
+            running_futures = {}
+            _idx = 1
+            
+            while True:
+                # Add any newly pending containers to the executor
+                for vmid, state in containers.items():
+                    if state.get("state") in ("pending", ""):
+                        if is_cancelled() or state.get("cancel_requested"):
+                            batch_progress.skip_container(state)
+                            continue
+                            
+                        future = executor.submit(_run_task, vmid, state, _idx)
+                        running_futures[future] = vmid
+                        # Prevent resubmitting the same pending container
+                        state["state"] = "starting"
+                        state["cancel_requested"] = False
+                        _idx += 1
+                        
+                if not running_futures:
+                    break
+                    
+                # Wait for at least one future to complete, then loop back
+                done, not_done = concurrent.futures.wait(
+                    running_futures.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                    timeout=1.0
+                )
+                
+                for future in done:
+                    vmid = running_futures.pop(future)
+                    res = future.result()
+                    if res is not None:
+                        batch_results.append(res)
 
     return aggregate_batch_telemetry(
         containers, batch_results, cancelled=is_cancelled(), bot_type=bot_type,
