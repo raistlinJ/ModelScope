@@ -14,7 +14,7 @@ from ui.components import bot_status_bar_pills, status_pill
 from ui.styles import inject
 from ui.theme import current_theme
 from ui import config_tab, execute_tab, dashboard_tab
-# from ui import caf_tab, target_tab  # CAF/Target tabs hidden — re-enable when CAF bot type is implemented
+# from ui import caf_tab, target_tab  # parked — superseded by the CAF bot-type plugins
 
 
 def _source_revision() -> int:
@@ -474,7 +474,8 @@ else:
         st.markdown(f'<div class="model-status-bar">{_pills}</div>', unsafe_allow_html=True)
 
 # ── Tabs — conditioned on active bot type ─────────────────────────────────────
-# Removed tabs (CAF & Target hidden — re-enable when those bot types are implemented):
+# Parked tabs. CAF is now a bot type (CAF Standard / CAF + llama.cpp) configured
+# per project, so these standalone tabs are superseded rather than pending:
 # tab_target = "🎯  Target"      → target_tab.render()
 # tab_caf    = "🤖  CyberAgentFlow" → caf_tab.render()
 

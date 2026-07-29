@@ -25,7 +25,7 @@ ModelScope is a research-grade evaluation framework for LLM-powered autonomous a
 
 ### High-Level Structure
 - **Frontends:**
-    - `app.py`: Streamlit GUI with 7 tabs for configuration, execution, and analysis.
+    - `app.py`: Streamlit GUI with three tabs — Configuration, Execute, Analytical Dashboard.
     - `cli.py`: Command-line interface for headless project runs and session management.
 - **Core Logic (`core/`):**
     - `evaluator.py`: Manages the local LLM agent loop (prompt $\rightarrow$ tool call $\rightarrow$ telemetry).

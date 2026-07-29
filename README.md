@@ -503,9 +503,13 @@ The **Platform Verification** subtab in the GUI Configuration tab provides a vis
 ### Adding a metric
 
 1. Open `config/metrics.py`.
-2. Add a new entry to the `METRIC_TYPES` dict with `label`, `category`, `description`, and `params`.
-3. Add evaluation logic to `evaluate_metric()` — match on `metric["type"]` and return `True`, `False`, or `None`.
-4. Reference the new metric type in a scenario's `default_metrics` using `make_metric(id, name, type_key, enabled=True, **params)`.
+2. Add an entry to the `METRIC_TYPES` dict with `label`, `category`, `description` and `params`.
+3. Write `_eval_<name>(params, telemetry) -> bool | None`.
+4. Register it in the `_EVALUATORS` dispatch table. `evaluate_metric()` looks the
+   type up there, so no dispatch code changes.
+
+The metric is then selectable per project in the Configuration tab's Metrics
+Config sub-tab.
 
 ---
 
@@ -513,70 +517,22 @@ The **Platform Verification** subtab in the GUI Configuration tab provides a vis
 
 ```
 ModelScope/
-├── app.py                     # Streamlit entry point; 7-tab layout; loads settings on start
-├── cli.py                     # CLI entry point; subcommands: project, sessions
-├── requirements.txt           # Runtime Python dependencies (3 packages)
-├── pyproject.toml             # Package metadata; version 2.0.0; entry point: modelscope = "cli:main"
-├── pytest.ini                 # pytest configuration
-│
-├── config/
-│   ├── __init__.py
-│   ├── defaults.py            # All URLs, binary paths, context limits, external presets
-│   ├── metrics.py             # METRIC_TYPES registry (45 types), make_metric(),
-│   │                          #   evaluate_metric(), MCPMetricPresets (5 presets)
-│
-├── core/
-│   ├── __init__.py
-│   ├── evaluator.py           # run_evaluation(); local LLM agent loop (max 8 rounds);
-│   │                          #   tool call parsing (native JSON + <tool_call> fallback);
-│   ├── environment.py         # BaseEnvironment (ABC); LocalEnvironment (subprocess);
-│   │                          #   SSHEnvironment (paramiko + SFTP; execute_streaming; cancel())
-│   ├── session_log.py         # SessionLog; lazy dir creation; strips sensitive keys before write
-│   ├── mcp_manager.py         # start_mcp(); stop_mcp(); load_tools_from_json()
-│   ├── llama_server.py        # llama-server process management; GGUF model scanning
-│   ├── models.py              # Ollama model discovery
-│   ├── preflight.py           # Two-layer pre-flight validation
-│   ├── state.py               # Streamlit session state initialization (60+ keys)
-│   ├── streaming.py           # llama.cpp and Ollama streaming adapters
-│   ├── test_runner.py         # pytest subprocess wrapper with structured output
-│   ├── logsetup.py            # configure_logging(); logged_on_log()
-│   ├── utils.py               # strip_ansi() and shared utilities
-│   └── settings_store.py      # Load/save ~/.modelscope/settings.json
-│
-├── ui/
-│   ├── config_tab.py          # Configuration tab: Model Setup, Scenario, Metrics, AI Judge,
-│   │                          #   Platform Verification, MCP server controls
-│   ├── target_tab.py          # Target tab: execution target (Local / SSH credential fields)
-│   ├── execute_tab.py         # Execute tab: run orchestration and live terminal output
-│   ├── dashboard_tab.py       # Analytical Dashboard: metric badges, tool traces, response
-│   ├── workflow_config.py     # Per-scenario-type config panels; MCP preset/schema registry UI
-│   ├── preflight_tab.py       # Pre-flight check UI
-│   ├── test_suite_tab.py      # Test suite visual dashboard
-│   ├── components.py          # Shared UI primitives (badges, pills, color map)
-│   └── styles.py              # Global CSS (dark amber/copper theme)
-│
-├── mcp-server/
-│   ├── index.js               # MCP HTTP server; SSE transport; default port 9191
-│   ├── tools.js               # Tool handler implementations
-│   ├── tools.json             # OpenAI-compatible tool schemas (auto-discovered at startup)
-│   ├── tools.py               # Python tool wrappers
-│   └── mcp_nmap_server.py     # Nmap-specific MCP server
-│
-├── tests/
-│   ├── unit/                  # Metric accuracy, model scanning, validation utilities
-│   ├── smoke/                 # Critical path smoke tests
-│   ├── functional/            # MCP manager, llama-server, evaluation loop integration
-│   ├── integration/           # End-to-end integration tests
-│   ├── verification/          # Platform regression tests
-│   └── conftest.py            # Shared pytest fixtures (Streamlit mock)
-│
-└── logs/                      # Session logs — .gitignored, never committed
-    └── sessions/
-        └── YYYY-MM-DD_HH-MM-SS_<run-id>/
-            ├── run.log
-            ├── telemetry.json
-            └── config.json
+├── app.py              # Streamlit entry point
+├── cli.py              # CLI entry point (project, sessions)
+├── config/             # Static configuration: defaults, metric registry, bash templates
+├── core/               # Framework logic: environments, evaluator, bot-type registry,
+│                       #   session logs, metrics thresholds, server lifecycles
+├── plugins/bot_types/  # Out-of-tree bot types, discovered at start-up
+├── ui/                 # Streamlit tabs and shared widgets; plugin_api.py is the
+│                       #   stable surface plugins import
+├── mcp-server/         # Node.js MCP tool server
+├── tests/              # unit / smoke / functional / integration / verification
+└── logs/sessions/      # Per-run run.log, telemetry.json, config.json (gitignored)
 ```
+
+Module-by-module responsibilities are in [ARCHITECTURE.md](ARCHITECTURE.md),
+which is kept at directory level for the same reason: a per-file listing goes
+stale silently.
 
 ### Default service ports
 

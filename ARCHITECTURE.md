@@ -32,10 +32,12 @@ Pure / CLI-safe:
 - **environment.py** — `BaseEnvironment` abstraction + `LocalEnvironment` and
   `SSHEnvironment` concretions, plus the `create_environment()` factory. The
   only place that decides which environment to build.
-- **bot_types/** — discovery-backed bot-type plugin registry. Each plugin owns
-  its project defaults, session-state hydration map, Streamlit render dispatch,
-  CLI normalisation, and evaluator dispatch. `BashBotPlugin` is the base
-  lifecycle; `LlamaCliBotPlugin` extends it as a plugin.
+- **bot_types/** — the `BotTypePlugin` contract and the discovery-backed
+  registry. Each plugin owns its project defaults, session-state hydration map,
+  render dispatch, CLI normalisation and evaluator dispatch. `BashBotPlugin` is
+  the base lifecycle that the llama types extend. Optional hooks on the base
+  let a plugin vary shared behaviour without shared code testing for its
+  `type_id` — `core/` and `ui/` contain no bot-type-id literals.
 - **evaluator.py** — the local LLM agent loop: send prompt → execute tool calls
   against the environment → accumulate telemetry → run validation.
 - **caf_runner.py** — remote CAF execution over SSH: build the CLI command,
@@ -49,7 +51,8 @@ Pure / CLI-safe:
 - **judge.py** — LLM-as-judge scoring of a transcript.
 - **schema_registry.py** — JSON-schema validation of tool/telemetry shapes.
 - **preflight.py** — environment readiness checks.
-- **test_runner.py** — scenario test-suite execution.
+- **test_runner.py** — runs pytest as a subprocess and parses its output for
+  the Platform Verification view.
 - **streaming.py** — backend HTTP adapters (`stream_ollama`, `stream_llama_cpp`)
   for one LLM round.
 - **models.py** — model discovery (GGUF files on disk, served model lists).
@@ -59,14 +62,27 @@ Pure / CLI-safe:
   `strip_ansi`).
 
 UI-coupled (import Streamlit — UI path only):
-- **state.py** — session-state defaults and scenario sync.
+- **state.py** — session-state defaults and per-project sync.
 - **llama_server.py** — local llama-server process lifecycle.
 - **mcp_manager.py** — MCP tool-server lifecycle + tool invocation.
 
 ### `ui/` — Streamlit tabs and components
-One module per tab (`config_tab`, `target_tab`, `execute_tab`, `caf_tab`,
-`dashboard_tab`) plus shared `components`, `styles`, `terminal`. Tabs handle
-widgets and presentation only — they call into `core/` for any actual work.
+One module per tab (`config_tab`, `execute_tab`, `dashboard_tab`,
+`preflight_tab`, `test_suite_tab`) plus shared `components`, `styles`, `theme`,
+`terminal` and `optional_param_card`. Tabs handle widgets and presentation only
+— they call into `core/` for any actual work.
+
+`caf_tab`, `caf_dashboard` and `target_tab` are parked: `app.py` does not import
+them, so they render nowhere. They predate the CAF bot-type plugins that
+replaced them.
+
+- **plugin_api.py** — the only `ui` module a bot-type plugin may import. It is
+  the stable surface over the tabs' private helpers; a test enforces that
+  plugins reach `ui` through it and nothing else.
+
+### `plugins/bot_types/` — out-of-tree bot types
+Self-contained bot types discovered at start-up. Nothing in `core/` or `ui/`
+imports them, so each can be deleted without leaving anything behind.
 
 
 ## Data flow: how a run happens
@@ -105,11 +121,6 @@ is local or remote.
 
 ## How to extend
 
-**Add a new bot type** — drop a `BotTypePlugin` subclass into
-`plugins/bot_types/`; the registry discovers it on start. Reach shared UI via
-`ui.plugin_api`, and override the optional hooks on `BotTypePlugin` rather
-than adding type checks to shared code.
-
 **Add a new metric type** — in `config/metrics.py`: (1) add an entry to
 `METRIC_TYPES` describing its label/category/params, (2) write an
 `_eval_<name>(params, telemetry) -> bool | None` function, (3) register it in
@@ -131,6 +142,10 @@ defaults, project sync map, optional template metadata, UI render dispatch, CLI
 config normalisation, and evaluator dispatch. The Streamlit app, configuration
 tab, execute tab, project sync, and `cli.py project` all route through discovery.
 
+Reach shared UI through `ui.plugin_api`, and where shared code must behave
+differently for your bot, override an optional hook on `BotTypePlugin` rather
+than adding a `type_id` check to that shared code.
+
 
 ## Running tests
 
@@ -140,7 +155,7 @@ python -m pytest -q                      # full suite (pytest-randomly shuffles 
 python -m pytest -q -p no:randomly       # fixed collection order
 ```
 
-The full suite passes (1226 tests as of this writing). The suite uses
+The full suite passes. The suite uses
 `pytest-randomly`; if you ever see order-dependent failures, reproduce the seed
 it prints (`-p randomly --randomly-seed=<n>`) or pin order with `-p no:randomly`
 to isolate whether it is a test-isolation issue (shared mocked Streamlit/session
