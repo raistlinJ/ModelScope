@@ -13,7 +13,7 @@ from core.metric_thresholds import (
     metrics_for_bot,
     observed_dashboard_metrics,
 )
-from ui.components import badge, badge_pass, badge_fail, badge_na, type_badge, CAT_COLOUR
+from ui.components import badge_pass, badge_fail, badge_na, type_badge, CAT_COLOUR
 
 
 def _render_scrollable_output(

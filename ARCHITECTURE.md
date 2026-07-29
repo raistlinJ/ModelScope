@@ -72,10 +72,6 @@ One module per tab (`config_tab`, `execute_tab`, `dashboard_tab`,
 `terminal` and `optional_param_card`. Tabs handle widgets and presentation only
 — they call into `core/` for any actual work.
 
-`caf_tab`, `caf_dashboard` and `target_tab` are parked: `app.py` does not import
-them, so they render nowhere. They predate the CAF bot-type plugins that
-replaced them.
-
 - **plugin_api.py** — the only `ui` module a bot-type plugin may import. It is
   the stable surface over the tabs' private helpers; a test enforces that
   plugins reach `ui` through it and nothing else.
