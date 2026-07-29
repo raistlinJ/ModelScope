@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import io
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,10 +24,25 @@ from plugins.bot_types.caf_cli_run import (
 from plugins.bot_types.caf_llama_bot import (
     CAF_LLAMA_DEFAULT_MODEL_DIRECTORY,
     CafLlamaBotPlugin,
+    _drain_local_managed_server_output,
     _derive_local_url,
     _resolve_binary_and_model,
     scan_caf_llama_models,
 )
+
+
+def test_caf_llama_drains_both_local_server_output_pipes():
+    stdout = io.BytesIO(b"stdout diagnostics")
+    stderr = io.BytesIO(b"stderr diagnostics")
+
+    threads = _drain_local_managed_server_output(SimpleNamespace(stdout=stdout, stderr=stderr))
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert len(threads) == 2
+    assert all(not thread.is_alive() for thread in threads)
+    assert stdout.tell() == len(b"stdout diagnostics")
+    assert stderr.tell() == len(b"stderr diagnostics")
 
 
 def test_registry_discovers_caf_llama_bot():
@@ -86,6 +103,7 @@ class TestConfigNormalization:
         assert config["ssh_port"] == 22
         assert config["caf_cli_directory"] == "~/cyber-agent-flow"
         assert config["model_dir"] == CAF_LLAMA_DEFAULT_MODEL_DIRECTORY
+        assert config["caf_llama_managed_session_recovery"] is True
 
     def test_blank_defaults_are_repaired_without_overwriting_explicit_values(self):
         plugin = CafLlamaBotPlugin()

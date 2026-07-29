@@ -136,6 +136,8 @@ def test_tooltip_icon_is_scoped_and_unfilled_not_a_solid_dot() -> None:
     assert '[data-testid="stTooltipHoverTarget"] button {' not in _CSS, \
         "ordinary tooltip-wrapped buttons must not be styled as circular help icons"
     assert 'button[aria-label^="Help for"]' in _CSS
+    assert '[data-testid="stTooltipContent"] [data-testid="stMarkdownContainer"] p' in _CSS
+    assert '-webkit-text-fill-color: var(--tooltip-icon) !important' in _CSS
 
 
 def test_tooltip_tokens_present_in_both_palettes() -> None:

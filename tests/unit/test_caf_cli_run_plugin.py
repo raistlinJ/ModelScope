@@ -100,7 +100,16 @@ def test_caf_cli_defaults_to_api_sse_and_fills_its_required_fields():
 
     assert config["caf_cli_transport"] == "api"
     assert config["caf_cli_app_url"] == "http://127.0.0.1:5055"
-    assert config["caf_cli_app_server_command"] == "python3 mcp_kali.py"
+    assert config["caf_cli_app_server_command"] == "./venv/bin/python mcp_kali.py"
+
+
+def test_caf_normalization_migrates_only_the_legacy_system_python_mcp_command():
+    plugin = CafCliRunPlugin()
+    legacy = plugin.normalize_project_config({"caf_cli_app_server_command": "python3 mcp_kali.py"})
+    assert legacy["caf_cli_app_server_command"] == "./venv/bin/python mcp_kali.py"
+
+    custom = plugin.normalize_project_config({"caf_cli_app_server_command": "/opt/caf/bin/python custom_mcp.py"})
+    assert custom["caf_cli_app_server_command"] == "/opt/caf/bin/python custom_mcp.py"
 
 
 def test_caf_validation_prompts_do_not_persist_a_system_prompt():
@@ -753,8 +762,77 @@ def test_caf_api_times_out_and_requires_an_explicit_retry_when_start_acknowledge
     with pytest.raises(globals_["CafSessionStartTimeoutError"], match="retry to check again"):
         session.start()
 
-    assert session._request.call_args.args == ("POST", "/api/session/start")
-    assert session._request.call_args.kwargs["timeout"] == (5, 20)
+    assert session._request.call_args_list[0].args == ("POST", "/api/session/start")
+    assert session._request.call_args_list[0].kwargs["timeout"] == (5, 20)
+    assert len(session._request.call_args_list) == 1
+
+
+def test_caf_api_recovers_a_started_run_when_the_start_acknowledgement_times_out():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {"caf_llama_managed_session_recovery": True}
+    session.on_log = MagicMock()
+    session._ensure_app_running = MagicMock(return_value={"status": "idle"})
+    session._payload = MagicMock(return_value={"model": "test"})
+    recovered_status = {
+        "status": "running",
+        "run_id": "started-run",
+        "metadata": {"status": "running", "run_id": "started-run"},
+    }
+    session._app_status = MagicMock(return_value=recovered_status)
+    replay = MagicMock()
+    replay.json.return_value = {"events": []}
+    session._request = MagicMock(side_effect=[RuntimeError("read timed out"), replay])
+    session._session_started_by_modelscope = False
+
+    session.start()
+
+    assert session.run_id == "started-run"
+    assert session._session_started_by_modelscope is True
+    assert session._durable_events_available is True
+    assert any("Recovered started run started-run" in str(call.args[0]) for call in session.on_log.call_args_list)
+
+
+def test_caf_status_promotes_an_active_metadata_state_over_stale_outer_idle_status():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    response = MagicMock()
+    response.json.return_value = {"status": "idle", "metadata": {"status": "running", "run_id": "r-1"}}
+    session.config = {"caf_llama_managed_session_recovery": True}
+    session._request = MagicMock(return_value=response)
+
+    assert session._app_status()["status"] == "running"
+
+
+def test_standard_caf_preserves_the_outer_status_from_its_api():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    response = MagicMock()
+    response.json.return_value = {"status": "idle", "metadata": {"status": "running", "run_id": "r-1"}}
+    session.config = {}
+    session._request = MagicMock(return_value=response)
+
+    assert session._app_status()["status"] == "idle"
+
+
+def test_caf_live_execution_state_is_declared_only_for_llama_projects():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_llama_bot")
+    assert {
+        "caf_cli_exec_", "caf_cli_active_session_", "caf_cli_app_restart_", "caf_cli_session_start_",
+    } <= set(plugin.owned_prefixes)
+    standard = get_bot_plugin("caf_cli_run_bot")
+    assert not {
+        "caf_cli_exec_", "caf_cli_active_session_", "caf_cli_app_restart_", "caf_cli_session_start_",
+    } & set(standard.owned_prefixes)
 
 
 def test_caf_api_legacy_app_requires_restart_confirmation():
@@ -772,6 +850,78 @@ def test_caf_api_legacy_app_requires_restart_confirmation():
         session._ensure_app_running()
 
     session._launch_managed_app.assert_not_called()
+
+
+def test_caf_api_explicit_restart_replaces_a_durable_app_before_starting_a_new_session():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    globals_ = plugin.run_evaluation.__func__.__globals__
+    session_class = globals_["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {
+        "caf_cli_restart_incompatible_app": True,
+        "caf_llama_managed_session_recovery": True,
+    }
+    session._app_status = MagicMock(side_effect=[{"status": "running"}, {"status": "idle"}])
+    session._app_capabilities = MagicMock(return_value={"durable_event_replay": True})
+    session._restart_existing_app = MagicMock()
+    session._launch_managed_app = MagicMock()
+    session._managed_app_pid = "managed-pid"
+    session._durable_event_long_poll_available = False
+    session.on_log = MagicMock()
+
+    assert session._ensure_app_running() == {"status": "idle"}
+    session._restart_existing_app.assert_called_once()
+    session._launch_managed_app.assert_called_once()
+
+
+def test_caf_restart_finds_listener_with_portable_lsof_on_macos_and_linux():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {"caf_cli_app_url": "http://127.0.0.1:5055"}
+    session.on_log = MagicMock()
+    session._request = MagicMock()
+    session._app_status = MagicMock(return_value=None)
+    session.env = MagicMock()
+    session.env.execute.side_effect = [
+        {"exit_code": 0, "stdout": "14636\n", "stderr": ""},
+        {"exit_code": 0, "stdout": "", "stderr": ""},
+    ]
+
+    session._restart_existing_app()
+
+    commands = [call.args[0] for call in session.env.execute.call_args_list]
+    assert commands[0] == "lsof -nP -t -iTCP:5055 -sTCP:LISTEN 2>&1"
+    assert commands[1] == "kill -TERM 14636"
+    assert all("fuser" not in command for command in commands)
+
+
+def test_caf_restart_falls_back_to_linux_fuser_when_lsof_is_unavailable():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {"caf_cli_app_url": "http://127.0.0.1:5055"}
+    session.on_log = MagicMock()
+    session._request = MagicMock()
+    session._app_status = MagicMock(return_value=None)
+    session.env = MagicMock()
+    session.env.execute.side_effect = [
+        {"exit_code": 127, "stdout": "", "stderr": "lsof: command not found"},
+        {"exit_code": 0, "stdout": "5055/tcp: 123 456", "stderr": ""},
+        {"exit_code": 0, "stdout": "", "stderr": ""},
+    ]
+
+    session._restart_existing_app()
+
+    commands = [call.args[0] for call in session.env.execute.call_args_list]
+    assert commands == [
+        "lsof -nP -t -iTCP:5055 -sTCP:LISTEN 2>&1",
+        "fuser -n tcp 5055 2>&1",
+        "kill -TERM 123 456",
+    ]
 
 
 def test_caf_api_busy_session_requires_confirmation_without_stopping_it():
@@ -850,12 +1000,63 @@ def test_caf_api_manages_only_the_app_it_starts():
 
     assert session._ensure_app_running() == {"status": "idle"}
     assert session._managed_app_pid == "4242"
-    assert "nohup ./start_ws.sh" in session.env.execute.call_args.args[0]
+    launch_command = session.env.execute.call_args.args[0]
+    assert "nohup ./start_ws.sh" in launch_command
+    assert "&& { nohup" in launch_command
+    assert "caf_app_pid=$!; echo $caf_app_pid" in launch_command
 
     session._stop_managed_app()
 
     assert session._managed_app_pid is None
     assert any("kill -TERM 4242" in call.args[0] for call in session.env.execute.call_args_list)
+
+
+def test_llama_caf_restarts_managed_app_once_when_readiness_stalls():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {"caf_llama_managed_session_recovery": True}
+    session.on_log = MagicMock()
+    session._app_status = MagicMock(return_value=None)
+    session._launch_managed_app = MagicMock()
+    session._wait_for_managed_app_ready = MagicMock(
+        side_effect=[RuntimeError("readiness stalled"), {"status": "idle"}],
+    )
+    session._stop_managed_app = MagicMock()
+
+    assert session._ensure_app_running() == {"status": "idle"}
+    assert session._launch_managed_app.call_count == 2
+    session._stop_managed_app.assert_called_once()
+    assert any(
+        "restarting it once" in call.args[0]
+        for call in session.on_log.call_args_list
+    )
+
+
+def test_standard_caf_does_not_retry_managed_app_readiness_failure():
+    refresh_bot_plugins()
+    plugin = get_bot_plugin("caf_cli_run_bot")
+    session_class = plugin.run_evaluation.__func__.__globals__["_CafAppSession"]
+    session = session_class.__new__(session_class)
+    session.config = {}
+    session.on_log = MagicMock()
+    session._app_status = MagicMock(return_value=None)
+    session._launch_managed_app = MagicMock()
+    session._wait_for_managed_app_ready = MagicMock(
+        side_effect=RuntimeError("readiness stalled"),
+    )
+    session._stop_managed_app = MagicMock()
+
+    with pytest.raises(RuntimeError, match="readiness stalled"):
+        session._ensure_app_running()
+
+    session._launch_managed_app.assert_called_once()
+    session._stop_managed_app.assert_called_once()
+    assert not any(
+        "restarting it once" in call.args[0]
+        for call in session.on_log.call_args_list
+    )
 
 
 def test_caf_live_ssh_run_keeps_normal_exit_status_after_channel_closes():

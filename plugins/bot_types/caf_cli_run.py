@@ -32,6 +32,8 @@ from core.utils import effective_verify_ssl, strip_ansi
 CAF_DEFAULT_SSH_PORT = 22
 CAF_DEFAULT_DIRECTORY = "~/cyber-agent-flow"
 CAF_DEFAULT_TOOLS_CONFIG = "kali_tools.json"
+CAF_DEFAULT_APP_SERVER_COMMAND = "./venv/bin/python mcp_kali.py"
+CAF_LEGACY_APP_SERVER_COMMAND = "python3 mcp_kali.py"
 
 
 CAF_CLI_RUN_STATE_KEY_MAP = {
@@ -85,7 +87,7 @@ CAF_CLI_RUN_SESSION_DEFAULTS = {
     "caf_cli_command": "./start_cli.sh",
     "caf_cli_transport": "api",
     "caf_cli_app_url": "http://127.0.0.1:5055",
-    "caf_cli_app_server_command": "python3 mcp_kali.py",
+    "caf_cli_app_server_command": CAF_DEFAULT_APP_SERVER_COMMAND,
     "caf_cli_provider": "ollama_direct",
     "caf_cli_url": "http://localhost:11434",
     "caf_cli_model": "",
@@ -1198,9 +1200,49 @@ class _CafAppSession:
         try:
             response = self._request("GET", "/api/session/status", timeout=(2, 2))
             data = response.json()
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+
+            # The managed llama.cpp integration opts into this compatibility
+            # normalization. Keep the standard CAF transport's interpretation
+            # of the API response unchanged.
+            # During session creation some app versions briefly return an outer
+            # ``idle`` while metadata already says ``starting`` or ``running``.
+            # Treating that as idle lets another project start a competing
+            # session on the same CAF app and makes the local managed model get
+            # torn down after ModelScope's acknowledgement timeout.
+            metadata = data.get("metadata")
+            metadata_status = (
+                str(metadata.get("status") or "").strip().lower()
+                if isinstance(metadata, dict) else ""
+            )
+            outer_status = str(data.get("status") or "").strip().lower()
+            if (
+                getattr(self, "config", {}).get("caf_llama_managed_session_recovery")
+                and
+                outer_status in {"", "idle", "stopped"}
+                and metadata_status in {"starting", "running", "stopping"}
+            ):
+                data = {**data, "status": metadata_status}
+            return data
         except RuntimeError:
             return None
+
+    @staticmethod
+    def _status_run_id(status: Mapping[str, Any] | None) -> str | None:
+        """Return the durable CAF run id advertised by a live status payload."""
+        if not isinstance(status, Mapping):
+            return None
+        metadata = status.get("metadata")
+        candidates = (
+            status.get("run_id"),
+            metadata.get("run_id") if isinstance(metadata, Mapping) else None,
+        )
+        for candidate in candidates:
+            run_id = str(candidate or "").strip()
+            if run_id:
+                return run_id
+        return None
 
     def _app_capabilities(self) -> dict[str, Any] | None:
         """Return CAF capabilities, or ``None`` for pre-replay app versions."""
@@ -1215,31 +1257,54 @@ class _CafAppSession:
         """Stop the listener on CAF's API port after an explicit UI approval."""
         parsed = urlsplit(str(self.config.get("caf_cli_app_url") or "http://127.0.0.1:5055"))
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        self.on_log("[CAF APP] Stopping the legacy CAF app at your request …")
+        self.on_log("[CAF APP] Stopping the existing CAF app at your request …")
         try:
             self._request("POST", "/api/session/stop", json={}, timeout=(5, 5))
         except RuntimeError:
             # The listener may already be unhealthy; the process-level stop
             # below is still the requested recovery action.
             pass
-        find_command = _caf_with_sudo(f"fuser -n tcp {port} 2>&1", self.config)
-        found = self.env.execute(find_command, timeout=10)
-        raw = f"{found.get('stdout') or ''}\n{found.get('stderr') or ''}"
-        # fuser formats listeners as ``5055/tcp: 123 456``.  Parse only the
-        # part after the colon so the port number is never mistaken for a PID.
-        _, separator, pid_text = raw.partition(":")
-        pids = [pid for pid in re.findall(r"\b\d+\b", pid_text) if pid.isdigit()]
+        diagnostics: list[str] = []
+
+        # lsof is available by default on macOS and commonly present on Linux.
+        # Its terse output is one listener PID per line, which avoids treating
+        # the port itself as a process ID.
+        lsof_command = _caf_with_sudo(
+            f"lsof -nP -t -iTCP:{port} -sTCP:LISTEN 2>&1", self.config,
+        )
+        lsof_result = self.env.execute(lsof_command, timeout=10)
+        lsof_stdout = str(lsof_result.get("stdout") or "")
+        lsof_raw = f"{lsof_stdout}\n{lsof_result.get('stderr') or ''}".strip()
+        pids = [line.strip() for line in lsof_stdout.splitlines() if line.strip().isdigit()]
+        if not pids and lsof_raw:
+            diagnostics.append(f"lsof: {lsof_raw}")
+
+        # Minimal Linux installations may omit lsof. Fall back to the Linux
+        # fuser syntax only when lsof did not identify the listener.
         if not pids:
-            detail = raw.strip() or "no process ID returned"
+            fuser_command = _caf_with_sudo(f"fuser -n tcp {port} 2>&1", self.config)
+            fuser_result = self.env.execute(fuser_command, timeout=10)
+            fuser_raw = f"{fuser_result.get('stdout') or ''}\n{fuser_result.get('stderr') or ''}".strip()
+            # fuser formats listeners as ``5055/tcp: 123 456``. Parse only the
+            # part after the colon so the port number is never mistaken for a PID.
+            _, separator, pid_text = fuser_raw.partition(":")
+            if separator:
+                pids = re.findall(r"\b\d+\b", pid_text)
+            if not pids and fuser_raw:
+                diagnostics.append(f"fuser: {fuser_raw}")
+
+        pids = list(dict.fromkeys(pids))
+        if not pids:
+            detail = "; ".join(diagnostics) or "no process ID returned"
             raise RuntimeError(
                 f"Could not identify the CAF app listening on port {port}. "
-                f"Enable CAF sudo and verify the app is reachable. ({detail})"
+                f"Verify that lsof or fuser is installed and that CAF sudo permissions are sufficient. ({detail})"
             )
         stop_command = _caf_with_sudo(f"kill -TERM {' '.join(pids)}", self.config)
         stopped = self.env.execute(stop_command, timeout=10)
         if stopped.get("exit_code") != 0:
             detail = stopped.get("stderr") or stopped.get("stdout") or "unknown error"
-            raise RuntimeError(f"Could not stop the legacy CAF app: {detail}")
+            raise RuntimeError(f"Could not stop the existing CAF app: {detail}")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if self._app_status() is None:
@@ -1256,7 +1321,16 @@ class _CafAppSession:
         separately started CAF server.
         """
         log_path = f"/tmp/modelscope_caf_app_{os.getpid()}_{int(time.time() * 1000)}.log"
-        command = f"nohup ./start_ws.sh </dev/null > {shlex.quote(log_path)} 2>&1 & echo $!"
+        # Keep the directory change outside the asynchronous list. Without the
+        # brace group, ``cd directory && nohup ... &`` backgrounds the entire
+        # AND-list; that helper shell retains subprocess.run's capture pipe and
+        # makes a successful launch look like a 15-second timeout.
+        command = (
+            "{ "
+            f"nohup ./start_ws.sh </dev/null > {shlex.quote(log_path)} 2>&1 & "
+            "caf_app_pid=$!; echo $caf_app_pid; "
+            "}"
+        )
         if self.config.get("execution_target") != "ssh":
             directory = os.path.expanduser(str(self.config.get("caf_cli_directory") or CAF_DEFAULT_DIRECTORY))
             command = f"cd {shlex.quote(directory)} && {command}"
@@ -1287,32 +1361,9 @@ class _CafAppSession:
         result = self.env.execute(command, timeout=10)
         return str(result.get("stdout") or "").strip()
 
-    def _ensure_app_running(self) -> dict[str, Any]:
-        """Use an existing CAF app or start one owned by this execution."""
-        status = self._app_status()
-        if status is not None:
-            capabilities = self._app_capabilities() or {}
-            if capabilities.get("durable_event_replay") is True:
-                if (
-                    getattr(self, "config", {}).get("caf_cli_dangerous_no_prompt")
-                    and capabilities.get("auto_continue_tool_timeouts") is not True
-                ):
-                    raise CafAppRestartRequiredError(
-                        "The running CAF app does not support auto-continuing tool timeouts; restarting it is required."
-                    )
-                self._durable_event_long_poll_available = bool(
-                    capabilities.get("durable_event_long_poll") is True
-                )
-                self.on_log("[CAF APP] Reusing the running CAF app.")
-                return status
-            if not self.config.get("caf_cli_restart_incompatible_app"):
-                raise CafAppRestartRequiredError(
-                    "The running CAF app does not support durable event replay; restarting it is required."
-                )
-            self._restart_existing_app()
-
-        self._launch_managed_app()
-        deadline = time.monotonic() + 45
+    def _wait_for_managed_app_ready(self, timeout: float = 45) -> dict[str, Any]:
+        """Wait for the exact managed CAF process to expose its status API."""
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             status = self._app_status()
             if status is not None:
@@ -1325,8 +1376,63 @@ class _CafAppSession:
                 raise RuntimeError("CAF app exited while starting." + (f" Log: {tail}" if tail else ""))
             time.sleep(0.25)
         tail = self._managed_app_log_tail()
-        self._stop_managed_app()
-        raise RuntimeError("CAF app did not become ready within 45 seconds." + (f" Log: {tail}" if tail else ""))
+        raise RuntimeError(
+            f"CAF app did not become ready within {timeout:g} seconds."
+            + (f" Log: {tail}" if tail else "")
+        )
+
+    def _ensure_app_running(self) -> dict[str, Any]:
+        """Use an existing CAF app or start one owned by this execution."""
+        status = self._app_status()
+        if status is not None:
+            capabilities = self._app_capabilities() or {}
+            # Only the managed llama.cpp transport treats an explicit recovery
+            # as a request to replace a durable-capable CAF app. Standard CAF
+            # retains its original compatibility/restart behavior.
+            local_recovery = bool(
+                getattr(self, "config", {}).get("caf_llama_managed_session_recovery")
+            )
+            if local_recovery and getattr(self, "config", {}).get("caf_cli_restart_incompatible_app"):
+                self._restart_existing_app()
+                status = None
+            elif capabilities.get("durable_event_replay") is True:
+                if (
+                    getattr(self, "config", {}).get("caf_cli_dangerous_no_prompt")
+                    and capabilities.get("auto_continue_tool_timeouts") is not True
+                ):
+                    raise CafAppRestartRequiredError(
+                        "The running CAF app does not support auto-continuing tool timeouts; restarting it is required."
+                    )
+                self._durable_event_long_poll_available = bool(
+                    capabilities.get("durable_event_long_poll") is True
+                )
+                self.on_log("[CAF APP] Reusing the running CAF app.")
+                return status
+            elif not getattr(self, "config", {}).get("caf_cli_restart_incompatible_app"):
+                raise CafAppRestartRequiredError(
+                    "The running CAF app does not support durable event replay; restarting it is required."
+                )
+            else:
+                self._restart_existing_app()
+
+        managed_start_attempts = (
+            2 if self.config.get("caf_llama_managed_session_recovery") else 1
+        )
+        last_start_error: RuntimeError | None = None
+        for attempt in range(managed_start_attempts):
+            self._launch_managed_app()
+            try:
+                return self._wait_for_managed_app_ready()
+            except RuntimeError as exc:
+                last_start_error = exc
+                self._stop_managed_app()
+                if attempt + 1 < managed_start_attempts:
+                    self.on_log(
+                        "[CAF APP] Managed app did not become ready; restarting it once for "
+                        "the llama.cpp + CAF run …"
+                    )
+        assert last_start_error is not None
+        raise last_start_error
 
     def _stop_managed_app(self) -> None:
         """Stop only the app ModelScope started for this validation."""
@@ -1356,7 +1462,7 @@ class _CafAppSession:
             "api_key": self.config.get("caf_cli_api_key") or "",
             "ssl_verify": bool(self.config.get("caf_cli_verify_ssl", True)),
             "model": self.config.get("selected_model"),
-            "server_command": self.config.get("caf_cli_app_server_command") or "python3 mcp_kali.py",
+            "server_command": self.config.get("caf_cli_app_server_command") or CAF_DEFAULT_APP_SERVER_COMMAND,
             "tools_config": _caf_selected_tools_config(self.config),
             "context_window": int(self.config.get("caf_cli_context_window") or 8192),
             "max_turns": int(self.config.get("caf_cli_max_turns") or 20),
@@ -1366,6 +1472,7 @@ class _CafAppSession:
         }
 
     def start(self) -> None:
+        config = getattr(self, "config", {})
         status = self._ensure_app_running()
         if status.get("status") in {"starting", "running", "stopping"}:
             if not self.config.get("caf_cli_stop_active_session"):
@@ -1386,20 +1493,38 @@ class _CafAppSession:
                     break
                 time.sleep(0.25)
             else:
+                if config.get("caf_llama_managed_session_recovery"):
+                    raise CafAppRestartRequiredError(
+                        "CAF could not stop the active session. Restart the CAF app to clear the stale session before retrying."
+                    )
                 raise CafSessionStartTimeoutError(
                     "CAF is still stopping the previous session. Wait briefly and retry."
                 )
         payload = self._payload()
         try:
-            # A start request normally returns once MCP discovery is complete.
-            # Do not let an impaired SSH command channel hold the UI forever:
-            # after this bound the UI offers an explicit retry instead.
-            data = self._request("POST", "/api/session/start", json=payload, timeout=(5, 20)).json()
+            # Local llama.cpp tool discovery can legitimately exceed the
+            # standard CAF acknowledgement window.
+            start_timeout = 45 if config.get("caf_llama_managed_session_recovery") else 20
+            data = self._request("POST", "/api/session/start", json=payload, timeout=(5, start_timeout)).json()
         except RuntimeError as start_error:
-            raise CafSessionStartTimeoutError(
-                "CAF did not acknowledge session start within 20 seconds. "
-                "It may have started remotely; retry to check again."
-            ) from start_error
+            # A request timeout does not mean CAF rejected the start. Its app
+            # creates the durable session before returning the HTTP response;
+            # recover that session when status exposes its run id so the
+            # managed llama-server remains alive for the actual evaluation.
+            recovered_status = self._app_status() if config.get("caf_llama_managed_session_recovery") else None
+            recovered_run_id = self._status_run_id(recovered_status)
+            if recovered_run_id and str((recovered_status or {}).get("status") or "").lower() in {
+                "starting", "running",
+            }:
+                data = {"success": True, "run_id": recovered_run_id, "tools": []}
+                self.on_log(
+                    f"[CAF API] Recovered started run {recovered_run_id} after the start acknowledgement timed out."
+                )
+            else:
+                raise CafSessionStartTimeoutError(
+                    f"CAF did not acknowledge session start within {start_timeout} seconds. "
+                    "It may have started remotely; retry to check again."
+                ) from start_error
         if not data.get("success") or not data.get("run_id"):
             raise RuntimeError(data.get("error") or "CAF app did not start a session.")
         self.run_id = str(data["run_id"])
@@ -2325,7 +2450,7 @@ def _run_caf_cli_background(
             "caf_active_session_conflict": True,
         }
     except CafAppRestartRequiredError as exc:
-        on_log("[CAF APP] The running CAF app is a legacy version. Awaiting confirmation to restart it.")
+        on_log("[CAF APP] The running CAF app must be restarted. Awaiting confirmation.")
         telemetry = {
             "run_aborted": True,
             "error": str(exc),
@@ -2687,7 +2812,10 @@ class CafCliRunPlugin(BotTypePlugin):
     default_project_name = "CAF Standard"
     state_key_map = CAF_CLI_RUN_STATE_KEY_MAP
     session_defaults = CAF_CLI_RUN_SESSION_DEFAULTS
-    owned_prefixes = ("caf_cli_val_", "_caf_cli_val_", "caf_cli_tool_en_", "caf_cli_llm_helper_", "caf_cli_is_fetching_", "_caf_cli_run_bot_metric_threshold_", "_sc_caf_cli_")
+    owned_prefixes = (
+        "caf_cli_val_", "_caf_cli_val_", "caf_cli_tool_en_", "caf_cli_llm_helper_", "caf_cli_is_fetching_",
+        "_caf_cli_run_bot_metric_threshold_", "_sc_caf_cli_",
+    )
     metric_specs = COMMON_DASHBOARD_METRIC_SPECS
     dashboard_metrics_key = "caf_cli_metrics_matrix"
     # A stored blank here means "never configured", not "deliberately
@@ -2738,7 +2866,7 @@ class CafCliRunPlugin(BotTypePlugin):
             "sudo": False,
             "caf_cli_directory": CAF_DEFAULT_DIRECTORY, "caf_cli_command": "./start_cli.sh",
             "caf_cli_transport": "api", "caf_cli_app_url": "http://127.0.0.1:5055",
-            "caf_cli_app_server_command": "python3 mcp_kali.py",
+            "caf_cli_app_server_command": CAF_DEFAULT_APP_SERVER_COMMAND,
             "caf_cli_provider": "ollama_direct", "caf_cli_url": "http://localhost:11434", "selected_model": "",
             "caf_cli_api_key": "", "caf_cli_verify_ssl": True,
             "caf_cli_tools_config": CAF_DEFAULT_TOOLS_CONFIG,
@@ -2786,6 +2914,11 @@ class CafCliRunPlugin(BotTypePlugin):
         for key in ("caf_cli_app_url", "caf_cli_app_server_command"):
             if not str(config.get(key) or "").strip():
                 config[key] = self.default_config()[key]
+        # Older projects used the ambient system python, which is not the
+        # interpreter where CAF installs its MCP SDK. Migrate only that exact
+        # historical default; preserve every custom server command.
+        if str(config.get("caf_cli_app_server_command") or "").strip() == CAF_LEGACY_APP_SERVER_COMMAND:
+            config["caf_cli_app_server_command"] = CAF_DEFAULT_APP_SERVER_COMMAND
         if config.get("execution_target") == "ssh":
             config["caf_cli_transport"] = "job"
         elif config.get("caf_cli_transport") not in {"cli", "api"}:
@@ -3241,6 +3374,8 @@ class CafCliRunPlugin(BotTypePlugin):
                 st.session_state["telemetry"] = {}
                 st.session_state.pop("caf_cli_active_session_conflict", None)
                 st.session_state.pop("caf_cli_app_restart_required", None)
+                if config.get("caf_llama_managed_session_recovery"):
+                    st.session_state.pop("caf_cli_app_restart_reason", None)
                 st.session_state.pop("caf_cli_session_start_timeout", None)
                 st.rerun()
 
@@ -3260,9 +3395,15 @@ class CafCliRunPlugin(BotTypePlugin):
                     st.rerun()
 
         if app_restart_required and not run_in_progress:
+            restart_reason = (
+                str(st.session_state.get("caf_cli_app_restart_reason") or "").strip()
+                if config.get("caf_llama_managed_session_recovery") else ""
+            )
             st.warning(
-                "The running CAF app is an older version without durable event replay. "
-                "Restarting it may interrupt any work still running in CAF."
+                restart_reason or (
+                    "The running CAF app is an older version without durable event replay. "
+                    "Restarting it may interrupt any work still running in CAF."
+                )
             )
             restart_col, keep_col, _ = st.columns([2, 2, 1])
             with restart_col:
@@ -3282,11 +3423,21 @@ class CafCliRunPlugin(BotTypePlugin):
                 "CAF did not acknowledge starting the session in time. It may have started remotely; "
                 "retrying checks CAF first and will not stop an active session automatically."
             )
-            retry_col, keep_col, _ = st.columns([2, 2, 1])
+            if config.get("caf_llama_managed_session_recovery"):
+                retry_col, restart_col, keep_col = st.columns([2, 2, 2])
+            else:
+                retry_col, keep_col, _ = st.columns([2, 2, 1])
             with retry_col:
                 retry_start = st.button(
                     "Retry CAF request", key="btn_caf_cli_retry_start", type="primary", use_container_width=True,
                 )
+            if config.get("caf_llama_managed_session_recovery"):
+                with restart_col:
+                    restart_app_and_retry = st.button(
+                        "Restart CAF app and retry", key="btn_caf_cli_restart_after_start_timeout",
+                        use_container_width=True,
+                        help="Stops and restarts the shared CAF app. Use this only when its prior session is stuck.",
+                    )
             with keep_col:
                 if st.button("Keep current CAF session", key="btn_caf_cli_keep_start_timeout", use_container_width=True):
                     st.session_state.pop("caf_cli_session_start_timeout", None)
@@ -3384,6 +3535,8 @@ class CafCliRunPlugin(BotTypePlugin):
             st.session_state["cancel_requested"] = False
             st.session_state.pop("caf_cli_active_session_conflict", None)
             st.session_state.pop("caf_cli_app_restart_required", None)
+            if config.get("caf_llama_managed_session_recovery"):
+                st.session_state.pop("caf_cli_app_restart_reason", None)
             st.session_state.pop("caf_cli_session_start_timeout", None)
             st.session_state["_run_in_progress"] = True
             shared = _new_caf_execution_shared()
@@ -3434,6 +3587,8 @@ class CafCliRunPlugin(BotTypePlugin):
                     st.session_state["caf_cli_active_session_conflict"] = True
                 if telemetry.get("caf_app_restart_required"):
                     st.session_state["caf_cli_app_restart_required"] = True
+                    if config.get("caf_llama_managed_session_recovery"):
+                        st.session_state["caf_cli_app_restart_reason"] = str(telemetry.get("error") or "")
                 if telemetry.get("caf_session_start_timeout"):
                     st.session_state["caf_cli_session_start_timeout"] = True
                 from config.defaults import MAX_RUN_HISTORY

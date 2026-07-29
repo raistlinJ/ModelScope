@@ -1091,6 +1091,18 @@ code {
 [data-testid="stTooltipContent"] * {
     color: var(--tooltip-icon) !important;
 }
+/* Tooltip Markdown is rendered through the same stMarkdownContainer used by
+   normal page copy. The global paragraph rule above is more specific than the
+   generic tooltip descendant selector, which made help text render nearly
+   black on this fixed-dark surface in light mode. Keep all tooltip copy on the
+   dedicated high-contrast foreground token. */
+[data-testid="stTooltipContent"] [data-testid="stMarkdownContainer"],
+[data-testid="stTooltipContent"] [data-testid="stMarkdownContainer"] p,
+[data-baseweb="tooltip"] [data-testid="stMarkdownContainer"],
+[data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] p {
+    color: var(--tooltip-icon) !important;
+    -webkit-text-fill-color: var(--tooltip-icon) !important;
+}
 
 /* Current Streamlit input shells, including controls rendered in portals. */
 [data-testid="stTextInput"] [data-baseweb="input"],

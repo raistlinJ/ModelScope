@@ -44,3 +44,7 @@ logs/
 
 # repowise API keys (local)
 .repowise/.env
+
+.codex/
+AGENTS.md
+project3_optimized.json

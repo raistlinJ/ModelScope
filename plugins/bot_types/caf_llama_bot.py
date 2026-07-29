@@ -11,6 +11,7 @@ run's own telemetry.
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Callable
 
 from core.bot_types.base import StatusItem
@@ -101,6 +102,45 @@ _CAF_LLAMA_SRV_DEFAULT_CONFIG: dict[str, Any] = {
     "server_host": "127.0.0.1",
     "server_port": 8080,
 }
+
+_CAF_LLAMA_LIVE_EXECUTION_PREFIXES = (
+    # These shared CAF UI keys represent local managed-model execution state.
+    # They must be cleared when switching between CAF + llama.cpp projects.
+    "caf_cli_exec_", "caf_cli_active_session_", "caf_cli_app_restart_", "caf_cli_session_start_",
+)
+
+
+def _drain_local_managed_server_output(process: Any) -> tuple[threading.Thread, ...]:
+    """Continuously drain a local llama-server's captured output pipes.
+
+    The shared launcher captures stdout/stderr so it can report startup
+    failures. CAF sessions are much longer and more verbose than the other
+    managed-server probes; if nobody consumes those pipes, llama-server can
+    fill the OS buffer and block before producing its first completion token.
+    This helper is invoked only by CAF + llama.cpp local runs.
+    """
+    threads: list[threading.Thread] = []
+
+    def drain(stream: Any) -> None:
+        try:
+            while stream.read(8192):
+                pass
+        except (OSError, ValueError):
+            pass
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(process, stream_name, None)
+        if stream is None:
+            continue
+        thread = threading.Thread(
+            target=drain,
+            args=(stream,),
+            name=f"caf-llama-{stream_name}-drain",
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+    return tuple(threads)
 
 
 def _derive_local_url(config: dict[str, Any]) -> str:
@@ -226,7 +266,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
     }
     owned_prefixes = tuple(
         p for p in CafCliRunPlugin.owned_prefixes if p != "_caf_cli_run_bot_metric_threshold_"
-    ) + ("_caf_llama_bot_metric_threshold_",)
+    ) + ("_caf_llama_bot_metric_threshold_",) + _CAF_LLAMA_LIVE_EXECUTION_PREFIXES
     metric_specs = dict(LlamaServerBotPlugin.metric_specs)
 
     # ── Config lifecycle ─────────────────────────────────────────────────────
@@ -241,6 +281,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
         config["caf_cli_api_key"] = ""
         config["selected_model"] = config.get("model_name") or ""
         config["caf_cli_url"] = _derive_local_url(config)
+        config["caf_llama_managed_session_recovery"] = True
         return config
 
     def normalize_project_config(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -256,6 +297,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
         config["caf_cli_provider"] = "openai"
         config["caf_cli_api_key"] = ""
         config["caf_cli_url"] = _derive_local_url(config)
+        config["caf_llama_managed_session_recovery"] = True
         return config
 
     def flush_config(self, project: dict[str, Any]) -> None:
@@ -268,6 +310,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
         # Recomputed from the JUST-flushed server_host/server_port — super()
         # is what actually wrote the current widget values into cfg above.
         cfg["caf_cli_url"] = _derive_local_url(cfg)
+        cfg["caf_llama_managed_session_recovery"] = True
 
     # ── Config UI ────────────────────────────────────────────────────────────
 
@@ -444,6 +487,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
         from core.evaluator import _managed_llama_server_advanced_flags, _start_managed_llama_server
 
         config = self.normalize_project_config(config)
+        config["caf_llama_managed_session_recovery"] = True
 
         model_name = str(config.get("model_name") or "").strip()
         if not model_name:
@@ -485,6 +529,7 @@ class CafLlamaBotPlugin(CafCliRunPlugin):
                         custom_flags=config.get("custom_flags", ""),
                         advanced_flags=advanced_flags, ready_timeout=ready_timeout,
                     )
+                    _drain_local_managed_server_output(managed_server)
                     config["caf_cli_url"] = _derive_local_url(config)
                     metrics_base_url = config["caf_cli_url"]
 
