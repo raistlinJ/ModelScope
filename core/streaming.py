@@ -151,11 +151,17 @@ def stream_llama_cpp(
     )
     resp.raise_for_status()
 
-    accumulated:    str  = ""
-    tool_calls_raw: list = []
-    usage: dict          = {}
-    buf                  = ""
-    in_think             = False
+    accumulated:          str  = ""
+    reasoning_accumulated: str = ""
+    tool_calls_raw:       list = []
+    usage: dict                = {}
+    buf: str                   = ""
+    reasoning_buf: str         = ""
+    in_think                  = False
+    sse_chunks                 = 0
+    observed_choice_fields: set[str] = set()
+    observed_delta_fields: set[str] = set()
+    finish_reasons: set[str] = set()
 
     for raw_line in resp.iter_lines():
         if not raw_line:
@@ -171,13 +177,34 @@ def stream_llama_cpp(
         except json.JSONDecodeError:
             continue
 
+        sse_chunks += 1
         choice = (chunk.get("choices") or [{}])[0]
+        observed_choice_fields.update(str(key) for key in choice)
+        if choice.get("finish_reason") is not None:
+            finish_reasons.add(str(choice["finish_reason"]))
         delta  = choice.get("delta", {})
-        token  = delta.get("content") or ""
+        if isinstance(delta, dict):
+            observed_delta_fields.update(str(key) for key in delta)
+        else:
+            delta = {}
+        # `content` is standard. A few OpenAI-compatible server versions have
+        # emitted ordinary text under `text`, so accept that as a safe fallback.
+        token  = delta.get("content") or delta.get("text") or ""
+        # llama.cpp has used both names across releases/build options.
+        # Normalize them so reasoning-channel tool calls are not discarded.
+        reasoning_token = (
+            delta.get("reasoning_content")
+            or delta.get("reasoning")
+            or ""
+        )
         accumulated += token
+        reasoning_accumulated += reasoning_token
+        reasoning_buf += reasoning_token
         buf, in_think = _process_think_tags(token, buf, in_think, on_log)
         if len(buf) >= 80 or "\n" in buf:
             buf = _flush_buf(buf, in_think, on_log)
+        if len(reasoning_buf) >= 80 or "\n" in reasoning_buf:
+            reasoning_buf = _flush_buf(reasoning_buf, True, on_log)
 
         for tc_delta in delta.get("tool_calls") or []:
             idx = tc_delta.get("index", 0)
@@ -198,10 +225,26 @@ def stream_llama_cpp(
             usage = chunk["usage"]
 
     _flush_buf(buf, in_think, on_log)
+    _flush_buf(reasoning_buf, True, on_log)
 
     msg: dict = {"role": "assistant", "content": accumulated}
+    if reasoning_accumulated:
+        # llama.cpp can stream Qwen-style <tool_call> blocks through
+        # reasoning_content instead of content/tool_calls. Preserve the field
+        # so the evaluator can recover the call without presenting private
+        # reasoning text as the assistant's final answer.
+        msg["reasoning_content"] = reasoning_accumulated
     if tool_calls_raw:
         msg["tool_calls"] = [tc for tc in tool_calls_raw if tc["function"]["name"]]
+    if not accumulated and not reasoning_accumulated and not msg.get("tool_calls"):
+        choice_fields = ", ".join(sorted(observed_choice_fields)) or "none"
+        delta_fields = ", ".join(sorted(observed_delta_fields)) or "none"
+        reasons = ", ".join(sorted(finish_reasons)) or "none"
+        on_log(
+            "[WARN] llama.cpp returned no visible text or tool call "
+            f"after {sse_chunks} SSE chunk(s); choice fields: {choice_fields}; "
+            f"delta fields: {delta_fields}; finish reason: {reasons}"
+        )
 
     return {
         "message": msg,

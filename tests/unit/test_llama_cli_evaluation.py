@@ -8,6 +8,8 @@ _exec_llama_prompt (the main LLM) when config["type"] == "llama_cli_bot"; a
 env.execute via MagicMock, stream_llama_cpp via unittest.mock.patch so no real
 HTTP or subprocess calls happen.
 """
+import json
+
 import pytest
 from unittest.mock import MagicMock, call, patch
 from core.evaluator import run_llama_cli_evaluation
@@ -151,6 +153,66 @@ class TestRunLlamaCLIOpenAIBackend:
                 _log(),
         )
         assert result["prompt_responses"][0]["response"] == "The sky is blue."
+
+    def test_openai_backend_executes_tool_call_streamed_as_reasoning_content(self):
+        """Regression: llama.cpp/Qwen can hide a valid call from content/tool_calls."""
+        env = _env()
+        env.read_file.return_value = "lorem ipsum dolor"
+        hidden_call = (
+            '<tool_call>{"name":"read_file","arguments":'
+            '{"path":"/home/kali/temp/read_this.txt"}}</tool_call>'
+        )
+        responses = [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": hidden_call,
+                },
+                "usage": {"prompt_tokens": 5527, "completion_tokens": 45},
+            },
+            self._stream_result("lorem ipsum dolor"),
+        ]
+        read_file_tool = {
+            "enabled": True,
+            "tool_name": "read_file",
+            "description": "Read a text file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        }
+
+        with (
+            patch("core.evaluator.stream_llama_cpp", side_effect=responses) as mock_stream,
+            patch("core.evaluator.probe_mcp_server", return_value=False),
+        ):
+            result = run_llama_cli_evaluation(
+                env,
+                _cfg(
+                    backend="openai",
+                    openai_base_url="http://localhost:1234",
+                    mcp_enabled=False,
+                    mcp_servers=[read_file_tool],
+                    validation_sets=[_prompt_set("Read the file")],
+                ),
+                _log(),
+            )
+
+        env.read_file.assert_called_once_with("/home/kali/temp/read_this.txt")
+        assert result["prompt_responses"][0]["response"] == "lorem ipsum dolor"
+        assert any(call["tool"] == "read_file" for call in result["tool_calls"])
+        followup_messages = mock_stream.call_args_list[1].kwargs["messages"]
+        assistant_call, tool_result = followup_messages[-2:]
+        assert assistant_call["role"] == "assistant"
+        assert assistant_call["tool_calls"][0]["function"]["name"] == "read_file"
+        assert tool_result == {
+            "role": "tool",
+            "tool_call_id": "call_0",
+            "name": "read_file",
+            "content": json.dumps({"content": "lorem ipsum dolor"}),
+        }
 
     def test_openai_backend_preserves_context_between_prompt_steps(self):
         env = _env()

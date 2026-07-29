@@ -48,3 +48,5 @@ logs/
 .codex/
 AGENTS.md
 project3_optimized.json
+tmp
+output/guides

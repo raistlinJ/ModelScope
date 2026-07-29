@@ -278,14 +278,18 @@ def _run_llm_agent_loop(
 
         msg = resp.get("message", {})
         content: str = msg.get("content") or ""
-        tool_calls_raw = msg.get("tool_calls") or []
-
-        # Fallback: parse inline tool calls (Qwen, SmolLM, etc.)
-        if not tool_calls_raw and content and "<tool_call>" in content:
-            tool_calls_raw = _parse_inline_tool_calls(content)
-            if tool_calls_raw:
-                names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
-                on_log(f"[TOOLS] Parsed {len(tool_calls_raw)} inline: {names}")
+        tool_calls_raw, tool_call_source = _extract_tool_calls_from_message(msg)
+        if tool_calls_raw and tool_call_source in ("content", "reasoning_content"):
+            names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
+            on_log(
+                f"[TOOLS] Parsed {len(tool_calls_raw)} inline from "
+                f"{tool_call_source}: {names}"
+            )
+        elif not tool_calls_raw and not content and msg.get("reasoning_content"):
+            on_log(
+                "[WARN] llama.cpp returned reasoning_content without a final "
+                "answer or a parseable tool call"
+            )
 
         if content:
             on_log(f"[RESPONSE] {content}")
@@ -293,6 +297,19 @@ def _run_llm_agent_loop(
 
         if not tool_calls_raw:
             break
+
+        # Preserve the assistant's actual function-call turn. OpenAI-compatible
+        # chat templates require this message followed by one `tool` message
+        # per call; treating results as new user messages makes small models
+        # believe the requested call was never fulfilled.
+        assistant_tool_message: dict = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls_raw,
+        }
+        if msg.get("reasoning_content") and tool_call_source != "reasoning_content":
+            assistant_tool_message["reasoning_content"] = msg["reasoning_content"]
+        messages.append(assistant_tool_message)
 
         # Execute tools
         for tc in tool_calls_raw:
@@ -313,11 +330,11 @@ def _run_llm_agent_loop(
                 "exit_code": result.get("exit_code", 0),
             })
 
-            # Add to conversation
-            messages.append({"role": "assistant", "content": content})
             messages.append({
-                "role": "user",
-                "content": f"Tool {tool_name} returned: {json.dumps(result)[:500]}"
+                "role": "tool",
+                "tool_call_id": tc.get("id", "call_0"),
+                "name": tool_name,
+                "content": json.dumps(result),
             })
 
     return tool_calls_log, final_response
@@ -706,6 +723,29 @@ def _parse_inline_tool_calls(content: str) -> list[dict]:
     return result
 
 
+def _extract_tool_calls_from_message(message: dict) -> tuple[list[dict], str | None]:
+    """Return tool calls plus the response field they came from.
+
+    Recent llama.cpp builds can stream a Qwen-generated ``<tool_call>`` block
+    through ``reasoning_content`` while leaving both ``content`` and structured
+    ``tool_calls`` empty. Treat that field as a recovery source for tool calls,
+    but never as final assistant content.
+    """
+    structured = message.get("tool_calls") or []
+    if structured:
+        return structured, "structured"
+
+    for field in ("content", "reasoning_content"):
+        value = message.get(field)
+        if not isinstance(value, str) or "<tool_call>" not in value:
+            continue
+        recovered = _parse_inline_tool_calls(value)
+        if recovered:
+            return recovered, field
+
+    return [], None
+
+
 # ── Loop detection ─────────────────────────────────────────────────────────────
 
 def _check_inefficiencies(tool_calls: list[dict]) -> list[str]:
@@ -1060,7 +1100,10 @@ def execute_helper_prompt(cmd_obj: dict, config: dict, context_list: list, on_lo
             except Exception as exc:
                 return {"exit_code": 1, "stderr": str(exc)}
             message = response.get("message", {})
-            calls = message.get("tool_calls") or []
+            calls, call_source = _extract_tool_calls_from_message(message)
+            if calls and call_source == "reasoning_content":
+                names = ", ".join(call["function"]["name"] for call in calls)
+                on_log(f"[TOOLS] Parsed inline tool call(s) from reasoning_content: {names}")
             if not calls:
                 response_text = message.get("content", "")
                 if preserve:
@@ -2130,14 +2173,18 @@ def run_evaluation(env: BaseEnvironment, config: dict, on_log: Callable[[str], N
 
         msg            = resp.get("message", {})
         content: str   = msg.get("content") or ""
-        tool_calls_raw = msg.get("tool_calls") or []
-
-        # Fallback: parse inline <tool_call> tags (SmolLM2, Qwen, etc.)
-        if not tool_calls_raw and content and "<tool_call>" in content:
-            tool_calls_raw = _parse_inline_tool_calls(content)
-            if tool_calls_raw:
-                names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
-                on_log(f"[TOOLS] Parsed {len(tool_calls_raw)} inline tool call(s): {names}")
+        tool_calls_raw, tool_call_source = _extract_tool_calls_from_message(msg)
+        if tool_calls_raw and tool_call_source in ("content", "reasoning_content"):
+            names = ", ".join(tc["function"]["name"] for tc in tool_calls_raw)
+            on_log(
+                f"[TOOLS] Parsed {len(tool_calls_raw)} inline tool call(s) "
+                f"from {tool_call_source}: {names}"
+            )
+        elif not tool_calls_raw and not content and msg.get("reasoning_content"):
+            on_log(
+                "[WARN] llama.cpp returned reasoning_content without a final "
+                "answer or a parseable tool call"
+            )
 
         if content:
             clean = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)

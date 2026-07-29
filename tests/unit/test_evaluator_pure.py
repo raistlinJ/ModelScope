@@ -4,6 +4,7 @@ covered by the existing test suite.
 
 Covers:
   - _parse_inline_tool_calls
+  - _extract_tool_calls_from_message
   - _calculate_step_tdi
   - _init_telemetry
   - _parse_caf_run_id
@@ -14,6 +15,7 @@ import json
 import pytest
 from core.evaluator import (
     _parse_inline_tool_calls,
+    _extract_tool_calls_from_message,
     _calculate_step_tdi,
     _init_telemetry,
     _parse_caf_run_id,
@@ -85,6 +87,45 @@ class TestParseInlineToolCalls:
 
     def test_empty_string(self):
         assert _parse_inline_tool_calls("") == []
+
+
+class TestExtractToolCallsFromMessage:
+    def test_structured_calls_take_precedence(self):
+        structured = [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'},
+        }]
+        calls, source = _extract_tool_calls_from_message({
+            "content": '<tool_call>{"name":"wrong","arguments":{}}</tool_call>',
+            "reasoning_content": '<tool_call>{"name":"also_wrong","arguments":{}}</tool_call>',
+            "tool_calls": structured,
+        })
+        assert calls == structured
+        assert source == "structured"
+
+    def test_recovers_qwen_call_from_reasoning_content(self):
+        reasoning = (
+            '<tool_call>{"name":"read_file","arguments":'
+            '{"path":"/home/kali/temp/read_this.txt"}}</tool_call>'
+        )
+        calls, source = _extract_tool_calls_from_message({
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": reasoning,
+        })
+        assert source == "reasoning_content"
+        assert calls[0]["function"]["name"] == "read_file"
+        assert json.loads(calls[0]["function"]["arguments"]) == {
+            "path": "/home/kali/temp/read_this.txt",
+        }
+
+    def test_reasoning_without_parseable_call_is_not_promoted_to_content(self):
+        message = {"content": "", "reasoning_content": "private reasoning only"}
+        calls, source = _extract_tool_calls_from_message(message)
+        assert calls == []
+        assert source is None
+        assert message["content"] == ""
 
 
 # ── _calculate_step_tdi ───────────────────────────────────────────────────────

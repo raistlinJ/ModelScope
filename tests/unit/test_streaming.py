@@ -199,6 +199,65 @@ class TestStreamLlamaCpp:
         assert result["usage"]["completion_tokens"] == 8
 
     @patch("core.streaming.requests.post")
+    def test_reasoning_content_is_preserved_but_not_exposed_as_content(self, mock_post):
+        """llama.cpp may stream Qwen tool calls through reasoning_content."""
+        tool_call = (
+            '<tool_call>{"name":"read_file","arguments":'
+            '{"path":"/home/kali/temp/read_this.txt"}}</tool_call>'
+        )
+        lines = [
+            f"data: {json.dumps({'choices': [{'delta': {'reasoning_content': tool_call[:40]}}]})}",
+            f"data: {json.dumps({'choices': [{'delta': {'reasoning_content': tool_call[40:]}}], 'usage': {'prompt_tokens': 5527, 'completion_tokens': 45}})}",
+            self._sse_line(done=True),
+        ]
+        mock_post.return_value = _mock_response(lines)
+        _, on_log = _on_log()
+
+        result = stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 32768, on_log)
+
+        assert result["message"]["content"] == ""
+        assert result["message"]["reasoning_content"] == tool_call
+        assert result["usage"]["completion_tokens"] == 45
+
+    @patch("core.streaming.requests.post")
+    def test_reasoning_alias_is_logged_and_normalized(self, mock_post):
+        """Some llama.cpp builds stream the reasoning channel as `reasoning`."""
+        tool_call = (
+            '<tool_call>{"name":"read_file","arguments":'
+            '{"path":"/home/kali/temp/read_this.txt"}}</tool_call>'
+        )
+        lines = [
+            f"data: {json.dumps({'choices': [{'delta': {'reasoning': tool_call}}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 20}})}",
+            self._sse_line(done=True),
+        ]
+        mock_post.return_value = _mock_response(lines)
+        logs, on_log = _on_log()
+
+        result = stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 32768, on_log)
+
+        assert result["message"]["content"] == ""
+        assert result["message"]["reasoning_content"] == tool_call
+        assert any(line.startswith("[THINKING]") and "read_file" in line for line in logs)
+
+    @patch("core.streaming.requests.post")
+    def test_empty_stream_logs_response_shape_diagnostics(self, mock_post):
+        lines = [
+            f"data: {json.dumps({'choices': [{'delta': {'role': 'assistant'}, 'finish_reason': None}]})}",
+            f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 75}})}",
+            self._sse_line(done=True),
+        ]
+        mock_post.return_value = _mock_response(lines)
+        logs, on_log = _on_log()
+
+        result = stream_llama_cpp("http://localhost:8080", "m.gguf", [], [], 32768, on_log)
+
+        assert result["message"]["content"] == ""
+        warning = next(line for line in logs if line.startswith("[WARN]"))
+        assert "2 SSE chunk(s)" in warning
+        assert "delta fields: role" in warning
+        assert "finish reason: stop" in warning
+
+    @patch("core.streaming.requests.post")
     def test_tool_call_delta_assembled(self, mock_post):
         # Tool calls arrive as deltas with index
         tc_delta_1 = {"index": 0, "id": "call_", "function": {"name": "file_", "arguments": ""}}
