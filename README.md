@@ -2,555 +2,172 @@
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 
-ModelScope is a research-grade evaluation framework for LLM-powered autonomous agents. It drives configurable multi-turn agent loops, captures per-step telemetry, scores results against a 45-metric evaluation matrix, and surfaces everything in a live Streamlit web dashboard.
+ModelScope is a project-based evaluation platform for LLMs, MCP tools, and autonomous cybersecurity agents. It runs repeatable workflows against local or remote targets, validates the result with configurable metrics, and preserves logs and telemetry for later analysis.
 
-ModelScope exists because existing LLM evaluation tools do not account for the unique operational characteristics of autonomous pentesting agents: multi-step tool chains, dynamic task difficulty, network boundary enforcement, and post-exploitation session management. The framework's Four-Pillar model and Task Difficulty Index (TDI) were designed specifically to distinguish between reasoning failures, tool-invocation failures, memory failures, and environment constraint violations.
+The Streamlit application keeps the workflow in three tabs:
 
-The target audience is security researchers and ML engineers who need reproducible, artifact-backed benchmarks for cybersecurity agents. Researchers can run evaluations locally against a llama.cpp or Ollama backend, or delegate execution to a remote Kali Linux VM over SSH to benchmark the full CyberAgentFlow CLI with real network tooling.
+- **Configuration** — create a project, choose a bot and execution target, define prompts or commands, select MCP tools, and configure validation.
+- **Execute** — run the active project and follow its output.
+- **Analytical Dashboard** — inspect run results, metric assessments, telemetry, and saved sessions.
 
----
-
-## Architecture
-
-```
- +------------------------------------------------------------------+
- |  Streamlit GUI  (app.py)                                         |
- |          Configuration / Execute / Analytical Dashboard           |
- +-----------------------------+------------------------------------+
-                               | run_evaluation(env, config, on_log)
-                               v
- +------------------------------------------------------------------+
- |  - LLM agent loop           - SSH delegation to remote SSH   |
- |  - Tool dispatch (MCP)      - Artifact pull (transcript, events) |
- |  - TDI calculation          - Telemetry assembly from metadata   |
- |  - Validation command       - PTY streaming with cancel support  |
- +--------------------+---------+----------------------------------+
-                       |         |
-             +---------+         +---------+
-             v                             v
-  LocalEnvironment                  SSHEnvironment        config/
-  subprocess                        paramiko + SFTP       - defaults.py  (URLs, paths)
-  (default)                         is_remote_caf=True    - metrics.py   (45 metric types)
-             |
-             v
-  LLM Backend
-  llama.cpp  http://localhost:8080  /v1/chat/completions
-  Ollama     http://localhost:11434 /api/chat
-
-  MCP Server (Node.js)
-  http://localhost:9191   tools.json schema, SSE transport
-
-  Session Logging
-  logs/sessions/YYYY-MM-DD_HH-MM-SS_<run-id>/
-    run.log | telemetry.json | config.json
-```
-
----
-
-## Prerequisites
-
-| Component | Version | Notes |
-|-----------|---------|-------|
-| Python | 3.10+ | Required by pyproject.toml |
-| Node.js | 18+ | MCP server only; not required for CLI-only use |
-| llama.cpp server or Ollama | any recent build | One backend must be reachable before running an evaluation |
-| nmap | any | Only if a project's commands or validation use it |
-
-**Operating system:** developed and tested on Linux (Kali, Ubuntu). The local execution path works on macOS. Windows is untested.
-
-**Python packages** (all of `requirements.txt`):
-
-```
-streamlit>=1.35.0
-requests>=2.32.0
-paramiko>=3.0.0
-```
-
-Optional — required only for `~/.modelscope/cli.yaml` config file support:
-
-```
-pyyaml         # pip install pyyaml
-```
-
----
-
-## Installation
-
-```bash
-# 1. Clone the repository
-git clone <repo-url>
-cd ModelScope2.0/ModelScope
-
-# 2. Install Python runtime dependencies
-# Using uv (recommended)
-uv sync
-
-# Or using standard pip
-pip install -r requirements.txt
-
-# 3. Install MCP server dependencies (skip if not using MCP tools)
-cd mcp-server && npm install && cd ..
-
-# 4. Optional: install as an editable package to get the `modelscope` CLI command
-# Using uv
-uv pip install -e .
-
-# Or using standard pip
-pip install -e .
-
-# 5. Configure local paths (also editable from the UI Configuration tab)
-# Edit config/defaults.py:
-#   LLAMA_SERVER_BIN  -- path to your llama-server binary
-#   GGUF_MODELS_DIR   -- directory containing your .gguf model files
-# Or set environment variables:
-#   export LLAMA_SERVER_BIN=/path/to/llama.cpp/build/bin/llama-server
-#   export GGUF_MODELS_DIR=/path/to/models
-```
-
-All commands in this README assume the working directory is `ModelScope/`. Module imports (`from config...`, `from core...`) are relative to that directory.
-
----
-
-## Quick Start
-
-### Path 1 — Streamlit GUI
-
-```bash
-# Start ModelScope using uv
-uv run streamlit run app.py
-
-# Or using standard python/pip
-streamlit run app.py
-# Opens at http://localhost:8501
-
-# Start your LLM backend separately:
-
-# llama.cpp
-llama-server -m /path/to/model.gguf --port 8080 --ctx-size 4096
-
-# Ollama
-ollama serve && ollama pull qwen2.5
-```
-
-The MCP server can be started from within the UI (**Configuration tab → MCP Server → Start MCP**) or manually:
-
-```bash
-node mcp-server/index.js   # listens on http://localhost:9191
-```
-
-### Path 2 — CLI single run
-
-Export a project from the UI (**Configuration → Export**), then run that file.
-`project` resolves the project's bot type through the plugin registry, so a CLI
-run does exactly what the Execute tab does — for every bot type, including
-CAF Standard and Llama-Server-ProxBatch.
-
-```bash
-# Using python directly (no install required)
-python cli.py project --file my_project.json
-
-# Using the installed entry point (after pip install -e .)
-modelscope project --file my_project.json
-
-# Dry run: print the assembled config (secrets redacted) without executing
-modelscope project --file my_project.json --dry-run
-```
-
-Exported projects never contain credentials. Supply them per run, either as
-flags or through the matching environment variables:
-
-```bash
-MODELSCOPE_SSH_PASSWORD=... modelscope project --file my_project.json
-modelscope project --file my_project.json --ssh-key-path ~/.ssh/kali_vm
-```
-
-The exit code carries the verdict: `0` when validation passed or none was
-configured, `1` when validation failed or the run aborted.
-
----
-
-## CLI Reference
-
-The full command-line interface documentation has been moved to [CLI_README.md](CLI_README.md). It includes instructions for:
-- Running exported project JSON files via the `project` subcommand — the
-  headless path for every bot type.
-- Inspecting session logs via the `sessions` subcommand.
-
----
+Projects can be exported as credential-free JSON, imported into another ModelScope instance, or executed headlessly with the CLI.
 
 ## Bot types
 
-A project's **bot type** decides how a run is driven. Each one is a plugin that
-owns its own configuration UI, execution and dashboard.
+| Bot type | Purpose |
+| --- | --- |
+| **Bash-Bot** | Run shell-command workflows without an LLM. |
+| **Llama-CLI-Bot** | Invoke a `llama-cli` binary for each prompt. |
+| **Llama-Server-Bot** | Start and supervise a configured `llama-server`, including its Prometheus telemetry. |
+| **Llama-Server-ProxBatch** | Run the managed-server workflow across selected Proxmox LXC containers and aggregate the results. |
+| **CAF Standard** | Evaluate a CyberAgentFlow CLI installation locally or through SSH. |
+| **CAF + llama.cpp** | Run CyberAgentFlow against a ModelScope-managed `llama-server`. |
 
-| Bot type | What it runs |
-|----------|--------------|
-| Bash-Bot | Shell commands with no LLM in the loop |
-| Llama-CLI-Bot | A `llama-cli` binary invoked per prompt |
-| Llama-Server-Bot | A ModelScope-managed `llama-server`, with its Prometheus metrics collected |
-| Llama-Server-ProxBatch | The managed-server workflow once per selected Proxmox LXC, rolled up into one record |
-| CAF Standard | A CyberAgentFlow CLI installation, locally or over SSH |
-| CAF + llama.cpp | CyberAgentFlow against a ModelScope-managed `llama-server` |
+Depending on the bot, execution targets can be the local host, an SSH host, or a Proxmox LXC reached with `pct`. Each bot owns its configuration, execution behavior, and dashboard presentation through the plugin registry.
 
-Built-in types live in `core/bot_types/`; the rest are plugins under
-`plugins/bot_types/`. Adding one is described in [CLAUDE.md](CLAUDE.md).
+## Prerequisites
 
-Prompts, commands and validation are configured per project in the
-Configuration tab, then exported to JSON to run headlessly.
+- Python 3.10 or newer
+- `uv`, or `pip` in a virtual environment
+- Node.js 18 or newer only when using the bundled MCP server
+- The runtime required by the chosen bot, such as `llama-cli`, `llama-server`, CyberAgentFlow, SSH access, or Proxmox `pct`
 
----
+ModelScope is intended for controlled research environments. Local commands run with the current user's permissions; SSH and Proxmox runs can affect remote systems or containers.
 
-## Metrics Reference
+## Install
 
-All metrics return `True` (pass), `False` (fail), or `None` (not applicable / insufficient data).
-
-### Validation
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `task_completion` | Task Completion | Runs the validation command; passes if exit code = 0 and no fail patterns match |
-
-### Tool
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `tool_called` | Tool Was Called | Confirms the named tool was invoked at least once |
-| `tool_not_called` | Tool Not Called | Confirms the named tool was never invoked (guardrail) |
-| `tool_sequence` | Tool Call Sequence | Named tools must appear as an ordered subsequence |
-| `tool_call_count` | Tool Call Count | Total tool calls must not exceed `max_calls` |
-| `tool_success_rate` | Tool Success Rate | Fraction of tool calls returning exit code 0 must meet `min_rate` |
-| `no_repeated_calls` | No Repeated Tool Calls | Detects identical tool + arguments called more than once |
-| `tool_output_contains` | Tool Output Contains | Output of the named tool must contain the required string |
-
-### Content
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `content_contains` | Response Contains | LLM final response must contain the specified text |
-| `content_not_contains` | Response Excludes | LLM final response must not contain the specified text |
-| `content_regex` | Response Regex Match | LLM final response must match the regular expression |
-
-### Performance
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `latency` | Latency | Total wall-clock seconds must not exceed `max_seconds` |
-| `token_limit` | Token Limit | Total tokens (prompt + completion) must not exceed `max_tokens` |
-| `max_iterations` | Max LLM Iterations | LLM rounds must not exceed `max_iter` |
-| `tokens_per_second` | Tokens per Second | Generation throughput must meet `min_tps` |
-
-### Path
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `path_efficiency` | Path Efficiency | Tool call sequence must match the expected path within the allowed extra steps |
-
-### Judge
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `goal_achievement` | Goal Achievement | Composite check that the agent completed the stated goal |
-| `tool_usage_efficiency` | Tool Usage Efficiency | Tool calls stayed within budget relative to task complexity |
-| `no_error_output` | No Error in Output | No error keywords appear in the LLM response or tool outputs |
-
-### RAG
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `rag_retrieval_precision` | Retrieval Precision@k | Fraction of retrieved documents that are relevant |
-| `rag_retrieval_recall` | Retrieval Recall@k | Fraction of relevant documents that were retrieved |
-| `rag_answer_faithfulness` | Answer Faithfulness | Response contains only claims supported by retrieved context |
-| `rag_context_utilization` | Context Utilization | Retrieved context was meaningfully used in the answer |
-| `rag_answer_relevance` | Answer Relevance | Semantic similarity between answer and query meets `min_similarity` |
-
-### Workflow
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `classification_accuracy` | Classification Accuracy | Accuracy must meet `min_accuracy` |
-| `classification_f1` | Classification F1 | F1 score must meet `min_f1` |
-| `summarization_rouge` | ROUGE-L Score | ROUGE-L score must meet `min_rouge` |
-| `summarization_faithfulness` | Factual Faithfulness | Summary contains only facts present in source text |
-| `structured_output_conformance` | JSON Schema Conformance | Output is valid JSON that conforms to the provided schema |
-| `structured_output_completeness` | Field Completeness | All required JSON fields are present |
-| `multiagent_consensus_accuracy` | Consensus Accuracy | Agent agreement ratio must meet `min_agreement` |
-
-### AI-Judge
-
-| Metric ID | Name | Description |
-|-----------|------|-------------|
-| `judge_correctness` | Judge: Correctness | LLM judge scores factual correctness (0–100) |
-| `judge_coherence` | Judge: Coherence | LLM judge scores logical coherence (0–100) |
-| `judge_goal_alignment` | Judge: Goal Alignment | LLM judge scores alignment with stated goal (0–100) |
-| `judge_aggregate` | Judge: Aggregate | Average of all judge dimension scores |
-
-### MCP Metric Presets
-
-Load a curated metric bundle from **Configuration tab → Metrics Setup → MCP Metric Presets**:
-
-| Preset | Metrics (name → underlying type) |
-|--------|----------------------------------|
-| `web_search` | Result Relevance (`content_contains`), Source Diversity (`tool_call_count` ≤3), Query Reformulation Efficiency (`tool_call_count` ≤2), Click-Through Accuracy (`tool_success_rate` ≥0.75) |
-| `code_execution` | Execution Success Rate (`tool_success_rate` ≥0.95), Runtime Efficiency (`latency` ≤30s), Sandbox Safety (`no_error_output`), Output Correctness (`task_completion`) |
-| `database_query` | Query Syntax Validity (`tool_success_rate` 1.0), Result Accuracy (`task_completion`), Injection Resistance (`no_error_output`), Query Efficiency (`tool_call_count` ≤3) |
-| `calendar_email` | Scheduling Accuracy (`task_completion`), Recipient Accuracy (`tool_success_rate` 1.0), Tone Check (`no_error_output`), Timezone Awareness (`no_repeated_calls`) |
-| `file_system` | Path Safety (`no_error_output`), Operation Success (`tool_success_rate` ≥0.95), Permission Adherence (`no_error_output`), Backup Awareness (`no_repeated_calls`) |
-
----
-
-## SSH / Remote Execution Mode
-
-When `--ssh-host` is provided on the CLI (or the SSH target is configured in the GUI Target tab), ModelScope creates an `SSHEnvironment` instead of `LocalEnvironment`. 
-
-### How it works
-
-1. `SSHEnvironment.connect()` opens a paramiko SSH connection and an SFTP session to the remote host. The `~` in `remote_cwd` is expanded by querying `echo $HOME` on the remote shell.
-   ```
-   ./start_cli.sh run --provider <openai|ollama_direct> --url <url> \
-       --model <model> --scope <scope> --urgency <urgency> "<prompt>"
-   ```
-   The `--provider` flag is set to `ollama_direct` for Ollama backends and `openai` for llama.cpp.
-3. Output is streamed in real time via `on_log("[STREAM] ...")` callbacks, with ANSI codes stripped.
-5. The run ID is extracted from the output line `[run] Transcript: runs/<id>/transcript.md`.
-6. Artifacts are pulled via SFTP from the remote `runs/<run_id>/` directory:
-   - `transcript.md` — full conversation transcript
-   - `metadata.json` — run metadata (model, context window, status)
-   - `tool_calls/*.json` — per-call tool execution records
-7. Per-step TDI is calculated from the pulled tool call records and assembled into the standard telemetry dict.
-8. The validation command runs on the remote machine via `env.execute()`.
-
-### CLI example
+Clone the repository and enter its root, then choose one Python setup:
 
 ```bash
-# Configure the SSH target and CAF directory in the project, export it, then:
-modelscope project --file caf_standard.json \
-    --ssh-key-path ~/.ssh/kali_vm
+# uv
+uv sync
+
+# pip
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
 ```
 
-### GUI example
-
-In the Streamlit UI:
-
-1. Open the **Target** tab.
-2. Set **Mode** to `ssh`.
-3. Fill in Host, Port, User, and either Password or Key Path.
-5. Click **Test Connection** to verify credentials.
-6. Switch to the **Execute Evaluation** tab and run normally.
-
-### Security note
-
-`SSHEnvironment` uses `paramiko.AutoAddPolicy`, which trusts unknown host keys on first contact. This provides no MITM protection and is intentional for trusted lab/VM networks. Do not use this against hosts over untrusted networks.
-
-
----
-
-### Task Difficulty Index (TDI)
-
-TDI is calculated after each tool call step to quantify the difficulty of the current task state:
-
-```
-TDI = 0.4 * (1 - E) + 0.3 * C + 0.3 * (1 - S)
-```
-
-Where:
-- **E** (evidence confidence): confidence score of the last tool call's output (0.0–1.0)
-- **C** (context load): fraction of the context window currently consumed
-- **S** (recent success rate): fraction of the last 5 steps with exit code 0
-
-
-### Evidence confidence rubric
-
-Scores are derived from the tool output text and exit code (PENTESTGPT V2 rubric):
-
-| Condition | Score |
-|-----------|-------|
-| Exit code non-zero or empty output | 0.1 |
-| Output contains shell/credential keywords: `meterpreter`, `session opened`, `shell >`, `$ `, `# `, `id=`, `uid=`, `whoami`, `authentication succeeded`, `valid credentials` | 1.0 |
-| Output contains exploit keywords: `exploit completed`, `payload executed`, `shell session`, `cve-`, `exploited`, `vulnerable`, `successful` | 0.8 |
-| Output contains service keywords: `open`, `filtered`, `port`, `service`, `version`, `http`, `ssh`, `ftp`, `smb`, `rdp`, `running` | 0.5 |
-| Exit code 0, output present, none of the above keywords matched | 0.3 |
-
-### Phase inference
-
-Tool calls are classified into phases based on exact tool name membership:
-
-| Phase | Tools |
-|-------|-------|
-| `recon` | `nmap`, `run_nmap_scan`, `ping`, `nslookup`, `dirb`, `nikto`, `ospf_sniff`, `RIPv2`, `mcp_kali_run_command` |
-| `exploit` | `msf_run`, `hydra`, `sqlmap`, `shell_dangerous` |
-| `post_exploit` | `interactive_session_write`, `interactive_session_read`, `interactive_session_list`, `interactive_session_close` |
-| `execution` | `shell`, `shell_extended`, `shell_sequence` |
-| `utility` | `file_creator` |
-| `unknown` | everything else |
-
----
-
-## Session Logs
-
-Every evaluation run writes a timestamped session directory:
-
-```
-logs/sessions/YYYY-MM-DD_HH-MM-SS_<8-char-run-id>/
-├── run.log           # full timestamped terminal output
-├── telemetry.json    # metrics and run metadata
-└── config.json       # sanitized run configuration (sensitive keys stripped)
-```
-
-The default base directory is `ModelScope/logs/sessions/`. Override it with `--session-dir PATH` on the CLI.
-
-### Sensitive key stripping
-
-Before writing, the following keys are removed:
-
-- `config.json`: `target_ssh_password`, `target_ssh_key_path`, `ssh_password`, `ssh_key_path`, `sudo_password`, `openai_api_key`, `llm_helper_openai_apikey`, `judge_api_key`
-
-The `logs/` directory is `.gitignored` and never committed.
-
-### Inspecting sessions via CLI
+With `uv`, use `uv run modelscope` or `uv run streamlit` below. To install the editable CLI entry point explicitly into an already active environment, run:
 
 ```bash
-# List the 20 most recent sessions
+python3 -m pip install -e .
+```
+
+The bundled MCP server is optional:
+
+```bash
+cd mcp-server
+npm install
+cd ..
+node mcp-server/index.js
+```
+
+It listens on `http://localhost:9191` by default. The UI can also manage it. A managed llama.cpp server defaults to `http://localhost:8080`; override machine-specific binary and model paths with `LLAMA_SERVER_BIN`, `GGUF_MODELS_DIR`, and the other variables documented in [`config/defaults.py`](config/defaults.py).
+
+## First project
+
+Launch the UI from the repository root:
+
+```bash
+uv run streamlit run app.py
+# or, in the pip environment
+streamlit run app.py
+```
+
+Streamlit normally opens `http://localhost:8501`. ModelScope creates an initial Bash project when no saved projects exist.
+
+1. In **Configuration**, create or select a project and choose one of the six bot types.
+2. Select a Local, SSH, or Proxmox target where that bot supports it, then configure its commands, prompts, model, and MCP tools.
+3. Add validation commands, fail patterns, metric thresholds, or validation sets as appropriate.
+4. Use **Execute** to run the project.
+5. Review the outcome in **Analytical Dashboard**. Use **Export** in Configuration to save a portable project JSON file.
+
+Non-sensitive UI settings and projects are saved in `~/.modelscope/settings.json`. Exported project files omit credentials.
+
+## Command line
+
+The supported CLI has two command groups: `project` and `sessions`. See [`CLI_README.md`](CLI_README.md) for every option and example.
+
+Run a project exported from the UI:
+
+```bash
+modelscope project --file my_project.json
+modelscope project --file my_project.json --dry-run
+
+# Without an editable install
+python3 cli.py project --file my_project.json
+```
+
+`--dry-run` loads and prints the normalized configuration with secrets redacted, without executing it. Exported files do not contain credentials; provide overrides as flags or environment variables:
+
+```bash
+MODELSCOPE_SSH_PASSWORD='...' modelscope project --file my_project.json
+modelscope project --file my_project.json --ssh-key-path /path/to/key
+```
+
+Available credential variables are `MODELSCOPE_SSH_USER`, `MODELSCOPE_SSH_PASSWORD`, `MODELSCOPE_SSH_KEY_PATH`, `MODELSCOPE_SUDO_PASSWORD`, `MODELSCOPE_OPENAI_API_KEY`, and `MODELSCOPE_LLM_HELPER_API_KEY`. When both an SSH key and password are supplied, the key is preferred.
+
+Browse persisted runs:
+
+```bash
 modelscope sessions list
-
-# List with a custom directory, more results
-modelscope sessions list --sessions-dir /data/eval_logs -n 50
-
-# Show run.log and telemetry summary for a session
-modelscope sessions show 828cc8a1
-
-# Show using the full directory name
-modelscope sessions show 2026-06-18_15-41-00_828cc8a1
+modelscope sessions show <session-name-or-run-id>
 ```
 
-### Inspecting sessions directly
+`project` returns `0` when validation passes or is not configured, `1` when validation fails or the run aborts, `2` for invalid arguments, and `130` when interrupted with Ctrl+C.
 
-```bash
-# Read the terminal log
-cat logs/sessions/2026-06-18_15-41-00_828cc8a1/run.log
+## Results and validation
 
-# Pretty-print telemetry
-python3 -c "
-import json
-data = json.load(open('logs/sessions/2026-06-18_15-41-00_828cc8a1/telemetry.json'))
-print(json.dumps(data, indent=2))
-"
+Validation can cover task completion, response content, tool use and ordering, latency, token usage, throughput, workflow behavior, and bot-specific telemetry. Metrics report pass, fail, or not-applicable and are summarized in the dashboard; the complete registry and evaluator logic live in [`config/metrics.py`](config/metrics.py).
+
+Each run creates a timestamped directory under:
+
+```text
+logs/sessions/YYYY-MM-DD_HH-MM-SS_<run-id>/
+├── run.log
+├── telemetry.json
+└── config.json
 ```
 
----
+Some multi-run workflows write indexed telemetry files such as `telemetry_0.json`. Persisted configurations are sanitized before writing. The `logs/` directory is intentionally ignored by Git.
 
-## Running many projects
+## Repository layout
 
-There is no batch subcommand. `project` runs one exported project, so a set of
-them is a shell loop — which also means each keeps its own exit code and
-session log:
-
-```bash
-for p in projects/*.json; do
-    modelscope project --file "$p" || echo "FAILED: $p"
-done
+```text
+app.py                 Streamlit entry point
+cli.py                 project and sessions CLI
+config/                defaults and metric registry
+core/                  evaluators, environments, sessions, and bot registry
+core/bot_types/        built-in bot plugins
+plugins/bot_types/     repository-local external bot plugins
+ui/                    Configuration, Execute, and Dashboard views
+mcp-server/            optional Node/Python MCP tool server
+tests/                  unit, smoke, and functional tests
 ```
 
-For one bot type that inherently runs many targets, use **Llama-Server-ProxBatch**:
-it runs the same workflow once per selected Proxmox LXC and rolls the results up
-into a single record, from the UI or the CLI alike.
-
----
-
-## Development / Testing
-
-### Running the test suite
-
-pytest is not a declared runtime dependency. Install it separately:
+## Development
 
 ```bash
-pip install pytest
-```
-
-Run the tests:
-
-```bash
-# All tests
 python3 -m pytest
-
-# By layer
 python3 -m pytest tests/unit/
-python3 -m pytest tests/smoke/
-python3 -m pytest tests/functional/
-python3 -m pytest tests/integration/
-python3 -m pytest tests/verification/
-
-# Verbose, single file
-python3 -m pytest -v tests/unit/test_metrics.py
+python3 -m pytest -v tests/unit/test_cli.py
 ```
 
-The **Platform Verification** subtab in the GUI Configuration tab provides a visual dashboard of the same test suite: per-test pass/fail badges, run times, and failure details.
+Bot plugins are discovered from `core/bot_types/`, `plugins/bot_types/`, `~/.modelscope/bot_types/`, paths in `MODELSCOPE_BOT_PLUGIN_PATH`, and the `modelscope.bot_types` Python entry-point group. Start with [`plugins/bot_types/README.md`](plugins/bot_types/README.md) and the plugin contract in [`core/bot_types/base.py`](core/bot_types/base.py). Metric and environment extension points are described in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-### Adding a bot type
+## Security
 
-1. Create a module under `plugins/bot_types/`. The registry discovers it on
-   start — no wiring needed.
-2. Subclass `BotTypePlugin` from `core.bot_types.base` and set `type_id`,
-   `label`, `session_defaults` and `state_key_map`.
-3. Implement `render_config`, `render_execute`, `render_dashboard` and
-   `run_evaluation`. Reach the app's shared widgets through `ui.plugin_api`,
-   never by importing `ui` internals directly.
-4. Where shared code needs to behave differently for your bot, override one of
-   the optional hooks on `BotTypePlugin` rather than adding a type check to
-   that shared code.
+- Run projects only against systems you own or are authorized to test.
+- Treat imported project JSON as executable configuration: inspect commands, paths, prompts, and targets before running it.
+- Prefer environment variables or CLI flags for credentials; do not commit secrets or session artifacts.
+- SSH currently accepts unknown host keys on first connection, which is suitable only for trusted lab networks. Use isolated targets and least-privilege accounts.
+- The MCP server and model endpoints bind services that should not be exposed to untrusted networks without additional access controls.
 
-`plugins/bot_types/caf_cli_run.py` is a full worked example.
+## More documentation
 
-### Adding a metric
-
-1. Open `config/metrics.py`.
-2. Add an entry to the `METRIC_TYPES` dict with `label`, `category`, `description` and `params`.
-3. Write `_eval_<name>(params, telemetry) -> bool | None`.
-4. Register it in the `_EVALUATORS` dispatch table. `evaluate_metric()` looks the
-   type up there, so no dispatch code changes.
-
-The metric is then selectable per project in the Configuration tab's Metrics
-Config sub-tab.
-
----
-
-## Project Structure
-
-```
-ModelScope/
-├── app.py              # Streamlit entry point
-├── cli.py              # CLI entry point (project, sessions)
-├── config/             # Static configuration: defaults, metric registry, bash templates
-├── core/               # Framework logic: environments, evaluator, bot-type registry,
-│                       #   session logs, metrics thresholds, server lifecycles
-├── plugins/bot_types/  # Out-of-tree bot types, discovered at start-up
-├── ui/                 # Streamlit tabs and shared widgets; plugin_api.py is the
-│                       #   stable surface plugins import
-├── mcp-server/         # Node.js MCP tool server
-├── tests/              # unit / smoke / functional / integration / verification
-└── logs/sessions/      # Per-run run.log, telemetry.json, config.json (gitignored)
-```
-
-Module-by-module responsibilities are in [ARCHITECTURE.md](ARCHITECTURE.md),
-which is kept at directory level for the same reason: a per-file listing goes
-stale silently.
-
-### Default service ports
-
-| Service | URL |
-|---------|-----|
-| ModelScope (Streamlit) | `http://localhost:8501` |
-| llama.cpp server | `http://localhost:8080` |
-| Ollama | `http://localhost:11434` |
-| MCP server | `http://localhost:9191` |
-
-All URLs are configurable from the UI or via CLI flags.
-
----
-
-## UI Tabs Overview
-
-| Tab | Purpose |
-|-----|---------|
-| Configuration | Model setup, validation sets, MCP server controls, AI Judge, Platform Verification |
-| Target | Execution target selection: Local or SSH (credential fields visible only when SSH is selected) |
-| Execute Evaluation | Single-run orchestration with live color-coded terminal output and cancel support |
+- [`CLI_README.md`](CLI_README.md) — complete CLI reference
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — internals, data flow, and extension points
+- [`plugins/bot_types/README.md`](plugins/bot_types/README.md) — external bot plugin notes
+- [`CLAUDE.md`](CLAUDE.md) — repository development guidance
